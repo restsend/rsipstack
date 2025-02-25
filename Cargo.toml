@@ -18,7 +18,7 @@ crate-type = ["cdylib", "rlib"]
 async-trait = "0.1.83"
 futures = "0.3.31"
 log = "0.4.22"
-rsip = { git = "https://github.com/Televiska/rsip.git" }
+rsip = { version = "0.4.0" }
 tracing = "0.1.40"
 wasm-bindgen = "0.2.84"
 # The `console_error_panic_hook` crate provides better debugging of panics by
@@ -32,6 +32,7 @@ tracing-subscriber = { version = "0.3.19", features = ["local-time"] }
 uuid = "0.8.2"
 rand = "0.8.5"
 get_if_addrs = "0.5.3"
+rsip-dns = { version = "0.1.4", features = ["trust-dns"] }
 
 [features]
 default = ["console_error_panic_hook"]

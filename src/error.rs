@@ -5,6 +5,7 @@ use wasm_bindgen::prelude::*;
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub enum Error {
     SipMessageError(String),
+    DnsResolutionError(String),
     TransportLayerError(String, SipAddr),
     TransactionError(String, TransactionKey),
     EndpointError(String),
@@ -15,6 +16,7 @@ pub enum Error {
 impl Into<JsValue> for Error {
     fn into(self) -> JsValue {
         match self {
+            Error::DnsResolutionError(e) => e.into(),
             Error::SipMessageError(e) => e.into(),
             Error::TransportLayerError(e, _) => e.into(),
             Error::TransactionError(e, key) => format!("{}: {}", e, key.to_string()).into(),

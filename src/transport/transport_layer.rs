@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use super::{
     connection::{SipAddr, TransportSender},
     SipConnection,
@@ -7,9 +8,11 @@ use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
 };
+use rsip::HostWithPort;
 use tokio::select;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
+use rsip_dns::{trust_dns_resolver::TokioAsyncResolver, ResolvableExt};
 
 #[derive(Default)]
 pub struct TransportLayerInner {
@@ -75,36 +78,28 @@ impl TransportLayerInner {
         let target = if let Some(addr) = outbound {
             addr
         } else {
-            let target_host_port = uri.host_with_port.to_owned();
-            let mut r#type = uri.scheme.as_ref().map(|scheme| match scheme {
-                rsip::Scheme::Sip | rsip::Scheme::Tel => rsip::transport::Transport::Udp,
-                rsip::Scheme::Sips => rsip::transport::Transport::Tls,
-                rsip::Scheme::Other(schema) => {
-                    if schema.eq_ignore_ascii_case("ws") {
-                        rsip::transport::Transport::Ws
-                    } else if schema.eq_ignore_ascii_case("wss") {
-                        rsip::transport::Transport::Wss
-                    } else {
-                        rsip::transport::Transport::Udp
+            let context = rsip_dns::Context::initialize_from(
+                uri.clone(),
+                rsip_dns::AsyncTrustDnsClient::new(
+                    TokioAsyncResolver::tokio(Default::default(), Default::default()).unwrap(),
+                ),
+                rsip_dns::SupportedTransports::any(),
+            )?;
+
+            let mut lookup = rsip_dns::Lookup::from(context);
+            match lookup.resolve_next().await {
+                Some(target) => {
+                    &SipAddr {
+                        r#type: Some(target.transport),
+                        addr: HostWithPort::from(SocketAddr::new(target.ip_addr, u16::from(target.port)))
                     }
+                },
+                None => {
+                    return Err(crate::Error::DnsResolutionError(
+                        format!("DNS resolution error: {}", uri)
+                    ))
                 }
-            });
-            uri.params.iter().for_each(|param| {
-                if let rsip::common::uri::Param::Transport(transport) = param {
-                    r#type = Some(transport.clone());
-                }
-            });
-            let addr = match target_host_port.try_into() {
-                Ok(addr) => addr,
-                Err(e) => {
-                    info!("parse target host error: {} {}", uri.host_with_port, e);
-                    return Err(crate::Error::Error(format!(
-                        "parse target host error: {}",
-                        e
-                    )));
-                }
-            };
-            &SipAddr { r#type, addr }
+            }
         };
 
         info!("lookup target: {} -> {}", uri, target);
