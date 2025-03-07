@@ -257,12 +257,23 @@ impl TransportLayerInner {
 
             let mut lookup = rsip_dns::Lookup::from(context);
             match lookup.resolve_next().await {
-                Some(target) => &SipAddr {
-                    r#type: Some(target.transport),
-                    addr: HostWithPort::from(SocketAddr::new(
-                        target.ip_addr,
-                        u16::from(target.port),
-                    )),
+                Some(mut target) => {
+                        match uri.host_with_port.host {
+                            rsip::Host::IpAddr(_) => {
+                                if let Some(port) = uri.host_with_port.port {
+                                    target.port = port;
+                                }
+                            }
+                            _ => {
+                            }
+                        }
+                        &SipAddr {
+                            r#type: Some(target.transport),
+                            addr: HostWithPort::from(SocketAddr::new(
+                                target.ip_addr,
+                                u16::from(target.port),
+                            )),
+                        }
                 },
                 None => {
                     return Err(crate::Error::DnsResolutionError(format!(
@@ -337,7 +348,7 @@ impl TransportLayerInner {
 #[cfg(test)]
 mod tests {
     use crate::{transport::udp::UdpConnection, Result};
-    use rsip::Transport;
+    use rsip::{Host, Transport};
     use rsip_dns::{trust_dns_resolver::TokioAsyncResolver, ResolvableExt};
     use tokio::sync::mpsc;
 
@@ -420,11 +431,20 @@ mod tests {
             )?;
 
             let mut lookup = rsip_dns::Lookup::from(context);
-            let target = lookup.resolve_next().await.unwrap();
+            let mut target = lookup.resolve_next().await.unwrap();
+            match uri.host_with_port.host {
+                Host::IpAddr(_) => {
+                    if let Some(port) = uri.host_with_port.port {
+                        target.port = port;
+                    }
+                }
+                _ => {
+                }
+            }
             assert_eq!(uri.user().unwrap(), item.1 .0);
             assert_eq!(target.transport, item.1 .3);
             assert_eq!(target.ip_addr.to_string(), item.1 .1);
-            // assert_eq!(target.port, item.1.2.into());
+            assert_eq!(target.port, item.1.2.into());
         }
         Ok(())
     }

@@ -5,7 +5,9 @@ use crate::transaction::make_tag;
 use crate::transport::SipAddr;
 use crate::{Error, Result};
 use rsip::prelude::HeadersExt;
-use rsip::{Method, Request, Response, SipMessage, StatusCode};
+use rsip::headers::ContentLength;
+use rsip::message::HasHeaders;
+use rsip::{Header, Method, Request, Response, SipMessage, StatusCode};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tracing::{debug, info, instrument, span, Level, Span};
 
@@ -128,6 +130,8 @@ impl Transaction {
             "no connection found".to_string(),
             self.key.clone(),
         ))?;
+        let content_length_header = Header::ContentLength(ContentLength::from(self.original.body().len() as u32));
+        self.original.headers_mut().unique_push(content_length_header);
         connection
             .send(self.original.to_owned().into(), self.destination.as_ref())
             .await?;
