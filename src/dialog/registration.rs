@@ -13,7 +13,8 @@ use crate::{
     Error, Result,
 };
 use get_if_addrs::get_if_addrs;
-use rsip::{HostWithPort, Response, SipMessage, StatusCode};
+use rsip::{HostWithPort, Param, Response, SipMessage, StatusCode};
+use rsip::headers::ToTypedHeader;
 use rsip_dns::trust_dns_resolver::TokioAsyncResolver;
 use rsip_dns::ResolvableExt;
 use std::net::IpAddr;
@@ -116,6 +117,8 @@ pub struct Registration {
     pub credential: Option<Credential>,
     pub contact: Option<rsip::typed::Contact>,
     pub allow: rsip::headers::Allow,
+    /// Public address detected by the server (IP and port)
+    pub public_address: Option<(std::net::IpAddr, u16)>,
 }
 
 impl Registration {
@@ -161,7 +164,41 @@ impl Registration {
             credential,
             contact: None,
             allow: Default::default(),
+            public_address: None,
         }
+    }
+
+    /// Get the discovered public address
+    ///
+    /// Returns the public IP address and port discovered during the registration
+    /// process. The SIP server indicates the client's public address through
+    /// the 'received' and 'rport' parameters in Via headers.
+    ///
+    /// This is essential for NAT traversal, as it allows the client to use
+    /// the correct public address in Contact headers and SDP for subsequent
+    /// dialogs and media sessions.
+    ///
+    /// # Returns
+    ///
+    /// * `Some((ip, port))` - The discovered public IP address and port
+    /// * `None` - No public address has been discovered yet
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use rsipstack::dialog::registration::Registration;
+    /// # async fn example() {
+    /// # let registration: Registration = todo!();
+    /// if let Some((public_ip, public_port)) = registration.discovered_public_address() {
+    ///     println!("Public address: {}:{}", public_ip, public_port);
+    ///     // Use this address for Contact headers in dialogs
+    /// } else {
+    ///     println!("No public address discovered yet");
+    /// }
+    /// # }
+    /// ```
+    pub fn discovered_public_address(&self) -> Option<(std::net::IpAddr, u16)> {
+        self.public_address
     }
 
     /// Get the registration expiration time
@@ -376,16 +413,30 @@ impl Registration {
         let contact = self
             .contact
             .clone()
-            .unwrap_or_else(|| rsip::typed::Contact {
-                display_name: None,
-                uri: rsip::Uri {
-                    auth: to.uri.auth.clone(),
-                    scheme: Some(rsip::Scheme::Sip),
-                    host_with_port: first_addr.clone().into(),
+            .unwrap_or_else(|| {
+                // Use public address if available, otherwise use local address
+                let contact_host_with_port = if let Some((public_ip, public_port)) = self.public_address {
+                    info!("Using public address for initial Contact: {}:{}", public_ip, public_port);
+                    HostWithPort {
+                        host: public_ip.into(),
+                        port: Some(public_port.into()),
+                    }
+                } else {
+                    info!("Using local address for initial Contact: {}", first_addr.addr);
+                    first_addr.clone().into()
+                };
+                
+                rsip::typed::Contact {
+                    display_name: None,
+                    uri: rsip::Uri {
+                        auth: to.uri.auth.clone(),
+                        scheme: Some(rsip::Scheme::Sip),
+                        host_with_port: contact_host_with_port,
+                        params: vec![],
+                        headers: vec![],
+                    },
                     params: vec![],
-                    headers: vec![],
-                },
-                params: vec![],
+                }
             });
         let via = self.endpoint.get_via(Some(first_addr.clone()), None)?;
         let mut request = self.endpoint.make_request(
@@ -413,6 +464,61 @@ impl Registration {
                         continue;
                     }
                     StatusCode::ProxyAuthenticationRequired | StatusCode::Unauthorized => {
+                        // First check if server indicated our public IP in Via header
+                        // Get all Via headers and check each one
+                        let via_headers = resp.headers.iter()
+                            .filter_map(|h| match h {
+                                rsip::Header::Via(v) => Some(v),
+                                _ => None
+                            })
+                            .collect::<Vec<_>>();
+                        
+                        info!("Found {} Via headers in 401 response", via_headers.len());
+                        
+                        for (idx, via) in via_headers.iter().enumerate() {
+                            info!("Checking Via header #{} for public IP in 401 response: {}", idx, via);
+                            if let Ok(typed_via) = via.typed() {
+                                let mut received_ip: Option<std::net::IpAddr> = None;
+                                let mut rport: Option<u16> = None;
+                                
+                                // Parse all Via parameters
+                                for param in &typed_via.params {
+                                    match param {
+                                        Param::Received(received) => {
+                                            if let Ok(ip) = received.value().parse() {
+                                                received_ip = Some(ip);
+                                                info!("Found received parameter: {}", ip);
+                                            }
+                                        }
+                                        Param::Other(key, Some(value)) if key.value() == "rport" => {
+                                            if let Ok(port) = value.value().parse::<u16>() {
+                                                rport = Some(port);
+                                                info!("Found rport parameter: {}", port);
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                
+                                // If we found both received IP and rport, update our public address
+                                if let (Some(public_ip), Some(public_port)) = (received_ip, rport) {
+                                    info!("Server detected our public address as {}:{}", public_ip, public_port);
+                                    
+                                    // Store the public address
+                                    let new_public_addr = Some((public_ip, public_port));
+                                    
+                                    // Only update if this is new information
+                                    if self.public_address != new_public_addr {
+                                        self.public_address = new_public_addr;
+                                        
+                                        // IMPORTANT: Clear the stored contact so it gets regenerated with public IP
+                                        self.contact = None;
+                                        info!("Updated public address from 401 response, will use in authenticated request");
+                                    }
+                                }
+                            }
+                        }
+                        
                         if auth_sent {
                             info!("received {} response after auth sent", resp.status_code);
                             return Ok(resp);
@@ -420,7 +526,11 @@ impl Registration {
 
                         if let Some(cred) = &self.credential {
                             self.last_seq += 1;
+                            
+                            // Handle authentication with the existing transaction
+                            // The contact will be updated in the next registration cycle if needed
                             tx = handle_client_authenticate(self.last_seq, tx, resp, cred).await?;
+                            
                             tx.send().await?;
                             auth_sent = true;
                             continue;
@@ -428,6 +538,77 @@ impl Registration {
                             info!("received {} response without credential", resp.status_code);
                             return Ok(resp);
                         }
+                    }
+                    StatusCode::OK => {
+                        // Check if server indicated our public IP in Via header
+                        let mut need_reregistration = false;
+                        // Get all Via headers and check each one
+                        let via_headers = resp.headers.iter()
+                            .filter_map(|h| match h {
+                                rsip::Header::Via(v) => Some(v),
+                                _ => None
+                            })
+                            .collect::<Vec<_>>();
+                        
+                        info!("Found {} Via headers in 200 OK response", via_headers.len());
+                        
+                        for (idx, via) in via_headers.iter().enumerate() {
+                            info!("Checking Via header #{} for public IP: {}", idx, via);
+                            if let Ok(typed_via) = via.typed() {
+                                let mut received_ip: Option<std::net::IpAddr> = None;
+                                let mut rport: Option<u16> = None;
+                                
+                                // Parse all Via parameters
+                                for param in &typed_via.params {
+                                    match param {
+                                        Param::Received(received) => {
+                                            if let Ok(ip) = received.value().parse() {
+                                                received_ip = Some(ip);
+                                                info!("Found received parameter: {}", ip);
+                                            }
+                                        }
+                                        Param::Other(key, Some(value)) if key.value() == "rport" => {
+                                            if let Ok(port) = value.value().parse::<u16>() {
+                                                rport = Some(port);
+                                                info!("Found rport parameter: {}", port);
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                
+                                // If we found both received IP and rport, update our public address
+                                if let (Some(public_ip), Some(public_port)) = (received_ip, rport) {
+                                    info!("Server detected our public address as {}:{}", public_ip, public_port);
+                                    
+                                    // Store the public address
+                                    let new_public_addr = Some((public_ip, public_port));
+                                    
+                                    // Only update and re-register if this is new information
+                                    if self.public_address != new_public_addr {
+                                        self.public_address = new_public_addr;
+                                        
+                                        // Clear the stored contact so it gets regenerated with public IP
+                                        self.contact = None;
+                                        
+                                        // We need to re-register immediately with the public IP
+                                        need_reregistration = true;
+                                        info!("Will re-register with public address");
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // If we detected public IP on first registration, return success
+                        // The client will use the discovered public address for future requests
+                        if need_reregistration {
+                            info!("Discovered public IP, will use for future registrations and calls");
+                            // Don't re-register immediately - let the client handle this
+                            // and use the discovered public address for INVITE requests
+                        }
+                        
+                        info!("registration do_request done: {:?}", resp.status_code);
+                        return Ok(resp);
                     }
                     _ => {
                         info!("registration do_request done: {:?}", resp.status_code);
@@ -441,5 +622,74 @@ impl Registration {
             "registration transaction is already terminated".to_string(),
             DialogId::try_from(&tx.original)?,
         ));
+    }
+
+    /// Create a NAT-aware Contact header with public address
+    ///
+    /// Creates a Contact header suitable for use in SIP dialogs that takes into
+    /// account the public address discovered during registration. This is essential
+    /// for proper NAT traversal in SIP communications.
+    ///
+    /// # Parameters
+    ///
+    /// * `username` - SIP username for the Contact URI
+    /// * `public_address` - Optional public address to use (IP and port)
+    /// * `local_address` - Fallback local address if no public address available
+    ///
+    /// # Returns
+    ///
+    /// A Contact header with appropriate address for NAT traversal
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use rsipstack::dialog::registration::Registration;
+    /// # use std::net::{IpAddr, Ipv4Addr};
+    /// # use rsipstack::transport::SipAddr;
+    /// # fn example() {
+    /// # let local_addr: SipAddr = todo!();
+    /// let contact = Registration::create_nat_aware_contact(
+    ///     "alice",
+    ///     Some((IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1)), 5060)),
+    ///     &local_addr,
+    /// );
+    /// # }
+    /// ```
+    pub fn create_nat_aware_contact(
+        username: &str,
+        public_address: Option<(std::net::IpAddr, u16)>,
+        local_address: &SipAddr,
+    ) -> rsip::typed::Contact {
+        let contact_host_with_port = if let Some((public_ip, public_port)) = public_address {
+            HostWithPort {
+                host: public_ip.into(),
+                port: Some(public_port.into()),
+            }
+        } else {
+            local_address.clone().into()
+        };
+
+        let params = vec![];
+        
+        // Don't add 'ob' parameter as it may confuse some SIP proxies
+        // and prevent proper ACK routing
+        // if public_address.is_some() {
+        //     params.push(Param::Other("ob".into(), None));
+        // }
+
+        rsip::typed::Contact {
+            display_name: None,
+            uri: rsip::Uri {
+                scheme: Some(rsip::Scheme::Sip),
+                auth: Some(rsip::Auth {
+                    user: username.to_string(),
+                    password: None,
+                }),
+                host_with_port: contact_host_with_port,
+                params,
+                headers: vec![],
+            },
+            params: vec![],
+        }
     }
 }

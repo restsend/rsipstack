@@ -216,10 +216,13 @@ pub async fn handle_client_authenticate(
         _ => unreachable!(),
     };
 
+    // Use MD5 as default algorithm if none specified (RFC 2617 compatibility)
+    let algorithm = challenge.algorithm.unwrap_or(rsip::headers::auth::Algorithm::Md5);
+    
     let response = DigestGenerator {
         username: cred.username.as_str(),
         password: cred.password.as_str(),
-        algorithm: challenge.algorithm.unwrap_or_default(),
+        algorithm,
         nonce: challenge.nonce.as_str(),
         method: &tx.original.method,
         qop: Some(&auth_qop),
@@ -235,7 +238,7 @@ pub async fn handle_client_authenticate(
         nonce: challenge.nonce,
         uri: tx.original.uri.clone(),
         response,
-        algorithm: challenge.algorithm,
+        algorithm: Some(algorithm),
         opaque: challenge.opaque,
         qop: Some(auth_qop),
     };
@@ -270,11 +273,12 @@ pub async fn handle_client_authenticate(
         _ => unreachable!(),
     }
     let key = TransactionKey::from_request(&new_req, TransactionRole::Client)?;
-    let new_tx = Transaction::new_client(
+    let mut new_tx = Transaction::new_client(
         key,
         new_req,
         tx.endpoint_inner.clone(),
         tx.connection.clone(),
     );
+    new_tx.destination = tx.destination.clone();
     Ok(new_tx)
 }

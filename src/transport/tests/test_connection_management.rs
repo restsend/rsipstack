@@ -142,7 +142,7 @@ async fn test_transport_lookup() -> Result<()> {
     )
     .try_into()?;
 
-    let udp_connection = transport_layer.lookup(&udp_uri, sender.clone()).await?;
+    let (udp_connection, _) = transport_layer.lookup(&udp_uri, sender.clone()).await?;
     assert!(matches!(
         udp_connection.get_addr().r#type,
         Some(Transport::Udp)
@@ -182,8 +182,8 @@ async fn test_udp_connection_reuse() -> Result<()> {
     )
     .try_into()?;
 
-    let conn1 = transport_layer.lookup(&uri, sender.clone()).await?;
-    let conn2 = transport_layer.lookup(&uri, sender.clone()).await?;
+    let (conn1, _) = transport_layer.lookup(&uri, sender.clone()).await?;
+    let (conn2, _) = transport_layer.lookup(&uri, sender.clone()).await?;
 
     // For UDP, should reuse the same connection
     assert_eq!(conn1.get_addr(), conn2.get_addr());
@@ -246,7 +246,7 @@ async fn test_outbound_connection() -> Result<()> {
 
     // Any lookup should use the outbound connection
     let uri: rsip::Uri = "sip:test@example.com:5060".try_into()?;
-    let connection = transport_layer.lookup(&uri, sender.clone()).await?;
+    let (connection, _) = transport_layer.lookup(&uri, sender.clone()).await?;
 
     assert_eq!(connection.get_addr(), &udp_addr);
 

@@ -72,7 +72,7 @@ impl TransportLayer {
         &self,
         uri: &rsip::uri::Uri,
         sender: TransportSender,
-    ) -> Result<SipConnection> {
+    ) -> Result<(SipConnection, SipAddr)> {
         self.inner.lookup(uri, self.outbound.as_ref(), sender).await
     }
 
@@ -235,7 +235,7 @@ impl TransportLayerInner {
         uri: &rsip::uri::Uri,
         outbound: Option<&'a SipAddr>,
         sender: TransportSender,
-    ) -> Result<SipConnection> {
+    ) -> Result<(SipConnection, SipAddr)> {
         let target = if let Some(addr) = outbound {
             addr
         } else {
@@ -278,7 +278,7 @@ impl TransportLayerInner {
         info!("lookup target: {} -> {}", uri, target);
 
         if let Some(transport) = self.listens.lock().unwrap().get(&target) {
-            return Ok(transport.clone());
+            return Ok((transport.clone(), target.clone()));
         }
 
         match target.r#type {
@@ -286,7 +286,7 @@ impl TransportLayerInner {
                 let listens = self.listens.lock().unwrap();
                 for (_, transport) in listens.iter() {
                     if transport.get_addr().r#type == Some(rsip::transport::Transport::Udp) {
-                        return Ok(transport.clone());
+                        return Ok((transport.clone(), target.clone()));
                     }
                 }
             }
@@ -294,19 +294,19 @@ impl TransportLayerInner {
                 let connection = TcpConnection::connect(target).await?;
                 let sip_connection = SipConnection::Tcp(connection);
                 self.start_serve(sip_connection.clone(), sender);
-                return Ok(sip_connection);
+                return Ok((sip_connection, target.clone()));
             }
             Some(rsip::transport::Transport::Tls) => {
                 let connection = TlsConnection::connect(target, None).await?;
                 let sip_connection = SipConnection::Tls(connection);
                 self.start_serve(sip_connection.clone(), sender);
-                return Ok(sip_connection);
+                return Ok((sip_connection, target.clone()));
             }
             Some(rsip::transport::Transport::Ws) | Some(rsip::transport::Transport::Wss) => {
                 let connection = WebSocketConnection::connect(target).await?;
                 let sip_connection = SipConnection::WebSocket(connection);
                 self.start_serve(sip_connection.clone(), sender);
-                return Ok(sip_connection);
+                return Ok((sip_connection, target.clone()));
             }
             _ => {}
         }
@@ -354,7 +354,7 @@ mod tests {
         let udp_peer_addr = udp_peer.get_addr().to_owned();
         tl.add_transport(udp_peer.into());
 
-        let target = tl.lookup(&first_uri, sender.clone()).await?;
+        let (target, _) = tl.lookup(&first_uri, sender.clone()).await?;
         assert_eq!(target.get_addr(), &udp_peer_addr);
 
         // test outbound
@@ -364,7 +364,7 @@ mod tests {
         tl.outbound = Some(outbound.clone());
 
         // must return the outbound transport
-        let target = tl.lookup(&first_uri, sender.clone()).await?;
+        let (target, _) = tl.lookup(&first_uri, sender.clone()).await?;
         assert_eq!(target.get_addr(), &outbound);
         Ok(())
     }

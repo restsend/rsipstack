@@ -126,7 +126,7 @@ async fn test_tcp_udp_interop() -> Result<()> {
 
     // Use lookup to find connection
     let uri: rsip::Uri = "sip:example.com;transport=tcp".try_into()?;
-    let connection = transport_layer.lookup(&uri, sender.clone()).await?;
+    let (connection, _) = transport_layer.lookup(&uri, sender.clone()).await?;
 
     // Send message
     connection
@@ -177,7 +177,7 @@ async fn test_websocket() -> Result<()> {
         ws_addr.addr.port.unwrap().value()
     )
     .try_into()?;
-    let connection = transport_layer.lookup(&uri, sender.clone()).await?;
+    let (connection, _) = transport_layer.lookup(&uri, sender.clone()).await?;
 
     // Send test message
     let test_message = "REGISTER sip:example.com SIP/2.0\r\n\

@@ -239,12 +239,16 @@ impl Transaction {
         }
 
         if let None = self.connection {
-            let connection = self
+            let (connection, resolved_addr) = self
                 .endpoint_inner
                 .transport_layer
                 .lookup(&self.original.uri, self.endpoint_inner.transport_tx.clone())
                 .await?;
             self.connection.replace(connection.clone());
+            // For UDP, we need to store the resolved destination address
+            if !connection.is_reliable() {
+                self.destination.replace(resolved_addr);
+            }
         }
 
         let connection = self.connection.as_ref().ok_or(Error::TransactionError(
