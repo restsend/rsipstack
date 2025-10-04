@@ -319,7 +319,7 @@ fn test_sip_codec_multiple_messages_with_bodies() {
             assert_eq!(req.call_id_header().unwrap().value(), "test-call-id-2");
         }
         _ => panic!("Expected request message"),
-    } 
+    }
 
     // Buffer should be empty after consuming both messages
     assert_eq!(

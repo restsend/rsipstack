@@ -226,10 +226,12 @@ impl EndpointInner {
                     | Header::CallId(_)
                     | Header::From(_)
                     | Header::To(_)
-                    | Header::MaxForwards(_)
                     | Header::CSeq(_)
             )
         });
+        headers.push(Header::ContentLength(
+            body.as_ref().map_or(0u32, |b| b.len() as u32).into(),
+        ));
         headers.unique_push(Header::UserAgent(self.user_agent.clone().into()));
         Response {
             status_code,
