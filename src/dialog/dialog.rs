@@ -184,45 +184,6 @@ pub struct DialogInner {
     pub(super) initial_request: Request,
 }
 
-// pub struct DialogStateReceiver {
-//     pub(super) dialog_layer_inner: DialogLayerInnerRef,
-//     pub(super) receiver: UnboundedReceiver<DialogState>,
-//     pub(super) dialog_id: Option<DialogId>,
-// }
-
-// impl DialogStateReceiver {
-//     pub async fn recv(&mut self) -> Option<DialogState> {
-//         let state = self.receiver.recv().await;
-//         if let Some(ref s) = state {
-//             self.dialog_id = Some(s.id().clone());
-//         }
-//         state
-//     }
-// }
-
-// impl Drop for DialogStateReceiver {
-//     fn drop(&mut self) {
-//         let id = match self.dialog_id.take() {
-//             Some(id) => id,
-//             None => return,
-//         };
-
-//         match self.dialog_layer_inner.dialogs.write().as_mut() {
-//             Ok(dialogs) => {
-//                 if let Some(dialog) = dialogs.remove(&id) {
-//                     info!(%id, "dialog removed on state receiver drop");
-//                     tokio::spawn(async move {
-//                         if let Err(e) = dialog.hangup().await {
-//                             warn!(%id, "error hanging up dialog on drop: {}", e);
-//                         }
-//                     });
-//                 }
-//             }
-//             Err(_) => {}
-//         }
-//     }
-// }
-
 pub type DialogStateReceiver = UnboundedReceiver<DialogState>;
 pub type DialogStateSender = UnboundedSender<DialogState>;
 
