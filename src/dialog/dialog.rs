@@ -297,6 +297,19 @@ impl DialogInner {
         Ok(())
     }
 
+    /// Update the dialog's remote target URI and optional Contact header.
+    ///
+    /// When a 2xx/UPDATE response carries a new Contact, call this to ensure
+    /// subsequent in-dialog requests route to the latest remote target.
+    pub fn set_remote_target(
+        &self,
+        uri: rsip::Uri,
+        contact: Option<rsip::headers::untyped::Contact>,
+    ) {
+        *self.remote_uri.lock().unwrap() = uri;
+        *self.remote_contact.lock().unwrap() = contact;
+    }
+
     pub(super) fn build_vias_from_request(&self) -> Result<Vec<Via>> {
         let mut vias = vec![];
         for header in self.initial_request.headers.iter() {
@@ -690,6 +703,19 @@ impl Dialog {
         match self {
             Dialog::ServerInvite(d) => d.inner.can_cancel(),
             Dialog::ClientInvite(d) => d.inner.can_cancel(),
+        }
+    }
+
+    /// Expose a safe hook to refresh the remote target URI/Contact after
+    /// receiving responses such as 200 OK.
+    pub fn set_remote_target(
+        &self,
+        uri: rsip::Uri,
+        contact: Option<rsip::headers::untyped::Contact>,
+    ) {
+        match self {
+            Dialog::ServerInvite(d) => d.inner.set_remote_target(uri, contact),
+            Dialog::ClientInvite(d) => d.inner.set_remote_target(uri, contact),
         }
     }
 }
