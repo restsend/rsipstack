@@ -202,9 +202,10 @@ impl ClientInviteDialog {
             .mut_tag(self.id().to_tag.clone().into())?; // ensure to-tag has tag param
 
         cancel_request.method = rsip::Method::Cancel;
+        let invite_seq = self.inner.initial_request.cseq_header()?.seq()?;
         cancel_request
             .cseq_header_mut()?
-            .mut_seq(self.inner.get_local_seq())?
+            .mut_seq(invite_seq)?
             .mut_method(rsip::Method::Cancel)?;
         cancel_request.body = vec![];
         self.inner.do_request(cancel_request).await?;
@@ -482,52 +483,53 @@ impl ClientInviteDialog {
             match msg {
                 SipMessage::Request(_) => {}
                 SipMessage::Response(resp) => {
-                    match resp.status_code {
-                        StatusCode::Trying => {
-                            self.inner.transition(DialogState::Trying(self.id()))?;
+                    let status = resp.status_code.clone();
+
+                    if status == StatusCode::Trying {
+                        self.inner.transition(DialogState::Trying(self.id()))?;
+                        continue;
+                    }
+
+                    if matches!(status.kind(), rsip::StatusCodeKind::Provisional) {
+                        self.inner.handle_provisional_response(&resp).await?;
+                        self.inner.transition(DialogState::Early(self.id(), resp))?;
+                        continue;
+                    }
+
+                    if matches!(
+                        status,
+                        StatusCode::ProxyAuthenticationRequired | StatusCode::Unauthorized
+                    ) {
+                        if auth_sent {
+                            final_response = Some(resp.clone());
+                            info!(id=%self.id(),"received {:?} response after auth sent", status);
+                            self.inner.transition(DialogState::Terminated(
+                                self.id(),
+                                TerminatedReason::ProxyAuthRequired,
+                            ))?;
+                            break;
+                        }
+                        auth_sent = true;
+                        if let Some(credential) = &self.inner.credential {
+                            tx = handle_client_authenticate(
+                                self.inner.increment_local_seq(),
+                                tx,
+                                resp,
+                                credential,
+                            )
+                            .await?;
+                            tx.send().await?;
+                            self.inner.update_remote_tag("").ok();
+                            continue;
+                        } else {
+                            info!(id=%self.id(),"received 407 response without auth option");
+                            self.inner.transition(DialogState::Terminated(
+                                self.id(),
+                                TerminatedReason::ProxyAuthRequired,
+                            ))?;
                             continue;
                         }
-                        StatusCode::Ringing | StatusCode::SessionProgress => {
-                            match resp.to_header()?.tag() {
-                                Ok(Some(tag)) => self.inner.update_remote_tag(tag.value())?,
-                                _ => {}
-                            }
-                            self.inner.transition(DialogState::Early(self.id(), resp))?;
-                            continue;
-                        }
-                        StatusCode::ProxyAuthenticationRequired | StatusCode::Unauthorized => {
-                            if auth_sent {
-                                final_response = Some(resp.clone());
-                                info!(id=%self.id(),"received {} response after auth sent", resp.status_code);
-                                self.inner.transition(DialogState::Terminated(
-                                    self.id(),
-                                    TerminatedReason::ProxyAuthRequired,
-                                ))?;
-                                break;
-                            }
-                            auth_sent = true;
-                            if let Some(credential) = &self.inner.credential {
-                                tx = handle_client_authenticate(
-                                    self.inner.increment_local_seq(),
-                                    tx,
-                                    resp,
-                                    credential,
-                                )
-                                .await?;
-                                tx.send().await?;
-                                self.inner.update_remote_tag("").ok();
-                                continue;
-                            } else {
-                                info!(id=%self.id(),"received 407 response without auth option");
-                                self.inner.transition(DialogState::Terminated(
-                                    self.id(),
-                                    TerminatedReason::ProxyAuthRequired,
-                                ))?;
-                            }
-                            continue;
-                        }
-                        _ => {}
-                    };
+                    }
                     final_response = Some(resp.clone());
                     match resp.to_header()?.tag()? {
                         Some(tag) => self.inner.update_remote_tag(tag.value())?,

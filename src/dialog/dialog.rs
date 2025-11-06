@@ -5,7 +5,7 @@ use super::{
     DialogId,
 };
 use crate::{
-    rsip_ext::extract_uri_from_contact,
+    rsip_ext::{extract_uri_from_contact, header_contains_token, parse_rseq_header},
     transaction::{
         endpoint::EndpointInnerRef,
         key::{TransactionKey, TransactionRole},
@@ -17,9 +17,10 @@ use crate::{
 };
 use rsip::{
     headers::Route,
+    message::HasHeaders,
     prelude::{HeadersExt, ToTypedHeader, UntypedHeader},
     typed::{CSeq, Contact, Via},
-    Header, Param, Request, Response, SipMessage, StatusCode,
+    Header, Method, Param, Request, Response, SipMessage, StatusCode, StatusCodeKind,
 };
 use std::sync::{
     atomic::{AtomicU32, Ordering},
@@ -127,6 +128,12 @@ pub enum Dialog {
     ClientInvite(ClientInviteDialog),
 }
 
+#[derive(Clone)]
+pub(super) struct RemoteReliableState {
+    last_rseq: u32,
+    prack_request: Request,
+}
+
 /// Internal Dialog State and Management
 ///
 /// `DialogInner` contains the core state and functionality shared between
@@ -182,6 +189,8 @@ pub struct DialogInner {
     pub(super) state_sender: DialogStateSender,
     pub(super) tu_sender: TransactionEventSender,
     pub(super) initial_request: Request,
+    pub(super) supports_100rel: bool,
+    pub(super) remote_reliable: Mutex<Option<RemoteReliableState>>,
 }
 
 pub type DialogStateReceiver = UnboundedReceiver<DialogState>;
@@ -253,6 +262,10 @@ impl DialogInner {
         }
         route_set.reverse();
 
+        let supports_100rel =
+            header_contains_token(&initial_request.headers, "Supported", "100rel")
+                || header_contains_token(&initial_request.headers, "Require", "100rel");
+
         Ok(Self {
             role,
             cancel_token: CancellationToken::new(),
@@ -271,6 +284,8 @@ impl DialogInner {
             initial_request,
             local_contact,
             remote_contact: Mutex::new(None),
+            supports_100rel,
+            remote_reliable: Mutex::new(None),
         })
     }
     pub fn can_cancel(&self) -> bool {
@@ -295,6 +310,160 @@ impl DialogInner {
         let mut to = self.to.lock().unwrap();
         *to = to.clone().with_tag(tag.into());
         Ok(())
+    }
+
+    fn clear_remote_reliable(&self) {
+        self.remote_reliable.lock().unwrap().take();
+    }
+
+    pub(super) fn prepare_prack_request(&self, resp: &Response) -> Result<Option<Request>> {
+        if !header_contains_token(resp.headers(), "Require", "100rel") {
+            return Ok(None);
+        }
+
+        let Some(rseq) = parse_rseq_header(resp.headers()) else {
+            warn!(
+                id = self.id.lock().unwrap().to_string(),
+                "received reliable provisional response without RSeq"
+            );
+            return Ok(None);
+        };
+
+        let cseq_header = resp.cseq_header()?;
+        let cseq = cseq_header.seq()?;
+        let method = cseq_header.method()?;
+
+        {
+            let state_guard = self.remote_reliable.lock().unwrap();
+            if let Some(state) = state_guard.as_ref() {
+                if state.last_rseq == rseq {
+                    return Ok(Some(state.prack_request.clone()));
+                }
+
+                if state.last_rseq > rseq {
+                    return Ok(None);
+                }
+            }
+        }
+
+        let rack_value = format!("{} {} {}", rseq, cseq, method);
+        let mut headers = vec![Header::Other("RAck".into(), rack_value.into())];
+        if self.supports_100rel {
+            headers.push(Header::Other("Supported".into(), "100rel".into()));
+        }
+
+        let prack_request = self.make_request(
+            Method::PRack,
+            Some(self.increment_local_seq()),
+            None,
+            None,
+            Some(headers),
+            None,
+        )?;
+
+        let state = RemoteReliableState {
+            last_rseq: rseq,
+            prack_request: prack_request.clone(),
+        };
+
+        {
+            let mut state_guard = self.remote_reliable.lock().unwrap();
+            *state_guard = Some(state);
+        }
+
+        Ok(Some(prack_request))
+    }
+
+    pub(super) async fn handle_provisional_response(&self, resp: &Response) -> Result<()> {
+        let to_header = resp.to_header()?;
+        if let Ok(Some(tag)) = to_header.tag() {
+            self.update_remote_tag(tag.value())?;
+        }
+
+        if let Some(prack) = self.prepare_prack_request(resp)? {
+            let _ = self.send_prack_request(prack).await?;
+        }
+
+        Ok(())
+    }
+
+    pub(super) async fn send_prack_request(&self, request: Request) -> Result<Option<Response>> {
+        let method = request.method().to_owned();
+        let key = TransactionKey::from_request(&request, TransactionRole::Client)?;
+        let mut tx = Transaction::new_client(key, request, self.endpoint_inner.clone(), None);
+
+        if let Some(route) = tx.original.route_header() {
+            if let Some(first_route) = route.typed().ok().and_then(|r| r.uris().first().cloned()) {
+                tx.destination = SipAddr::try_from(&first_route.uri).ok();
+            }
+        }
+
+        match tx.send().await {
+            Ok(_) => {
+                info!(
+                    id = self.id.lock().unwrap().to_string(),
+                    method = %method,
+                    destination=tx.destination.as_ref().map(|d| d.to_string()).as_deref(),
+                    key=%tx.key,
+                    "request sent done",
+                );
+            }
+            Err(e) => {
+                warn!(
+                    id = self.id.lock().unwrap().to_string(),
+                    destination = tx.destination.as_ref().map(|d| d.to_string()).as_deref(),
+                    "failed to send request error: {}\n{}",
+                    e,
+                    tx.original
+                );
+                return Err(e);
+            }
+        }
+
+        let mut auth_sent = false;
+        while let Some(msg) = tx.receive().await {
+            match msg {
+                SipMessage::Response(resp) => match resp.status_code {
+                    StatusCode::Trying => continue,
+                    StatusCode::ProxyAuthenticationRequired | StatusCode::Unauthorized => {
+                        let id = self.id.lock().unwrap().clone();
+                        if auth_sent {
+                            info!(
+                                id = self.id.lock().unwrap().to_string(),
+                                "received {} response after auth sent", resp.status_code
+                            );
+                            self.transition(DialogState::Terminated(
+                                id,
+                                TerminatedReason::ProxyAuthRequired,
+                            ))?;
+                            break;
+                        }
+                        auth_sent = true;
+                        if let Some(cred) = &self.credential {
+                            let new_seq = self.increment_local_seq();
+                            tx = handle_client_authenticate(new_seq, tx, resp, cred).await?;
+                            tx.send().await?;
+                            continue;
+                        } else {
+                            info!(
+                                id = self.id.lock().unwrap().to_string(),
+                                "received 407 response without auth option"
+                            );
+                            self.transition(DialogState::Terminated(
+                                id,
+                                TerminatedReason::ProxyAuthRequired,
+                            ))?;
+                            break;
+                        }
+                    }
+                    _ => {
+                        return Ok(Some(resp));
+                    }
+                },
+                _ => break,
+            }
+        }
+        Ok(None)
     }
 
     /// Update the dialog's remote target URI and optional Contact header.
@@ -495,7 +664,7 @@ impl DialogInner {
         }
     }
 
-    pub(super) async fn do_request(&self, request: Request) -> Result<Option<rsip::Response>> {
+    async fn send_dialog_request(&self, request: Request) -> Result<Option<Response>> {
         let method = request.method().to_owned();
         let key = TransactionKey::from_request(&request, TransactionRole::Client)?;
         let mut tx = Transaction::new_client(key, request, self.endpoint_inner.clone(), None);
@@ -529,20 +698,29 @@ impl DialogInner {
         let mut auth_sent = false;
         while let Some(msg) = tx.receive().await {
             match msg {
-                SipMessage::Response(resp) => match resp.status_code {
-                    StatusCode::Trying => {
+                SipMessage::Response(resp) => {
+                    let status = resp.status_code.clone();
+                    if status == StatusCode::Trying {
                         continue;
                     }
-                    StatusCode::Ringing | StatusCode::SessionProgress => {
+
+                    if status.kind() == StatusCodeKind::Provisional {
+                        if method == Method::Invite {
+                            self.handle_provisional_response(&resp).await?;
+                        }
                         self.transition(DialogState::Early(self.id.lock().unwrap().clone(), resp))?;
                         continue;
                     }
-                    StatusCode::ProxyAuthenticationRequired | StatusCode::Unauthorized => {
+
+                    if matches!(
+                        status,
+                        StatusCode::ProxyAuthenticationRequired | StatusCode::Unauthorized
+                    ) {
                         let id = self.id.lock().unwrap().clone();
                         if auth_sent {
                             info!(
                                 id = self.id.lock().unwrap().to_string(),
-                                "received {} response after auth sent", resp.status_code
+                                "received {} response after auth sent", status
                             );
                             self.transition(DialogState::Terminated(
                                 id,
@@ -568,21 +746,28 @@ impl DialogInner {
                                 id,
                                 TerminatedReason::ProxyAuthRequired,
                             ))?;
+                            continue;
                         }
                     }
-                    _ => {
-                        debug!(
-                            id = self.id.lock().unwrap().to_string(),
-                            method = %method,
-                            "dialog do_request done: {:?}", resp.status_code
-                        );
-                        return Ok(Some(resp));
+
+                    debug!(
+                        id = self.id.lock().unwrap().to_string(),
+                        method = %method,
+                        "dialog do_request done: {:?}", status
+                    );
+                    if !matches!(method, Method::PRack) {
+                        self.clear_remote_reliable();
                     }
-                },
+                    return Ok(Some(resp));
+                }
                 _ => break,
             }
         }
         Ok(None)
+    }
+
+    pub(super) async fn do_request(&self, request: Request) -> Result<Option<Response>> {
+        self.send_dialog_request(request).await
     }
 
     pub(super) fn transition(&self, state: DialogState) -> Result<()> {

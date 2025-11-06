@@ -13,7 +13,9 @@ use rsip::prelude::ToTypedHeader;
 use rsip::{
     message::HasHeaders,
     prelude::{HeadersExt, UntypedHeader},
+    Method,
 };
+use std::str::FromStr;
 
 pub trait RsipResponseExt {
     fn reason_phrase(&self) -> Option<&str>;
@@ -175,6 +177,58 @@ pub fn destination_from_request(request: &rsip::Request) -> Option<SipAddr> {
             _ => None,
         })
         .or_else(|| SipAddr::try_from(&request.uri).ok())
+}
+
+fn split_header_line(raw: &str) -> Option<(&str, &str)> {
+    raw.split_once(':')
+        .map(|(name, value)| (name.trim(), value.trim()))
+}
+
+pub fn header_value_case_insensitive(headers: &rsip::Headers, name: &str) -> Option<String> {
+    headers.iter().find_map(|header| {
+        let raw = header.to_string();
+        let (header_name, header_value) = split_header_line(&raw)?;
+        if header_name.eq_ignore_ascii_case(name) {
+            Some(header_value.to_string())
+        } else {
+            None
+        }
+    })
+}
+
+pub fn header_tokens_case_insensitive(headers: &rsip::Headers, name: &str) -> Vec<String> {
+    header_value_case_insensitive(headers, name)
+        .map(|value| {
+            value
+                .split(',')
+                .map(|token| token.trim())
+                .filter(|token| !token.is_empty())
+                .map(|token| token.to_string())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+pub fn header_contains_token(headers: &rsip::Headers, name: &str, token: &str) -> bool {
+    header_tokens_case_insensitive(headers, name)
+        .into_iter()
+        .any(|value| value.eq_ignore_ascii_case(token))
+}
+
+pub fn parse_rseq_header(headers: &rsip::Headers) -> Option<u32> {
+    header_value_case_insensitive(headers, "RSeq")
+        .and_then(|value| value.split_whitespace().next().map(str::to_string))
+        .and_then(|token| token.parse::<u32>().ok())
+}
+
+pub fn parse_rack_header(headers: &rsip::Headers) -> Option<(u32, u32, Method)> {
+    let value = header_value_case_insensitive(headers, "RAck")?;
+    let mut items = value.split_whitespace();
+    let rseq = items.next()?.parse::<u32>().ok()?;
+    let cseq = items.next()?.parse::<u32>().ok()?;
+    let method_str = items.next()?;
+    let method = Method::from_str(method_str).ok()?;
+    Some((rseq, cseq, method))
 }
 
 #[derive(Debug)]

@@ -2,14 +2,15 @@
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/restsend/rsipstack)
 
-A RFC 3261 compliant SIP stack written in Rust. The goal of this project is to provide a high-performance, reliable, and easy-to-use SIP stack that can be used in various scenarios.
+A RFC 3261/3262 compliant SIP stack written in Rust. The goal of this project is to provide a high-performance, reliable, and easy-to-use SIP stack that can be used in various scenarios.
 
 ## Features
 
-- **RFC 3261 Compliant**: Full compliance with SIP specification
+- **RFC 3261/3262 Compliant**: Full compliance with SIP specification
 - **Multiple Transport Support**: UDP, TCP, TLS, WebSocket (TLS/WebSocket require the `rustls` and `websocket` features, enabled by default)
 - **Transaction Layer**: Complete SIP transaction state machine
 - **Dialog Layer**: SIP dialog management
+- **Reliable Provisionals**: PRACK (RFC 3262 / 100rel) support
 - **Digest Authentication**: Built-in authentication support
 - **High Performance**: Built with Rust for maximum performance
 - **Easy to Use**: Simple and intuitive API design

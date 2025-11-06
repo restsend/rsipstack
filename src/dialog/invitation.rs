@@ -132,6 +132,7 @@ pub struct InviteOption {
     pub contact: rsip::Uri,
     pub credential: Option<Credential>,
     pub headers: Option<Vec<rsip::Header>>,
+    pub support_prack: bool,
 }
 
 pub struct DialogGuard {
@@ -269,6 +270,12 @@ impl DialogLayer {
                 .unwrap_or("application/sdp".to_string())
                 .into(),
         ));
+
+        if opt.support_prack {
+            request
+                .headers
+                .unique_push(rsip::Header::Supported("100rel".into()));
+        }
         // can't override default headers
         if let Some(headers) = opt.headers.as_ref() {
             for header in headers {
