@@ -421,16 +421,23 @@ impl DialogLayer {
 
         match r {
             Ok((new_dialog_id, resp)) => {
-                debug!(
-                    "client invite dialog confirmed: {} => {}",
-                    id, new_dialog_id
-                );
-                self.inner
-                    .dialogs
-                    .write()
-                    .as_mut()
-                    .map(|ds| ds.insert(new_dialog_id, Dialog::ClientInvite(dialog.clone())))
-                    .ok();
+                match resp {
+                    Some(ref r) if r.status_code.kind() == rsip::StatusCodeKind::Successful => {
+                        debug!(
+                            "client invite dialog confirmed: {} => {}",
+                            id, new_dialog_id
+                        );
+                        self.inner
+                            .dialogs
+                            .write()
+                            .as_mut()
+                            .map(|ds| {
+                                ds.insert(new_dialog_id, Dialog::ClientInvite(dialog.clone()))
+                            })
+                            .ok();
+                    }
+                    _ => {}
+                }
                 return Ok((dialog, resp));
             }
             Err(e) => {

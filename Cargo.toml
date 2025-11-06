@@ -1,6 +1,6 @@
 [package]
 name = "rsipstack"
-version = "0.2.88"
+version = "0.2.89"
 edition = "2021"
 description = "SIP Stack Rust library for building SIP applications"
 license = "MIT"
@@ -25,7 +25,7 @@ log = "0.4.28"
 rsip = { version = "0.4.0" }
 thiserror = "2.0.17"
 tracing = "0.1.41"
-tokio-util = { version = "0.7.16", features = ["full"] }
+tokio-util = { version = "0.7.17", features = ["full"] }
 tracing-subscriber = { version = "0.3.20", features = ["local-time"] }
 rand = { version = "0.9.2" }
 get_if_addrs = "0.5.3"
@@ -35,8 +35,8 @@ futures-util = "0.3.31"
 tokio-tungstenite = { version = "0.28.0", optional = true }
 tokio-rustls = { version = "0.26.4", optional = true }
 rustls-pemfile = { version = "2.2.0", optional = true }
-webpki-roots = { version = "1.0.3", optional = true }
-rustls = "0.23.32"
+webpki-roots = { version = "1.0.4", optional = true }
+rustls = "0.23.35"
 clap = { version = "4.5.47", features = ["derive"] }
 http = "1.3.1"
 nom = "8.0.0"
@@ -56,12 +56,11 @@ getrandom = { version = "0.3.4" }
 tokio = { version = "1.48.0", features = ["full"] }
 
 [dev-dependencies]
-wasm-bindgen-test = "0.3.54"
 dotenv = "0.15"
 sdp-rs = "0.2.1"
 rtp-rs = "0.6.0"
 stun-rs = "0.1.11"
-openai-api-rs = "7.0.0"
+openai-api-rs = "8.0.1"
 base64 = "0.22.1"
 serde = "1.0.228"
 serde_json = "1.0.145"
