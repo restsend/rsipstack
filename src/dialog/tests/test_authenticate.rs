@@ -146,10 +146,9 @@ async fn test_authenticate_via_header_branch_update() -> crate::Result<()> {
     );
 
     // Verify rport parameter is added
-    let has_rport = new_via
-        .params
-        .iter()
-        .any(|p| matches!(p, rsip::Param::Other(key, _) if key.value().eq_ignore_ascii_case("rport")));
+    let has_rport = new_via.params.iter().any(
+        |p| matches!(p, rsip::Param::Other(key, _) if key.value().eq_ignore_ascii_case("rport")),
+    );
     assert!(
         has_rport,
         "Via header should have rport parameter after authentication"
@@ -157,4 +156,3 @@ async fn test_authenticate_via_header_branch_update() -> crate::Result<()> {
 
     Ok(())
 }
-
