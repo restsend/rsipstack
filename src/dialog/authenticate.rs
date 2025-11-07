@@ -249,10 +249,9 @@ pub async fn handle_client_authenticate(
         qop: auth_qop,
     };
 
-    let via_header = tx.original.via_header()?.clone();
-
-    // update new branch
-    let mut params = via_header.params().clone()?;
+    let mut via_header = tx.original.via_header()?.clone().typed()?;
+    let params = &mut via_header.params;
+    params.retain(|p| !matches!(p, rsip::Param::Branch(_)));
     params.push(make_via_branch());
     params.push(Param::Other("rport".into(), None));
     new_req.headers_mut().unique_push(via_header.into());
