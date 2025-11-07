@@ -631,22 +631,17 @@ impl DialogInner {
             }
         }
 
+        self.local_contact
+            .as_ref()
+            .map(|c| resp_headers.push(Contact::from(c.clone()).into()));
+
         if let Some(headers) = headers {
             for header in headers {
                 resp_headers.unique_push(header);
             }
         }
 
-        resp_headers.retain(|h| {
-            !matches!(
-                h,
-                Header::Contact(_) | Header::ContentLength(_) | Header::UserAgent(_)
-            )
-        });
-
-        self.local_contact
-            .as_ref()
-            .map(|c| resp_headers.push(Contact::from(c.clone()).into()));
+        resp_headers.retain(|h| !matches!(h, Header::ContentLength(_) | Header::UserAgent(_)));
 
         resp_headers.push(Header::ContentLength(
             body.as_ref().map_or(0u32, |b| b.len() as u32).into(),
