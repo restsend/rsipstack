@@ -464,25 +464,3 @@ impl From<WebSocketListenerConnection> for SipConnection {
         SipConnection::WebSocketListener(connection)
     }
 }
-
-impl From<SipAddr> for rsip::HostWithPort {
-    fn from(val: SipAddr) -> Self {
-        val.addr
-    }
-}
-
-impl From<SipAddr> for rsip::Uri {
-    fn from(val: SipAddr) -> Self {
-        let scheme = match val.r#type {
-            Some(rsip::transport::Transport::Wss) | Some(rsip::transport::Transport::Tls) => {
-                rsip::Scheme::Sips
-            }
-            _ => rsip::Scheme::Sip,
-        };
-        rsip::Uri {
-            scheme: Some(scheme),
-            host_with_port: val.addr,
-            ..Default::default()
-        }
-    }
-}

@@ -1,3 +1,4 @@
+use crate::rsip_ext::RsipResponseExt;
 use crate::transaction::key::{TransactionKey, TransactionRole};
 use crate::transaction::transaction::Transaction;
 use crate::transport::udp::UdpConnection;
@@ -127,8 +128,8 @@ Contact: <sip:uas@192.0.2.55:5080;transport=tcp>\r\n\
 Content-Length: 0\r\n\r\n";
 
     let response = Response::try_from(raw_response)?;
-
-    let ack = endpoint.inner.make_ack(&response, None)?;
+    let request_uri = response.remote_uri(None)?;
+    let ack = endpoint.inner.make_ack(&response, request_uri)?;
 
     let expected_uri = Uri::try_from("sip:uas@192.0.2.55:5080;transport=tcp")?;
     assert_eq!(ack.uri, expected_uri, "ACK must target the remote Contact");
@@ -184,8 +185,9 @@ Content-Length: 0\r\n\r\n";
         r#type: Some(rsip::transport::Transport::Tcp),
         addr: "1.2.3.4:15060".try_into()?,
     };
-    let ack = endpoint.inner.make_ack(&response, Some(&dest))?;
-    let expected_uri = Uri::try_from("sip:uas@1.2.3.4:15060;transport=tcp")?;
+    let request_uri = dest.try_into().expect("to uri failed");
+    let ack = endpoint.inner.make_ack(&response, request_uri)?;
+    let expected_uri = Uri::try_from("sip:1.2.3.4:15060;transport=tcp")?;
     assert_eq!(ack.uri, expected_uri, "ACK must target the remote Contact");
     Ok(())
 }

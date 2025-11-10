@@ -1,5 +1,5 @@
 use crate::Result;
-use rsip::{host_with_port, HostWithPort};
+use rsip::{host_with_port, HostWithPort, Transport};
 use std::{fmt, hash::Hash, net::SocketAddr};
 
 /// SIP Address
@@ -110,17 +110,39 @@ impl SipAddr {
     }
 }
 
+impl From<SipAddr> for rsip::HostWithPort {
+    fn from(val: SipAddr) -> Self {
+        val.addr
+    }
+}
+
+impl From<SipAddr> for rsip::Uri {
+    fn from(val: SipAddr) -> Self {
+        Self::from(&val)
+    }
+}
+
 impl From<&SipAddr> for rsip::Uri {
     fn from(addr: &SipAddr) -> Self {
+        let params = match addr.r#type {
+            Some(Transport::Tcp) => vec![rsip::Param::Transport(Transport::Tcp)],
+            Some(Transport::Tls) => vec![rsip::Param::Transport(Transport::Tls)],
+            Some(Transport::Ws) => vec![rsip::Param::Transport(Transport::Ws)],
+            Some(Transport::Wss) => vec![rsip::Param::Transport(Transport::Wss)],
+            Some(Transport::TlsSctp) => vec![rsip::Param::Transport(Transport::TlsSctp)],
+            Some(Transport::Sctp) => vec![rsip::Param::Transport(Transport::Sctp)],
+            _ => vec![],
+        };
         let scheme = match addr.r#type {
-            Some(rsip::transport::Transport::Wss) | Some(rsip::transport::Transport::Tls) => {
-                rsip::Scheme::Sips
-            }
+            Some(rsip::transport::Transport::Wss)
+            | Some(rsip::transport::Transport::Tls)
+            | Some(rsip::transport::Transport::TlsSctp) => rsip::Scheme::Sips,
             _ => rsip::Scheme::Sip,
         };
         rsip::Uri {
             scheme: Some(scheme),
             host_with_port: addr.addr.clone(),
+            params,
             ..Default::default()
         }
     }
