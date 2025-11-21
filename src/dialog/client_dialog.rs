@@ -541,6 +541,7 @@ impl ClientInviteDialog {
                     }
                     match resp.status_code {
                         StatusCode::OK => {
+                            self.inner.update_route_set_from_response(&resp);
                             // 200 response to INVITE always contains Contact header
                             let contact = resp.contact_header()?;
                             self.inner

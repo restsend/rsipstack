@@ -1,6 +1,6 @@
 [package]
 name = "rsipstack"
-version = "0.2.91"
+version = "0.2.92"
 edition = "2021"
 description = "SIP Stack Rust library for building SIP applications"
 license = "MIT"

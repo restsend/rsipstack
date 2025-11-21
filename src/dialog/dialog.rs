@@ -479,6 +479,34 @@ impl DialogInner {
         *self.remote_contact.lock().unwrap() = contact;
     }
 
+    /// Update the stored route set from Record-Route headers present in a response.
+    ///
+    /// Client dialogs learn their route set from the 2xx response that establishes
+    /// the dialog (RFC 3261 §12.1.2). Persisting it here ensures all subsequent
+    /// in-dialog requests reuse the same proxy chain instead of targeting the
+    /// remote contact directly.
+    pub(crate) fn update_route_set_from_response(&self, resp: &Response) {
+        if !matches!(self.role, TransactionRole::Client) {
+            return;
+        }
+
+        let mut new_route_set: Vec<Route> = resp
+            .headers()
+            .iter()
+            .filter_map(|header| match header {
+                Header::RecordRoute(rr) => Some(Route::from(rr.value())),
+                _ => None,
+            })
+            .collect();
+
+        if new_route_set.is_empty() {
+            return;
+        }
+
+        new_route_set.reverse();
+        *self.route_set.lock().unwrap() = new_route_set;
+    }
+
     pub(super) fn build_vias_from_request(&self) -> Result<Vec<Via>> {
         let mut vias = vec![];
         for header in self.initial_request.headers.iter() {

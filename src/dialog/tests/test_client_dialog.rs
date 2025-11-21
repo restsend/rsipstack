@@ -369,3 +369,109 @@ async fn test_make_request_preserves_remote_target_and_route_order() -> crate::R
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_route_set_updates_from_200_ok_response() -> crate::Result<()> {
+    let endpoint = create_test_endpoint().await?;
+    let (state_sender, _) = unbounded_channel();
+
+    let dialog_id = DialogId {
+        call_id: "route-update-call".to_string(),
+        from_tag: "from-tag".to_string(),
+        to_tag: "".to_string(),
+    };
+
+    let invite_req = create_invite_request("from-tag", "", "route-update-call");
+    let (tu_sender, _tu_receiver) = unbounded_channel();
+
+    let dialog_inner = DialogInner::new(
+        TransactionRole::Client,
+        dialog_id,
+        invite_req,
+        endpoint.inner.clone(),
+        state_sender,
+        None,
+        Some(Uri::try_from("sip:alice@alice.example.com:5060")?),
+        tu_sender,
+    )?;
+
+    let client_dialog = ClientInviteDialog {
+        inner: Arc::new(dialog_inner),
+    };
+
+    let remote_target = Uri::try_from("sip:uas@192.0.2.55:5088;transport=tcp")?;
+    client_dialog
+        .inner
+        .set_remote_target(remote_target.clone(), None);
+
+    let mut headers: Vec<Header> = vec![
+        Via::new("SIP/2.0/TCP proxy.example.com:5060;branch=z9hG4bKproxy").into(),
+        CSeq::new("1 INVITE").into(),
+        From::new("Alice <sip:alice@example.com>;tag=from-tag").into(),
+        To::new("Bob <sip:bob@example.com>;tag=bob-tag").into(),
+        CallId::new("route-update-call").into(),
+        Header::RecordRoute(RecordRoute::new(
+            "<sip:edge1.example.net:5070;transport=tcp;lr>",
+        )),
+        Header::RecordRoute(RecordRoute::new(
+            "<sip:edge2.example.net:5080;transport=tcp;lr>",
+        )),
+    ];
+    headers.push(ContentLength::new("0").into());
+
+    let success_resp = Response {
+        status_code: StatusCode::OK,
+        version: rsip::Version::V2,
+        headers: headers.into(),
+        body: vec![],
+    };
+
+    client_dialog
+        .inner
+        .update_route_set_from_response(&success_resp);
+
+    let outbound_addr =
+        SipAddr::try_from(&Uri::try_from("sip:uac.example.com:5060;transport=tcp")?)?;
+    let bye_request = client_dialog.inner.make_request(
+        rsip::Method::Bye,
+        None,
+        Some(outbound_addr),
+        None,
+        None,
+        None,
+    )?;
+
+    let routes: Vec<String> = bye_request
+        .headers
+        .iter()
+        .filter_map(|header| match header {
+            Header::Route(route) => Some(route.value().to_string()),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        routes,
+        vec![
+            "<sip:edge2.example.net:5080;transport=tcp;lr>".to_string(),
+            "<sip:edge1.example.net:5070;transport=tcp;lr>".to_string(),
+        ],
+        "Route set must be reversed compared to the Record-Route header order",
+    );
+
+    let destination = destination_from_request(&bye_request)
+        .expect("route-enabled request should resolve to a destination");
+    let expected_destination =
+        SipAddr::try_from(&Uri::try_from("sip:edge2.example.net:5080;transport=tcp")?)?;
+    assert_eq!(
+        destination, expected_destination,
+        "First Route entry must determine the transport destination",
+    );
+
+    assert_eq!(
+        bye_request.uri, remote_target,
+        "Record-Route application must not change the remote target",
+    );
+
+    Ok(())
+}
