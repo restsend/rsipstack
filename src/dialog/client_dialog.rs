@@ -540,7 +540,6 @@ impl ClientInviteDialog {
                         dialog_id = id;
                     }
                     match resp.status_code {
-
                         StatusCode::Ringing | StatusCode::SessionProgress
                             if resp
                                 .to_header()
