@@ -811,6 +811,10 @@ impl DialogInner {
                 );
                 return Ok(());
             }
+            (DialogState::Confirmed(_, _), DialogState::WaitAck(_, _)) => {
+                warn!("dialog already confirmed, ignoring transition to {}", state);
+                return Ok(());
+            }
             _ => {}
         }
         debug!("transitioning state: {} -> {}", old_state, state);
