@@ -499,10 +499,6 @@ impl DialogInner {
             })
             .collect();
 
-        if new_route_set.is_empty() {
-            return;
-        }
-
         new_route_set.reverse();
         *self.route_set.lock().unwrap() = new_route_set;
     }
