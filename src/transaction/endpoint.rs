@@ -270,7 +270,7 @@ impl EndpointInner {
 
             match event {
                 TransportEvent::Incoming(msg, connection, from) => {
-                    match self.on_received_message(msg, connection).await {
+                    match self.on_received_message(msg, connection, &from).await {
                         Ok(()) => {}
                         Err(e) => {
                             warn!(addr=%from,"on_received_message error: {}", e);
@@ -331,6 +331,7 @@ impl EndpointInner {
         self: &Arc<Self>,
         msg: SipMessage,
         connection: SipConnection,
+        from: &SipAddr,
     ) -> Result<()> {
         let mut key = match &msg {
             SipMessage::Request(req) => {
@@ -393,6 +394,11 @@ impl EndpointInner {
                                             // don't ack 2xx response when ack is placeholder
                                             return Ok(());
                                         }
+                                    }
+                                    rsip::StatusCodeKind::RequestFailure => {
+                                        // for ACK to 487, send it where it came from
+                                        connection.send(last_message, Some(from)).await?;
+                                        return Ok(());
                                     }
                                     _ => {}
                                 }
