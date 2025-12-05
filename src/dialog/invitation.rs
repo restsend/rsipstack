@@ -279,7 +279,14 @@ impl DialogLayer {
         // can't override default headers
         if let Some(headers) = opt.headers.as_ref() {
             for header in headers {
-                request.headers.push(header.clone());
+                // only override if it is a "max-forwards" header
+                // so as not to duplicate it; this is important because
+                // some clients consider messages with duplicate "max-forwards"
+                // headers as malformed and may silently ignore invites
+                match header {
+                    rsip::Header::MaxForwards(_) => request.headers.unique_push(header.clone()),
+                    _ => request.headers.push(header.clone()),
+                }
             }
         }
         Ok(request)
