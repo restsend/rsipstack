@@ -426,7 +426,7 @@ impl Transaction {
         }
     }
 
-    pub async fn send_ack(&mut self, connection: Option<SipConnection>) -> Result<()> {
+    pub async fn send_ack(&mut self, mut connection: Option<SipConnection>) -> Result<()> {
         if self.transaction_type != TransactionType::ClientInvite {
             return Err(Error::TransactionError(
                 "send_ack is only valid for client invite transactions".to_string(),
@@ -466,11 +466,20 @@ impl Transaction {
         } else {
             ack.to_owned().into()
         };
-        if let SipMessage::Request(ref req) = ack {
+        if let SipMessage::Request(req) = &ack {
             if let Some(resp) = self.last_response.as_ref() {
                 if resp.status_code.kind() == StatusCodeKind::Successful {
                     // 2xx response, set destination from request
-                    self.destination = destination_from_request(&req);
+                    if let Some(dest) = destination_from_request(req) {
+                        let (conn, addr) = self
+                            .endpoint_inner
+                            .transport_layer
+                            .lookup(&dest, Some(&self.key))
+                            .await?;
+
+                        connection = Some(conn);
+                        self.destination = Some(addr);
+                    }
                 }
             }
         }
