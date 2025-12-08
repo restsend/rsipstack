@@ -133,6 +133,7 @@ pub struct InviteOption {
     pub credential: Option<Credential>,
     pub headers: Option<Vec<rsip::Header>>,
     pub support_prack: bool,
+    pub call_id: Option<String>,
 }
 
 pub struct DialogGuard {
@@ -249,10 +250,21 @@ impl DialogLayer {
         }
         .with_tag(make_tag());
 
+        let call_id = opt
+            .call_id
+            .as_ref()
+            .map(|id| rsip::headers::CallId::from(id.clone()));
+
         let via = self.endpoint.get_via(None, None)?;
-        let mut request =
-            self.endpoint
-                .make_request(rsip::Method::Invite, recipient, via, from, to, last_seq);
+        let mut request = self.endpoint.make_request(
+            rsip::Method::Invite,
+            recipient,
+            via,
+            from,
+            to,
+            last_seq,
+            call_id,
+        );
 
         let contact = rsip::typed::Contact {
             display_name: None,

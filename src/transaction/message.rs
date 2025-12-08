@@ -62,7 +62,8 @@ impl EndpointInner {
     ///     via,
     ///     from,
     ///     to,
-    ///     1
+    ///     1,
+    ///     None,
     /// );
     /// # Ok(())
     /// # }
@@ -96,10 +97,12 @@ impl EndpointInner {
         from: rsip::typed::From,
         to: rsip::typed::To,
         seq: u32,
+        call_id: Option<rsip::headers::CallId>,
     ) -> rsip::Request {
+        let call_id = call_id.unwrap_or_else(|| make_call_id(self.option.callid_suffix.as_deref()));
         let headers = vec![
             Header::Via(via.into()),
-            Header::CallId(make_call_id(self.option.callid_suffix.as_deref())),
+            Header::CallId(call_id),
             Header::From(from.into()),
             Header::To(to.into()),
             Header::CSeq(rsip::typed::CSeq { seq, method }.into()),
