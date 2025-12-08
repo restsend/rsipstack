@@ -402,6 +402,7 @@ impl Registration {
             from,
             to,
             self.last_seq,
+            None,
         );
 
         // Thanks to https://github.com/restsend/rsipstack/issues/32
