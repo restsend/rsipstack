@@ -350,7 +350,7 @@ impl ServerInviteDialog {
     /// # }
     /// ```
     pub async fn bye(&self) -> Result<()> {
-        if !self.inner.is_confirmed() {
+        if !self.inner.is_confirmed() && !self.inner.waiting_ack() {
             return Ok(());
         }
         info!(id=%self.id(), "sending bye request");
