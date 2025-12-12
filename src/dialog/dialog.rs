@@ -226,6 +226,9 @@ impl DialogState {
     pub fn is_terminated(&self) -> bool {
         matches!(self, DialogState::Terminated(_, _))
     }
+    pub fn waiting_ack(&self) -> bool {
+        matches!(self, DialogState::WaitAck(_, _))
+    }
 }
 
 impl DialogInner {
@@ -296,6 +299,9 @@ impl DialogInner {
     }
     pub fn is_terminated(&self) -> bool {
         self.state.lock().unwrap().is_terminated()
+    }
+    pub fn waiting_ack(&self) -> bool {
+        self.state.lock().unwrap().waiting_ack()
     }
     pub fn get_local_seq(&self) -> u32 {
         self.local_seq.load(Ordering::Relaxed)
