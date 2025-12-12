@@ -6,6 +6,7 @@ use crate::transaction::key::TransactionRole;
 use crate::transaction::make_tag;
 use crate::transaction::{endpoint::EndpointInnerRef, transaction::Transaction};
 use crate::Result;
+use rsip::prelude::HeadersExt;
 use rsip::Request;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::{
@@ -167,6 +168,13 @@ impl DialogLayer {
         }
         id.to_tag = make_tag().to_string(); // generate to tag
 
+        let mut local_contact = local_contact;
+        if local_contact.is_none() {
+            local_contact = self
+                .build_local_contact(credential.as_ref().map(|cred| cred.username.clone()), None)
+                .ok();
+        }
+
         let dlg_inner = DialogInner::new(
             TransactionRole::Server,
             id.clone(),
@@ -177,6 +185,8 @@ impl DialogLayer {
             local_contact,
             tx.tu_sender.clone(),
         )?;
+
+        *dlg_inner.remote_contact.lock().unwrap() = tx.original.contact_header().ok().cloned();
 
         let dialog = ServerInviteDialog {
             inner: Arc::new(dlg_inner),
@@ -236,5 +246,41 @@ impl DialogLayer {
 
     pub fn new_dialog_state_channel(&self) -> (DialogStateSender, DialogStateReceiver) {
         tokio::sync::mpsc::unbounded_channel()
+    }
+
+    pub fn build_local_contact(
+        &self,
+        username: Option<String>,
+        params: Option<Vec<rsip::Param>>,
+    ) -> Result<rsip::Uri> {
+        let addr = self
+            .endpoint
+            .transport_layer
+            .get_addrs()
+            .first()
+            .ok_or(crate::Error::EndpointError("not sipaddrs".to_string()))?
+            .clone();
+
+        let scheme = if matches!(addr.r#type, Some(rsip::Transport::Tls)) {
+            rsip::Scheme::Sips
+        } else {
+            rsip::Scheme::Sip
+        };
+
+        let mut params = params.unwrap_or_default();
+        if !matches!(addr.r#type, Some(rsip::Transport::Udp) | None) {
+            addr.r#type.map(|t| params.push(rsip::Param::Transport(t)));
+        }
+        let auth = username.map(|user| rsip::Auth {
+            user,
+            password: None,
+        });
+        Ok(rsip::Uri {
+            scheme: Some(scheme),
+            auth,
+            host_with_port: addr.addr.clone().into(),
+            params,
+            ..Default::default()
+        })
     }
 }

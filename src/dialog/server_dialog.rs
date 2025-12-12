@@ -1,7 +1,6 @@
 use super::dialog::{Dialog, DialogInnerRef, DialogState, TerminatedReason};
 use super::DialogId;
 use crate::rsip_ext::parse_rack_header;
-use crate::transport::SipConnection;
 use crate::{
     transaction::transaction::{Transaction, TransactionEvent},
     Result,
@@ -180,27 +179,6 @@ impl ServerInviteDialog {
             headers,
             body,
         );
-        let via = self.inner.initial_request.via_header()?;
-        let (via_transport, via_received) = SipConnection::parse_target_from_via(via)?;
-        let mut params = vec![];
-        if via_transport != rsip::transport::Transport::Udp {
-            params.push(rsip::param::Param::Transport(via_transport));
-        }
-        let contact = rsip::headers::typed::Contact {
-            uri: rsip::Uri {
-                host_with_port: via_received,
-                params,
-                ..Default::default()
-            },
-            display_name: None,
-            params: vec![],
-        };
-        debug!(id = %self.id(), "accepting dialog with contact: {}", contact);
-        self.inner
-            .remote_contact
-            .lock()
-            .unwrap()
-            .replace(contact.untyped());
         self.inner
             .tu_sender
             .send(TransactionEvent::Respond(resp.clone()))?;
