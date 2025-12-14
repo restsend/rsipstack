@@ -566,7 +566,7 @@ impl ServerInviteDialog {
                     tx.reply(rsip::StatusCode::OK).await?;
                     return Ok(());
                 }
-                rsip::Method::Invite | rsip::Method::Ack => {
+                rsip::Method::Ack => {
                     info!(id=%self.id(),
                         "invalid request received {} {}",
                         tx.original.method, tx.original.uri
@@ -577,6 +577,7 @@ impl ServerInviteDialog {
                         rsip::StatusCode::MethodNotAllowed,
                     ));
                 }
+                rsip::Method::Invite => return self.handle_reinvite(tx).await,
                 rsip::Method::Bye => return self.handle_bye(tx).await,
                 rsip::Method::PRack => return self.handle_prack(tx).await,
                 rsip::Method::Info => return self.handle_info(tx).await,
@@ -649,6 +650,34 @@ impl ServerInviteDialog {
         self.inner
             .transition(DialogState::Updated(self.id(), tx.original.clone()))?;
         tx.reply(rsip::StatusCode::OK).await?;
+        Ok(())
+    }
+
+    async fn handle_reinvite(&mut self, tx: &mut Transaction) -> Result<()> {
+        info!(id = %self.id(), "received re-invite {}", tx.original.uri);
+        self.inner
+            .transition(DialogState::Updated(self.id(), tx.original.clone()))?;
+
+        if let Err(e) = tx.reply(rsip::StatusCode::OK).await {
+            warn!(id = %self.id(), "failed to send 200 OK for re-invite: {}", e);
+        }
+
+        while let Some(msg) = tx.receive().await {
+            match msg {
+                SipMessage::Request(req) => match req.method {
+                    rsip::Method::Ack => {
+                        info!(id = %self.id(),"received ack for re-invite {}", req.uri);
+                        self.inner.transition(DialogState::Confirmed(
+                            self.id(),
+                            tx.last_response.clone().unwrap_or_default(),
+                        ))?;
+                        break;
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
         Ok(())
     }
 
