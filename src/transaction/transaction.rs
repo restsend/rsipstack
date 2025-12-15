@@ -471,14 +471,20 @@ impl Transaction {
                 if resp.status_code.kind() == StatusCodeKind::Successful {
                     // 2xx response, set destination from request
                     if let Some(dest) = destination_from_request(req) {
-                        let (conn, addr) = self
+                        match self
                             .endpoint_inner
                             .transport_layer
                             .lookup(&dest, Some(&self.key))
-                            .await?;
-
-                        connection = Some(conn);
-                        self.destination = Some(addr);
+                            .await
+                        {
+                            Ok((conn, addr)) => {
+                                connection = Some(conn);
+                                self.destination = Some(addr);
+                            }
+                            Err(e) => {
+                                tracing::warn!("failed to lookup destination: {}", e);
+                            }
+                        }
                     }
                 }
             }
