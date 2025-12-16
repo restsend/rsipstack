@@ -539,6 +539,13 @@ impl EndpointInner {
         Ok(via)
     }
 
+    pub fn get_running_transactions(&self) -> Option<Vec<TransactionKey>> {
+        self.transactions
+            .read()
+            .map(|ts| ts.keys().cloned().collect())
+            .ok()
+    }
+
     pub fn get_stats(&self) -> EndpointStats {
         let waiting_ack = self
             .waiting_ack
