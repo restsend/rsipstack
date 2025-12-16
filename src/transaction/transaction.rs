@@ -470,7 +470,16 @@ impl Transaction {
             if let Some(resp) = self.last_response.as_ref() {
                 if resp.status_code.kind() == StatusCodeKind::Successful {
                     // 2xx response, set destination from request
-                    if let Some(dest) = destination_from_request(req) {
+                    if let Some(mut dest) = destination_from_request(req) {
+                        // for sip over websocket, query locator with contact address
+                        if dest.addr.host.to_string().ends_with("invalid") {
+                            let contact = resp.contact_header()?;
+                            let uri = contact.uri()?;
+                            if let Some(locator) = self.endpoint_inner.locator.as_ref() {
+                                dest = locator.locate(&uri).await?;
+                            }
+                        }
+
                         let (conn, addr) = self
                             .endpoint_inner
                             .transport_layer
