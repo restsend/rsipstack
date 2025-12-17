@@ -1,6 +1,7 @@
 use super::authenticate::Credential;
 use super::dialog::DialogStateSender;
 use super::{dialog::Dialog, server_dialog::ServerInviteDialog, DialogId};
+use crate::dialog::client_dialog::ClientInviteDialog;
 use crate::dialog::dialog::{DialogInner, DialogStateReceiver};
 use crate::transaction::key::TransactionRole;
 use crate::transaction::make_tag;
@@ -227,6 +228,32 @@ impl DialogLayer {
             },
             Err(_) => None,
         }
+    }
+
+    /// Returns all client-side INVITE dialogs (UAC) that share the given Call-ID.
+    ///
+    /// In a forking scenario, multiple client dialogs can exist for the same
+    /// Call-ID (same local From-tag, different remote To-tags). This helper
+    /// scans the internal dialog registry and returns all `ClientInviteDialog`
+    /// instances whose `DialogId.call_id` equals the provided `call_id`.
+    ///
+    /// The returned vector may be empty if no matching client dialogs are found.
+    pub fn get_client_dialog_by_call_id(&self, call_id: &str) -> Vec<ClientInviteDialog> {
+        self.inner
+            .dialogs
+            .read()
+            .map(|guard| {
+                guard
+                    .values()
+                    .filter_map(|dlg| match dlg {
+                        Dialog::ClientInvite(client_dlg) if client_dlg.id().call_id == call_id => {
+                            Some(client_dlg.clone())
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     pub fn remove_dialog(&self, id: &DialogId) {

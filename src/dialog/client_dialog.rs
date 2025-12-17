@@ -196,11 +196,6 @@ impl ClientInviteDialog {
         cancel_request
             .headers_mut()
             .retain(|h| !matches!(h, Header::ContentLength(_) | Header::ContentType(_)));
-
-        cancel_request
-            .to_header_mut()?
-            .mut_tag(self.id().to_tag.clone().into())?; // ensure to-tag has tag param
-
         cancel_request.method = rsip::Method::Cancel;
         let invite_seq = self.inner.initial_request.cseq_header()?.seq()?;
         cancel_request
