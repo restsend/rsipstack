@@ -602,7 +602,14 @@ impl ServerInviteDialog {
                         tx.connection.clone(),
                     ))?;
                 }
-                _ => {}
+                rsip::Method::Invite => {}
+                _ => {
+                    return Err(crate::Error::DialogError(
+                        "invalid request in non-confirmed state".to_string(),
+                        self.id(),
+                        rsip::StatusCode::MethodNotAllowed,
+                    ));
+                }
             }
         }
         self.handle_invite(tx).await

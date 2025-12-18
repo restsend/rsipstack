@@ -1,6 +1,6 @@
 [package]
 name = "rsipstack"
-version = "0.2.97"
+version = "0.2.98"
 edition = "2021"
 description = "SIP Stack Rust library for building SIP applications"
 license = "MIT"
@@ -23,7 +23,7 @@ async-trait = "0.1.89"
 futures = "0.3.31"
 rsip = { version = "0.4.0" }
 thiserror = "2.0.17"
-tracing = "0.1.41"
+tracing = "0.1.43"
 tokio-util = { version = "0.7.17", features = ["full"] }
 tracing-subscriber = { version = "0.3.20", features = ["local-time"] }
 rand = { version = "0.9.2" }

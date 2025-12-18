@@ -414,7 +414,7 @@ impl ClientInviteDialog {
 
         if self.inner.is_confirmed() {
             match tx.original.method {
-                rsip::Method::Invite => {}
+                rsip::Method::Invite => return self.handle_reinvite(tx).await,
                 rsip::Method::Bye => return self.handle_bye(tx).await,
                 rsip::Method::Info => return self.handle_info(tx).await,
                 rsip::Method::Options => return self.handle_options(tx).await,
@@ -431,7 +431,7 @@ impl ClientInviteDialog {
             }
         } else {
             info!(id=%self.id(),
-                "received request before confirmed: {:?}",
+                "received request not confirmed: {:?}",
                 tx.original.method
             );
         }
@@ -467,6 +467,25 @@ impl ClientInviteDialog {
         self.inner
             .transition(DialogState::Updated(self.id(), tx.original.clone()))?;
         tx.reply(rsip::StatusCode::OK).await?;
+        Ok(())
+    }
+
+    async fn handle_reinvite(&mut self, tx: &mut Transaction) -> Result<()> {
+        info!(id=%self.id(),"received reinvite {}", tx.original.uri);
+        self.inner
+            .transition(DialogState::Updated(self.id(), tx.original.clone()))?;
+        tx.reply(rsip::StatusCode::OK).await?;
+
+        // wait for ACK
+        while let Some(msg) = tx.receive().await {
+            match msg {
+                SipMessage::Request(req) if req.method == rsip::Method::Ack => {
+                    info!(id=%self.id(),"received ACK for re-INVITE");
+                    break;
+                }
+                _ => {}
+            }
+        }
         Ok(())
     }
 
