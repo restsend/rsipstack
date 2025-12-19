@@ -604,11 +604,8 @@ impl ServerInviteDialog {
                 }
                 rsip::Method::Invite => {}
                 _ => {
-                    return Err(crate::Error::DialogError(
-                        "invalid request in non-confirmed state".to_string(),
-                        self.id(),
-                        rsip::StatusCode::MethodNotAllowed,
-                    ));
+                    // ignore other requests in non-confirmed state
+                    return Ok(());
                 }
             }
         }
