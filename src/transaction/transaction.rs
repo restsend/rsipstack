@@ -471,7 +471,33 @@ impl Transaction {
             if let Some(resp) = self.last_response.as_ref() {
                 if resp.status_code.kind() == StatusCodeKind::Successful {
                     // 2xx response, set destination from request
-                    self.destination = destination_from_request(&req);
+                    if let Some(dest) = destination_from_request(&req) {
+                        if !connection
+                            .as_ref()
+                            .map(|c| c.is_reliable())
+                            .unwrap_or(false)
+                        {
+                            match self
+                                .endpoint_inner
+                                .transport_layer
+                                .lookup(&dest, Some(&self.key))
+                                .await
+                            {
+                                Ok((conn, resolved_addr)) => {
+                                    self.connection.replace(conn);
+                                    self.destination = Some(resolved_addr);
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        key = %self.key,
+                                        "Send ACK lookup destination failed: {}",
+                                        e
+                                    );
+                                    return Err(e);
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
