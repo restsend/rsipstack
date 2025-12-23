@@ -33,7 +33,7 @@ use tracing::info;
 /// * `dialogs` uses RwLock for concurrent read access with exclusive writes
 pub struct DialogLayerInner {
     pub(super) last_seq: AtomicU32,
-    pub(super) dialogs: RwLock<HashMap<DialogId, Dialog>>,
+    pub(super) dialogs: RwLock<HashMap<String, Dialog>>,
 }
 pub type DialogLayerInnerRef = Arc<DialogLayerInner>;
 
@@ -154,7 +154,13 @@ impl DialogLayer {
     ) -> Result<ServerInviteDialog> {
         let mut id = DialogId::try_from(&tx.original)?;
         if !id.to_tag.is_empty() {
-            let dlg = self.inner.dialogs.read().unwrap().get(&id).cloned();
+            let dlg = self
+                .inner
+                .dialogs
+                .read()
+                .unwrap()
+                .get(&id.to_string())
+                .cloned();
             match dlg {
                 Some(Dialog::ServerInvite(dlg)) => return Ok(dlg),
                 _ => {
@@ -195,7 +201,7 @@ impl DialogLayer {
             .dialogs
             .write()
             .unwrap()
-            .insert(id.clone(), Dialog::ServerInvite(dialog.clone()));
+            .insert(id.to_string(), Dialog::ServerInvite(dialog.clone()));
         info!(%id, "server invite dialog created");
         Ok(dialog)
     }
@@ -209,7 +215,7 @@ impl DialogLayer {
         self.inner.dialogs.read().unwrap().len()
     }
 
-    pub fn all_dialog_ids(&self) -> Vec<DialogId> {
+    pub fn all_dialog_ids(&self) -> Vec<String> {
         self.inner
             .dialogs
             .read()
@@ -220,6 +226,10 @@ impl DialogLayer {
     }
 
     pub fn get_dialog(&self, id: &DialogId) -> Option<Dialog> {
+        self.get_dialog_with(&id.to_string())
+    }
+
+    pub fn get_dialog_with(&self, id: &String) -> Option<Dialog> {
         match self.inner.dialogs.read() {
             Ok(dialogs) => match dialogs.get(id) {
                 Some(dialog) => Some(dialog.clone()),
@@ -235,7 +245,7 @@ impl DialogLayer {
             .dialogs
             .write()
             .unwrap()
-            .remove(id)
+            .remove(&id.to_string())
             .map(|d| d.on_remove());
     }
 

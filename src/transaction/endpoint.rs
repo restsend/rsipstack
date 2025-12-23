@@ -51,7 +51,7 @@ impl Default for EndpointOption {
     fn default() -> Self {
         EndpointOption {
             t1: Duration::from_millis(500),
-            t4: Duration::from_secs(4),
+            t4: Duration::from_secs(5),
             t1x64: Duration::from_millis(64 * 500),
             timerc: Duration::from_secs(180),
             callid_suffix: None,

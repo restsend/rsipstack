@@ -153,7 +153,7 @@ impl DialogGuard {
 impl Drop for DialogGuard {
     fn drop(&mut self) {
         let dlg = match self.dialog_layer_inner.dialogs.write() {
-            Ok(mut dialogs) => match dialogs.remove(&self.id) {
+            Ok(mut dialogs) => match dialogs.remove(&self.id.to_string()) {
                 Some(dlg) => dlg,
                 None => return,
             },
@@ -176,7 +176,7 @@ impl<'a> Drop for DialogGuardForUnconfirmed<'a> {
     fn drop(&mut self) {
         // If the dialog is still unconfirmed, we should try to cancel it
         match self.dialog_layer_inner.dialogs.write() {
-            Ok(mut dialogs) => match dialogs.remove(self.id) {
+            Ok(mut dialogs) => match dialogs.remove(&self.id.to_string()) {
                 Some(dlg) => {
                     info!(%self.id, "unconfirmed dialog dropped, cancelling it");
                     let _ = tokio::spawn(async move {
@@ -421,7 +421,7 @@ impl DialogLayer {
             .dialogs
             .write()
             .as_mut()
-            .map(|ds| ds.insert(id.clone(), Dialog::ClientInvite(dialog.clone())))
+            .map(|ds| ds.insert(id.to_string(), Dialog::ClientInvite(dialog.clone())))
             .ok();
 
         info!(%id, "client invite dialog created");
@@ -435,7 +435,7 @@ impl DialogLayer {
             .dialogs
             .write()
             .as_mut()
-            .map(|ds| ds.remove(&id))
+            .map(|ds| ds.remove(&id.to_string()))
             .ok();
 
         match r {
@@ -451,7 +451,10 @@ impl DialogLayer {
                             .write()
                             .as_mut()
                             .map(|ds| {
-                                ds.insert(new_dialog_id, Dialog::ClientInvite(dialog.clone()))
+                                ds.insert(
+                                    new_dialog_id.to_string(),
+                                    Dialog::ClientInvite(dialog.clone()),
+                                )
                             })
                             .ok();
                     }

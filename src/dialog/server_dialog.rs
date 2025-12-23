@@ -593,23 +593,23 @@ impl ServerInviteDialog {
                     ));
                 }
             }
-        } else {
-            match tx.original.method {
-                rsip::Method::PRack => return self.handle_prack(tx).await,
-                rsip::Method::Ack => {
-                    self.inner.tu_sender.send(TransactionEvent::Received(
-                        tx.original.clone().into(),
-                        tx.connection.clone(),
-                    ))?;
-                }
-                rsip::Method::Invite => {}
-                _ => {
-                    // ignore other requests in non-confirmed state
-                    return Ok(());
-                }
+        }
+
+        match tx.original.method {
+            rsip::Method::Invite => return self.handle_invite(tx).await,
+            rsip::Method::PRack => return self.handle_prack(tx).await,
+            rsip::Method::Ack => {
+                self.inner.tu_sender.send(TransactionEvent::Received(
+                    tx.original.clone().into(),
+                    tx.connection.clone(),
+                ))?;
+                return Ok(());
+            }
+            _ => {
+                // ignore other requests in non-confirmed state
+                return Ok(());
             }
         }
-        self.handle_invite(tx).await
     }
 
     async fn handle_bye(&mut self, tx: &mut Transaction) -> Result<()> {
