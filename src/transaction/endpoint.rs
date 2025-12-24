@@ -36,7 +36,7 @@ pub trait TargetLocator: Send + Sync {
 
 #[async_trait]
 pub trait TransportEventInspector: Send + Sync {
-    async fn handle(&self, event: &TransportEvent);
+    async fn handle(&self, event: TransportEvent) -> Option<TransportEvent>;
 }
 
 pub struct EndpointOption {
@@ -263,9 +263,16 @@ impl EndpointInner {
             }
         };
 
-        while let Some(event) = transport_rx.recv().await {
+        while let Some(mut event) = transport_rx.recv().await {
             if let Some(transport_inspector) = &self.transport_inspector {
-                transport_inspector.handle(&event).await;
+                match transport_inspector.handle(event).await {
+                    Some(e) => {
+                        event = e;
+                    }
+                    None => {
+                        continue;
+                    }
+                }
             }
 
             match event {
