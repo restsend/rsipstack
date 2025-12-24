@@ -467,11 +467,37 @@ impl Transaction {
             ack.to_owned().into()
         };
 
+        let mut connection = connection;
         if let SipMessage::Request(ref req) = ack {
             if let Some(resp) = self.last_response.as_ref() {
                 if resp.status_code.kind() == StatusCodeKind::Successful {
                     // 2xx response, set destination from request
-                    self.destination = destination_from_request(&req);
+                    let destination = match destination_from_request(&req) {
+                        Some(addr) => {
+                            if let Some(locator) = self.endpoint_inner.locator.as_ref() {
+                                let uri = addr.clone().into();
+                                Some(locator.locate(&uri).await.unwrap_or_else(|_| addr))
+                            } else {
+                                Some(addr)
+                            }
+                        }
+                        None => None,
+                    };
+                    match destination {
+                        Some(addr) => {
+                            let (via_connection, resolved_addr) = self
+                                .endpoint_inner
+                                .transport_layer
+                                .lookup(&addr, Some(&self.key))
+                                .await?;
+                            // For UDP, we need to store the resolved destination address
+                            if !via_connection.is_reliable() {
+                                self.destination.replace(resolved_addr);
+                            }
+                            connection = Some(via_connection);
+                        }
+                        None => {}
+                    }
                 }
             }
         }
