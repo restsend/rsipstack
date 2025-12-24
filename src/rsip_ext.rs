@@ -15,6 +15,7 @@ use rsip::{
     prelude::{HeadersExt, UntypedHeader},
     Method,
 };
+use std::borrow::Cow;
 use std::str::FromStr;
 
 pub trait RsipResponseExt {
@@ -159,7 +160,7 @@ fn apply_tokenizer_params(uri: &mut rsip::Uri, tokenizer: &CustomContactTokenize
     }
 }
 
-pub fn destination_from_request(request: &rsip::Request) -> Option<SipAddr> {
+pub fn destination_from_request(request: &rsip::Request) -> Option<Cow<'_, rsip::Uri>> {
     request
         .headers
         .iter()
@@ -167,16 +168,10 @@ pub fn destination_from_request(request: &rsip::Request) -> Option<SipAddr> {
             rsip::Header::Route(route) => route
                 .typed()
                 .ok()
-                .map(|r| {
-                    r.uris()
-                        .first()
-                        .map(|u| SipAddr::try_from(&u.uri).ok())
-                        .flatten()
-                })
-                .flatten(),
+                .and_then(|r| r.uris().first().map(|u| Cow::Owned(u.uri.clone()))),
             _ => None,
         })
-        .or_else(|| SipAddr::try_from(&request.uri).ok())
+        .or_else(|| Some(Cow::Borrowed(&request.uri)))
 }
 
 fn split_header_line(raw: &str) -> Option<(&str, &str)> {

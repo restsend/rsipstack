@@ -360,10 +360,10 @@ async fn test_make_request_preserves_remote_target_and_route_order() -> crate::R
     );
     let destination = destination_from_request(&request)
         .expect("route-enabled request should resolve to a destination");
-    let expected_destination =
-        SipAddr::try_from(&Uri::try_from("sip:proxy2.example.com:5070;transport=tcp")?)?;
+    let expected_destination = Uri::try_from("sip:proxy2.example.com:5070;transport=tcp;lr")?;
     assert_eq!(
-        destination, expected_destination,
+        &*destination,
+        &expected_destination,
         "First Route entry must determine the transport destination"
     );
 
@@ -461,10 +461,9 @@ async fn test_route_set_updates_from_200_ok_response() -> crate::Result<()> {
 
     let destination = destination_from_request(&bye_request)
         .expect("route-enabled request should resolve to a destination");
-    let expected_destination =
-        SipAddr::try_from(&Uri::try_from("sip:edge2.example.net:5080;transport=tcp")?)?;
+    let expected_destination = Uri::try_from("sip:edge2.example.net:5080;transport=tcp;lr")?;
     assert_eq!(
-        destination, expected_destination,
+        &*destination, &expected_destination,
         "First Route entry must determine the transport destination",
     );
 

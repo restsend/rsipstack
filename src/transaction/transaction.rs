@@ -472,18 +472,17 @@ impl Transaction {
             if let Some(resp) = self.last_response.as_ref() {
                 if resp.status_code.kind() == StatusCodeKind::Successful {
                     // 2xx response, set destination from request
-                    let destination = match destination_from_request(&req) {
-                        Some(addr) => {
+                    let target = match destination_from_request(&req) {
+                        Some(target) => {
                             if let Some(locator) = self.endpoint_inner.locator.as_ref() {
-                                let uri = addr.clone().into();
-                                Some(locator.locate(&uri).await.unwrap_or_else(|_| addr))
+                                Some(locator.locate(&target).await?)
                             } else {
-                                Some(addr)
+                                target.try_into().ok()
                             }
                         }
                         None => None,
                     };
-                    match destination {
+                    match target {
                         Some(addr) => {
                             let (via_connection, resolved_addr) = self
                                 .endpoint_inner

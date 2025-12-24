@@ -181,3 +181,26 @@ impl TryFrom<&rsip::Uri> for SipAddr {
         })
     }
 }
+
+impl TryFrom<rsip::Uri> for SipAddr {
+    type Error = crate::Error;
+
+    fn try_from(uri: rsip::Uri) -> Result<Self> {
+        let transport = uri.transport().cloned();
+        Ok(SipAddr {
+            r#type: transport,
+            addr: uri.host_with_port,
+        })
+    }
+}
+
+impl<'a> TryFrom<std::borrow::Cow<'a, rsip::Uri>> for SipAddr {
+    type Error = crate::Error;
+
+    fn try_from(uri: std::borrow::Cow<'a, rsip::Uri>) -> Result<Self> {
+        match uri {
+            std::borrow::Cow::Owned(uri) => uri.try_into(),
+            std::borrow::Cow::Borrowed(uri) => uri.try_into(),
+        }
+    }
+}
