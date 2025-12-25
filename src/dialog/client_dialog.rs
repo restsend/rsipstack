@@ -192,17 +192,18 @@ impl ClientInviteDialog {
             return Ok(());
         }
         info!(id=%self.id(),"sending cancel request");
-        let mut cancel_request = self.inner.initial_request.clone();
+        let mut cancel_request = self
+            .inner
+            .initial_request
+            .lock()
+            .expect("cancel mutext poisoned")
+            .clone();
+        let invite_seq = cancel_request.cseq_header()?.seq()?;
         cancel_request
             .headers_mut()
             .retain(|h| !matches!(h, Header::ContentLength(_) | Header::ContentType(_)));
 
-        cancel_request
-            .to_header_mut()?
-            .mut_tag(self.id().to_tag.clone().into())?; // ensure to-tag has tag param
-
         cancel_request.method = rsip::Method::Cancel;
-        let invite_seq = self.inner.initial_request.cseq_header()?.seq()?;
         cancel_request
             .cseq_header_mut()?
             .mut_seq(invite_seq)?
@@ -539,6 +540,15 @@ impl ClientInviteDialog {
                             .await?;
                             tx.send().await?;
                             self.inner.update_remote_tag("").ok();
+                            // Update initial_request with the new invite request
+                            {
+                                let mut req = self
+                                    .inner
+                                    .initial_request
+                                    .lock()
+                                    .expect("update initial request mutex poisoned");
+                                *req = tx.original.clone();
+                            }
                             continue;
                         } else {
                             info!(id=%self.id(),"received 407 response without auth option");

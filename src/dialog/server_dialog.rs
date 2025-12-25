@@ -116,8 +116,12 @@ impl ServerInviteDialog {
     /// Returns a reference to the initial INVITE request that created
     /// this dialog. This can be used to access the original request
     /// headers, body, and other information.
-    pub fn initial_request(&self) -> &Request {
-        &self.inner.initial_request
+    pub fn initial_request(&self) -> Request {
+        self.inner
+            .initial_request
+            .lock()
+            .expect("get initial request posioned")
+            .clone()
     }
 
     pub fn ringing(&self, headers: Option<Vec<Header>>, body: Option<Vec<u8>>) -> Result<()> {
@@ -126,7 +130,7 @@ impl ServerInviteDialog {
         }
         info!(id = %self.id(), "sending ringing response");
         let resp = self.inner.make_response(
-            &self.inner.initial_request,
+            &self.initial_request(),
             if body.is_some() {
                 StatusCode::SessionProgress
             } else {
@@ -173,12 +177,9 @@ impl ServerInviteDialog {
     /// # }
     /// ```
     pub fn accept(&self, headers: Option<Vec<Header>>, body: Option<Vec<u8>>) -> Result<()> {
-        let resp = self.inner.make_response(
-            &self.inner.initial_request,
-            rsip::StatusCode::OK,
-            headers,
-            body,
-        );
+        let resp =
+            self.inner
+                .make_response(&self.initial_request(), rsip::StatusCode::OK, headers, body);
         self.inner
             .tu_sender
             .send(TransactionEvent::Respond(resp.clone()))?;
@@ -290,7 +291,7 @@ impl ServerInviteDialog {
             None
         };
         let resp = self.inner.make_response(
-            &self.inner.initial_request,
+            &self.initial_request(),
             code.unwrap_or(rsip::StatusCode::Decline),
             headers,
             None,
