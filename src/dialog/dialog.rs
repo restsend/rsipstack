@@ -15,6 +15,7 @@ use crate::{
     transport::SipAddr,
     Result,
 };
+use futures::FutureExt;
 use rsip::{
     headers::Route,
     message::HasHeaders,
@@ -792,7 +793,7 @@ impl DialogInner {
     }
 
     pub(super) async fn do_request(&self, request: Request) -> Result<Option<Response>> {
-        self.send_dialog_request(request).await
+        self.send_dialog_request(request).boxed().await
     }
 
     pub(super) fn transition(&self, state: DialogState) -> Result<()> {
