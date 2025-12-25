@@ -14,6 +14,7 @@ use crate::{
     transport::SipAddr,
     Result,
 };
+use futures::FutureExt;
 use rsip::{
     prelude::{HeadersExt, ToTypedHeader},
     Request, Response,
@@ -430,7 +431,7 @@ impl DialogLayer {
             id: &id,
         };
 
-        let r = dialog.process_invite(tx).await;
+        let r = dialog.process_invite(tx).boxed().await;
         self.inner
             .dialogs
             .write()
