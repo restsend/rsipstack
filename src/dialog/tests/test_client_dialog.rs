@@ -362,8 +362,7 @@ async fn test_make_request_preserves_remote_target_and_route_order() -> crate::R
         .expect("route-enabled request should resolve to a destination");
     let expected_destination = Uri::try_from("sip:proxy2.example.com:5070;transport=tcp;lr")?;
     assert_eq!(
-        &*destination,
-        &expected_destination,
+        &*destination, &expected_destination,
         "First Route entry must determine the transport destination"
     );
 
