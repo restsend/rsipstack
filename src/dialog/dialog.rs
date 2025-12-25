@@ -189,7 +189,8 @@ pub struct DialogInner {
     pub(super) endpoint_inner: EndpointInnerRef,
     pub(super) state_sender: DialogStateSender,
     pub(super) tu_sender: TransactionEventSender,
-    pub(super) initial_request: Request,
+    // initial request updated when INVITE auth failed with new INVITE
+    pub(super) initial_request: Mutex<Request>,
     pub(super) supports_100rel: bool,
     pub(super) remote_reliable: Mutex<Option<RemoteReliableState>>,
 }
@@ -285,7 +286,7 @@ impl DialogInner {
             state_sender,
             tu_sender,
             state: Mutex::new(DialogState::Calling(id)),
-            initial_request,
+            initial_request: Mutex::new(initial_request),
             local_contact,
             remote_contact: Mutex::new(None),
             supports_100rel,
@@ -512,7 +513,11 @@ impl DialogInner {
 
     pub(super) fn build_vias_from_request(&self) -> Result<Vec<Via>> {
         let mut vias = vec![];
-        for header in self.initial_request.headers.iter() {
+        let initial_request = self
+            .initial_request
+            .lock()
+            .expect("build vias from request poisoned mutex");
+        for header in initial_request.headers.iter() {
             if let Header::Via(via) = header {
                 if let Ok(mut typed_via) = via.typed() {
                     for param in typed_via.params.iter_mut() {
