@@ -1,0 +1,249 @@
+From 7c0f7b3dda241b16c166f21f75b7466efee42325 Mon Sep 17 00:00:00 2001
+From: Fedor <fed@serbway.com>
+Date: Sat, 27 Dec 2025 11:32:01 +0000
+Subject: [PATCH] My changes
+
+---
+ src/dialog/client_dialog.rs    |  7 ++--
+ src/dialog/dialog_layer.rs     | 29 +++++++++++++
+ src/dialog/invitation.rs       | 12 ++++++
+ src/transaction/transaction.rs | 11 +++++
+ src/transport/connection.rs    | 77 +++++++++++++++++++++++++++++++---
+ 5 files changed, 128 insertions(+), 8 deletions(-)
+
+diff --git a/src/dialog/client_dialog.rs b/src/dialog/client_dialog.rs
+index 188392f..3ccd688 100644
+--- a/src/dialog/client_dialog.rs
++++ b/src/dialog/client_dialog.rs
+@@ -197,9 +197,10 @@ impl ClientInviteDialog {
+             .headers_mut()
+             .retain(|h| !matches!(h, Header::ContentLength(_) | Header::ContentType(_)));
+ 
+-        cancel_request
+-            .to_header_mut()?
+-            .mut_tag(self.id().to_tag.clone().into())?; // ensure to-tag has tag param
++        //My changes
++        //cancel_request
++        //    .to_header_mut()?
++        //    .mut_tag(self.id().to_tag.clone().into())?; // ensure to-tag has tag param
+ 
+         cancel_request.method = rsip::Method::Cancel;
+         let invite_seq = self.inner.initial_request.cseq_header()?.seq()?;
+diff --git a/src/dialog/dialog_layer.rs b/src/dialog/dialog_layer.rs
+index bf7e631..5d74809 100644
+--- a/src/dialog/dialog_layer.rs
++++ b/src/dialog/dialog_layer.rs
+@@ -13,6 +13,7 @@ use std::{
+     sync::{Arc, RwLock},
+ };
+ use tracing::info;
++use crate::dialog::client_dialog::ClientInviteDialog;
+ 
+ /// Internal Dialog Layer State
+ ///
+@@ -144,6 +145,34 @@ impl DialogLayer {
+         }
+     }
+ 
++    /// Returns all client-side INVITE dialogs (UAC) that share the given Call-ID.
++    ///
++    /// In a forking scenario, multiple client dialogs can exist for the same
++    /// Call-ID (same local From-tag, different remote To-tags). This helper
++    /// scans the internal dialog registry and returns all `ClientInviteDialog`
++    /// instances whose `DialogId.call_id` equals the provided `call_id`.
++    ///
++    /// The returned vector may be empty if no matching client dialogs are found.
++    pub fn get_client_dialog_by_call_id(&self, call_id: &str) -> Vec<ClientInviteDialog> {
++        let dialogs = match self.inner.dialogs.read() {
++            Ok(guard) => guard,
++            Err(_) => {
++                // If the lock is poisoned, we conservatively return an empty list.
++                return Vec::new();
++            }
++        };
++
++        dialogs
++            .values()
++            .filter_map(|dlg| match dlg {
++                Dialog::ClientInvite(client_dlg) if client_dlg.id().call_id == call_id => {
++                    Some(client_dlg.clone())
++                }
++                _ => None,
++            })
++            .collect()
++    }
++
+     pub fn get_or_create_server_invite(
+         &self,
+         tx: &Transaction,
+diff --git a/src/dialog/invitation.rs b/src/dialog/invitation.rs
+index c97e02a..c5e5647 100644
+--- a/src/dialog/invitation.rs
++++ b/src/dialog/invitation.rs
+@@ -133,6 +133,7 @@ pub struct InviteOption {
+     pub credential: Option<Credential>,
+     pub headers: Option<Vec<rsip::Header>>,
+     pub support_prack: bool,
++    pub call_id: Option<String>,
+ }
+ 
+ pub struct DialogGuard {
+@@ -254,6 +255,17 @@ impl DialogLayer {
+             self.endpoint
+                 .make_request(rsip::Method::Invite, recipient, via, from, to, last_seq);
+ 
++        //My changes
++        if let Some(ref custom) = opt.call_id {
++            // убираем существующий Call-ID
++            request.headers.retain(|h| !matches!(h, rsip::Header::CallId(_)));
++            // и добавляем свой
++            request
++                .headers
++                .unique_push(rsip::Header::CallId(custom.clone().into()));
++            debug!("make_invite_request: overridden Call-ID = {}", custom);
++        }
++
+         let contact = rsip::typed::Contact {
+             display_name: None,
+             uri: opt.contact.clone(),
+diff --git a/src/transaction/transaction.rs b/src/transaction/transaction.rs
+index b7133d0..3059756 100644
+--- a/src/transaction/transaction.rs
++++ b/src/transaction/transaction.rs
+@@ -479,9 +479,20 @@ impl Transaction {
+             SipMessage::Request(ack) => self.last_ack.replace(ack),
+             _ => None,
+         };
++
+         if let Some(conn) = connection {
++            println!(
++                "[rsipstack][TX] sending ACK to {:?} for key={}",
++                self.destination, self.key
++            );
+             conn.send(ack, self.destination.as_ref()).await?;
++        } else {
++            println!(
++                "[rsipstack][TX] NO CONNECTION for ACK, key={}, dest={:?}",
++                self.key, self.destination
++            );
+         }
++
+         // client send ack and transition to Terminated
+         self.transition(TransactionState::Terminated).map(|_| ())
+     }
+diff --git a/src/transport/connection.rs b/src/transport/connection.rs
+index 8b51f81..1970b44 100644
+--- a/src/transport/connection.rs
++++ b/src/transport/connection.rs
+@@ -197,24 +197,61 @@ impl SipConnection {
+             SipConnection::WebSocketListener(transport) => transport.get_addr(),
+         }
+     }
++
++
+     pub async fn send(&self, msg: rsip::SipMessage, destination: Option<&SipAddr>) -> Result<()> {
+         match self {
+-            SipConnection::Channel(transport) => transport.send(msg).await,
+-            SipConnection::Udp(transport) => transport.send(msg, destination).await,
+-            SipConnection::Tcp(transport) => transport.send_message(msg).await,
++            SipConnection::Channel(transport) => {
++                println!("[SipConnection::send] CHANNEL dest={:?}", destination);
++                transport.send(msg).await
++            }
++            SipConnection::Udp(transport) => {
++                // 👇 наш резолвёр
++                let resolved_dest: Option<SipAddr> = if let Some(dest) = destination {
++                    match &dest.addr.host {
++                        rsip::Host::Domain(_) => {
++                            println!("[SipConnection::send] UDP resolving domain dest={:?}", dest);
++                            Some(resolve_domain_if_needed(dest).await?)
++                        }
++                        _ => Some(dest.clone()),
++                    }
++                } else {
++                    None
++                };
++
++                let res = transport.send(msg, resolved_dest.as_ref()).await;
++                if let Err(e) = &res {
++                    println!("[SipConnection::send] UDP send ERROR after resolve dest={:?}: {:?}", resolved_dest, e);
++                } else {
++                    println!("[SipConnection::send] UDP send OK after resolve dest={:?}", resolved_dest);
++                }
++                res
++            }
++
++            SipConnection::Tcp(transport) => {
++                println!("[SipConnection::send] TCP dest={:?}", destination);
++                transport.send_message(msg).await
++            }
+             SipConnection::TcpListener(_) => {
+                 debug!("SipConnection::send: TcpListener cannot send messages");
+                 Ok(())
+             }
+             #[cfg(feature = "rustls")]
+-            SipConnection::Tls(transport) => transport.send_message(msg).await,
++            SipConnection::Tls(transport) => {
++                println!("[SipConnection::send] TLS dest={:?}", destination);
++                transport.send_message(msg).await
++            }
++            // остальные как есть
+             #[cfg(feature = "rustls")]
+             SipConnection::TlsListener(_) => {
+                 debug!("SipConnection::send: TlsListener cannot send messages");
+                 Ok(())
+             }
+             #[cfg(feature = "websocket")]
+-            SipConnection::WebSocket(transport) => transport.send_message(msg).await,
++            SipConnection::WebSocket(transport) => {
++                println!("[SipConnection::send] WS dest={:?}", destination);
++                transport.send_message(msg).await
++            }
+             #[cfg(feature = "websocket")]
+             SipConnection::WebSocketListener(_) => {
+                 debug!("SipConnection::send: WebSocketListener cannot send messages");
+@@ -222,6 +259,7 @@ impl SipConnection {
+             }
+         }
+     }
++
+     pub async fn serve_loop(&self, sender: TransportSender) -> Result<()> {
+         match self {
+             SipConnection::Channel(transport) => transport.serve_loop(sender).await,
+@@ -464,3 +502,32 @@ impl From<WebSocketListenerConnection> for SipConnection {
+         SipConnection::WebSocketListener(connection)
+     }
+ }
++
++async fn resolve_domain_if_needed(target: &SipAddr) -> Result<SipAddr> {
++    // Если уже IP — ничего не делаем
++    if !matches!(target.addr.host, rsip::Host::Domain(_)) {
++        return Ok(target.clone());
++    }
++
++    // host = Domain(...)
++    let host = match &target.addr.host {
++        rsip::Host::Domain(domain) => domain,
++        _ => unreachable!(),
++    };
++
++    let port = target.addr.port.unwrap_or(5060.into());
++    let lookup_str = format!("{}:{}", host, port);
++
++    let mut addrs = tokio::net::lookup_host(&lookup_str).await?;
++    if let Some(sock) = addrs.next() {
++        Ok(SipAddr {
++            r#type: target.r#type,
++            addr: rsip::HostWithPort {
++                host: rsip::Host::IpAddr(sock.ip()),
++                port: Some(sock.port().into()),
++            },
++        })
++    } else {
++        Err(crate::Error::DnsResolutionError(target.addr.to_string()))
++    }
++}
+\ No newline at end of file
+-- 
+2.50.1 (Apple Git-155)
+
