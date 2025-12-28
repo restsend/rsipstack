@@ -380,6 +380,35 @@ impl DialogState {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DialogSnapshotState {
+    Calling,
+    Trying,
+    Early,
+    WaitAck,
+    Confirmed,
+    Terminated,
+}
+#[derive(Clone, Debug)]
+pub struct DialogSnapshot {
+    pub state: DialogSnapshotState,
+    pub role: TransactionRole,
+    pub id: DialogId,
+
+    pub from: rsip::typed::From,
+    pub to: rsip::typed::To,
+
+    pub local_cseq: u32,
+    pub remote_cseq: u32,
+
+    pub local_contact: Option<rsip::Uri>,
+
+    pub remote_uri: rsip::Uri,
+    pub remote_contact: Option<rsip::headers::untyped::Contact>,
+
+    pub route_set: Vec<Route>,
+    pub supports_100rel: bool,
+}
 impl DialogInner {
     pub fn new(
         role: TransactionRole,
@@ -966,6 +995,179 @@ impl DialogInner {
         self.send_dialog_request(request).boxed().await
     }
 
+    pub fn snapshot(&self) -> DialogSnapshot {
+        let id = self.id.lock().unwrap().clone();
+
+        let state = match &*self.state.lock().unwrap() {
+            DialogState::Calling(_) => DialogSnapshotState::Calling,
+            DialogState::Trying(_) => DialogSnapshotState::Trying,
+            DialogState::Early(_, _) => DialogSnapshotState::Early,
+            DialogState::WaitAck(_, _) => DialogSnapshotState::WaitAck,
+            DialogState::Confirmed(_, _) => DialogSnapshotState::Confirmed,
+            DialogState::Terminated(_, _) => DialogSnapshotState::Terminated,
+
+            DialogState::Updated(_, _, _)
+            | DialogState::Publish(_, _, _)
+            | DialogState::Notify(_, _, _)
+            | DialogState::Refer(_, _, _)
+            | DialogState::Message(_, _, _)
+            | DialogState::Info(_, _, _)
+            | DialogState::Options(_, _, _) => DialogSnapshotState::Confirmed,
+        };
+
+        DialogSnapshot {
+            state,
+
+            role: self.role.clone(),
+            id: id.clone(),
+
+            from: self.from.clone(),
+            to: self.to.lock().unwrap().clone(),
+
+            local_cseq: self.local_seq.load(Ordering::Relaxed),
+            remote_cseq: self.remote_seq.load(Ordering::Relaxed),
+
+            local_contact: self.local_contact.clone(),
+            remote_uri: self.remote_uri.lock().unwrap().clone(),
+            remote_contact: self.remote_contact.lock().unwrap().clone(),
+
+            route_set: self.route_set.lock().unwrap().clone(),
+            supports_100rel: self.supports_100rel,
+        }
+    }
+
+    pub(crate) fn try_restore_from_snapshot(
+        snapshot: DialogSnapshot,
+        endpoint_inner: EndpointInnerRef,
+        state_sender: DialogStateSender,
+        tu_sender: TransactionEventSender,
+    ) -> Result<Option<Self>> {
+        if snapshot.state != DialogSnapshotState::Confirmed {
+            warn!(
+                dialog_id = %snapshot.id,
+                state = ?snapshot.state,
+                "ignoring non-confirmed dialog snapshot during restore"
+            );
+            return Ok(None);
+        }
+
+        // Ensure To has tag
+        let mut to = snapshot.to.clone();
+        let to_tag = match snapshot.role {
+            TransactionRole::Client => snapshot.id.remote_tag.clone(),
+            TransactionRole::Server => snapshot.id.local_tag.clone(),
+        };
+        if !to_tag.is_empty() && !to.params.iter().any(|p| matches!(p, rsip::Param::Tag(_))) {
+            to.params.push(rsip::Param::Tag(to_tag.into()));
+        }
+
+        // Ensure From has tag
+        let mut from = snapshot.from.clone();
+        let from_tag = match snapshot.role {
+            TransactionRole::Client => snapshot.id.local_tag.clone(),
+            TransactionRole::Server => snapshot.id.remote_tag.clone(),
+        };
+        if !from_tag.is_empty() && from.tag().is_none() {
+            from = from.with_tag(from_tag.into());
+        }
+
+        let role = snapshot.role.clone();
+
+        let initial_request = Mutex::new(Self::build_restored_initial_request(
+            role.clone(),
+            &snapshot.id,
+            &from,
+            &to,
+            &snapshot.remote_uri,
+            snapshot.local_cseq,
+            snapshot.local_contact.as_ref(),
+            endpoint_inner.user_agent.as_str(),
+        ));
+
+        Ok(Some(Self {
+            role,
+            cancel_token: CancellationToken::new(),
+
+            id: Mutex::new(snapshot.id.clone()),
+            state: Mutex::new(DialogState::Confirmed(
+                snapshot.id.clone(),
+                Response::default(),
+            )),
+
+            local_seq: AtomicU32::new(snapshot.local_cseq),
+            remote_seq: AtomicU32::new(snapshot.remote_cseq),
+
+            local_contact: snapshot.local_contact,
+            remote_uri: Mutex::new(snapshot.remote_uri),
+            remote_contact: Mutex::new(snapshot.remote_contact),
+
+            from,
+            to: Mutex::new(to),
+
+            credential: None,
+            route_set: Mutex::new(snapshot.route_set),
+
+            endpoint_inner,
+            state_sender,
+            tu_sender,
+
+            initial_request,
+            supports_100rel: snapshot.supports_100rel,
+            remote_reliable: Mutex::new(None),
+        }))
+    }
+    fn build_restored_initial_request(
+        role: TransactionRole,
+        id: &DialogId,
+        from: &rsip::typed::From,
+        to: &rsip::typed::To,
+        remote_uri: &rsip::Uri,
+        local_seq: u32,
+        local_contact: Option<&rsip::Uri>,
+        user_agent: &str,
+    ) -> Request {
+        use rsip::Version;
+
+        let mut headers: Vec<Header> = Vec::new();
+
+        headers.push(Header::CallId(id.call_id.clone().into()));
+
+        let from_str = from.clone().untyped().value().to_string();
+        let to_str = to.clone().untyped().value().to_string();
+        match role {
+            TransactionRole::Client => {
+                headers.push(Header::From(from_str.into()));
+                headers.push(Header::To(to_str.into()));
+            }
+            TransactionRole::Server => {
+                headers.push(Header::From(to_str.into()));
+                headers.push(Header::To(from_str.into()));
+            }
+        }
+
+        let cseq = CSeq {
+            seq: local_seq,
+            method: Method::Invite,
+        };
+        headers.push(Header::CSeq(cseq.into()));
+
+        headers.push(Header::UserAgent(user_agent.to_string().into()));
+
+        if let Some(uri) = local_contact {
+            headers.push(Contact::from(uri.clone()).into());
+        }
+
+        // Content-Length = 0
+        headers.push(Header::ContentLength(0u32.into()));
+
+        Request {
+            method: Method::Invite,
+            uri: remote_uri.clone(),
+            headers: headers.into(),
+            body: Vec::new(),
+            version: Version::V2,
+        }
+    }
     pub(super) fn transition(&self, state: DialogState) -> Result<()> {
         // Try to send state update, but don't fail if channel is closed
         self.state_sender.send(state.clone()).ok();
@@ -1100,6 +1302,12 @@ impl Dialog {
         }
     }
 
+    pub fn from_inner(role: TransactionRole, inner: DialogInnerRef) -> Self {
+        match role {
+            TransactionRole::Client => Dialog::ClientInvite(ClientInviteDialog::from_inner(inner)),
+            TransactionRole::Server => Dialog::ServerInvite(ServerInviteDialog::from_inner(inner)),
+        }
+    }
     pub fn remote_contact(&self) -> Option<rsip::Uri> {
         match self {
             Dialog::ServerInvite(d) => d

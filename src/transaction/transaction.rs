@@ -59,6 +59,19 @@ pub enum TransactionEvent {
     Terminate(TransactionKey),
 }
 
+/// Create a no-op TU sender (drops all messages).
+///
+/// Useful for restoring dialogs after restart when a real transaction-user channel
+/// is not available yet.
+pub fn transaction_event_sender_noop() -> TransactionEventSender {
+    let (tx, mut rx) = unbounded_channel::<TransactionEvent>();
+    tokio::spawn(async move {
+        while let Some(_ev) = rx.recv().await {
+            // drop
+        }
+    });
+    tx
+}
 /// SIP Transaction
 ///
 /// `Transaction` implements the SIP transaction layer as defined in RFC 3261.
@@ -77,7 +90,7 @@ pub enum TransactionEvent {
 /// # Transaction Types
 ///
 /// * `ClientInvite` - Client INVITE transaction
-/// * `ClientNonInvite` - Client non-INVITE transaction  
+/// * `ClientNonInvite` - Client non-INVITE transaction
 /// * `ServerInvite` - Server INVITE transaction
 /// * `ServerNonInvite` - Server non-INVITE transaction
 ///

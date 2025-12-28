@@ -106,6 +106,14 @@ impl ClientInviteDialog {
         self.inner.state.lock().unwrap().clone()
     }
 
+    pub fn from_inner(inner: DialogInnerRef) -> Self {
+        Self { inner }
+    }
+
+    pub fn snapshot(&self) -> super::dialog::DialogSnapshot {
+        self.inner.snapshot()
+    }
+
     /// Get the cancellation token for this dialog
     ///
     /// Returns a reference to the CancellationToken that can be used to

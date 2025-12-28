@@ -1,5 +1,5 @@
 use super::authenticate::Credential;
-use super::dialog::DialogStateSender;
+use super::dialog::{DialogSnapshot, DialogStateSender};
 use super::publication::{ClientPublicationDialog, ServerPublicationDialog};
 use super::subscription::{ClientSubscriptionDialog, ServerSubscriptionDialog};
 use super::{dialog::Dialog, server_dialog::ServerInviteDialog, DialogId};
@@ -7,6 +7,7 @@ use crate::dialog::client_dialog::ClientInviteDialog;
 use crate::dialog::dialog::{DialogInner, DialogStateReceiver};
 use crate::transaction::key::TransactionRole;
 use crate::transaction::make_tag;
+use crate::transaction::transaction::transaction_event_sender_noop;
 use crate::transaction::{endpoint::EndpointInnerRef, transaction::Transaction};
 use crate::Result;
 use rsip::prelude::HeadersExt;
@@ -489,6 +490,47 @@ impl DialogLayer {
                 _ => None,
             })
             .collect()
+    }
+
+    /// Restore a dialog from persisted snapshot.
+    ///
+    /// Restores only CONFIRMED snapshots.
+    /// Non-confirmed snapshots are ignored (warn inside try_restore_from_snapshot).
+    ///
+    /// Returns:
+    /// - Ok(true)  => restored and inserted
+    /// - Ok(false) => skipped (already exists or not confirmed)
+    pub fn restore_from_snapshot(
+        &self,
+        snapshot: DialogSnapshot,
+        state_sender: DialogStateSender,
+    ) -> crate::Result<bool> {
+        // Already restored?
+        if self.get_dialog(&snapshot.id).is_some() {
+            return Ok(false);
+        }
+
+        let tu_sender = transaction_event_sender_noop();
+
+        let Some(inner) = DialogInner::try_restore_from_snapshot(
+            snapshot,
+            self.endpoint.clone(),
+            state_sender,
+            tu_sender,
+        )?
+        else {
+            // not confirmed -> ignored
+            return Ok(false);
+        };
+
+        let inner = Arc::new(inner);
+        let dialog = Dialog::from_inner(inner.role.clone(), inner.clone());
+
+        let key = dialog.id().to_string();
+
+        self.inner.dialogs.write().unwrap().insert(key, dialog);
+
+        Ok(true)
     }
 
     pub fn remove_dialog(&self, id: &DialogId) {
