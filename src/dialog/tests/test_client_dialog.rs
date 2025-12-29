@@ -1,5 +1,7 @@
+use crate::transaction::endpoint::TargetLocator;
 use crate::transaction::key::TransactionRole;
 use crate::transport::transport_layer::DomainResolver;
+use crate::transport::SipConnection;
 use crate::transport::{udp::UdpConnection, SipAddr, TransportLayer};
 use crate::EndpointBuilder;
 use crate::{
@@ -804,6 +806,206 @@ async fn test_ack_sent_to_domain_name_from_contact() -> crate::Result<()> {
     );
 
     uas_token.cancel();
+
+    Ok(())
+}
+
+/// Mock target locator that maps Contact URIs to WebSocket address
+struct WebSocketChannelLocator {
+    /// Map from Contact URI host to the channel's SipAddr
+    contact: String,
+    ws_addr: SipAddr,
+}
+
+#[async_trait]
+impl TargetLocator for WebSocketChannelLocator {
+    async fn locate(&self, uri: &rsip::Uri) -> crate::Result<SipAddr> {
+        if let rsip::Host::Domain(domain) = &uri.host_with_port.host {
+            if domain.to_string().contains(&self.contact) {
+                return Ok(self.ws_addr.clone());
+            }
+        }
+        SipAddr::try_from(uri)
+    }
+}
+
+/// Verifies ACK to sip over websocket, it will use channel and have a contact like "bmf9p1ekfdar.invalid"
+///
+/// This simulates the scenario where:
+/// 1. A WebSocket client registers with Contact: <sip:kr9e8brl@nbs1t4oqh57u.invalid;transport=ws>
+/// 2. The proxy forwards messages through a ChannelConnection
+/// 3. When the UAC receives a 200 OK with this Contact, the ACK should be sent to the channel
+#[tokio::test]
+async fn test_ack_sent_to_websocket_channel_via_locator() -> crate::Result<()> {
+    use crate::dialog::{dialog_layer::DialogLayer, invitation::InviteOption};
+    use crate::transport::channel::ChannelConnection;
+    use crate::transport::connection::TransportEvent;
+
+    // ========== Setup channel connection to simulate WebSocket ==========
+    let (to_channel_tx, to_channel_rx) = unbounded_channel();
+    let (from_channel_tx, mut from_channel_rx) = unbounded_channel();
+
+    let contact_host = "nbs1t4oqh57u.invalid";
+    let contact_user = "kr9e8brl";
+    // address used by sipjs
+    let ws_contact_uri = format!("sip:{}@{};transport=ws", contact_user, contact_host);
+
+    // websocket address register into locator
+    let ws_addr = SipAddr {
+        r#type: Some(rsip::Transport::Ws),
+        addr: rsip::HostWithPort {
+            host: rsip::Host::IpAddr("127.0.0.1".parse().unwrap()),
+            port: Some(8080.into()),
+        },
+    };
+
+    let chan_conn =
+        ChannelConnection::create_connection(to_channel_rx, from_channel_tx, ws_addr.clone(), None)
+            .await?;
+
+    let sip_conn = SipConnection::Channel(chan_conn.clone());
+
+    let uac_token = CancellationToken::new();
+    let locator = Box::new(WebSocketChannelLocator {
+        contact: contact_host.to_string(),
+        ws_addr: ws_addr.clone(),
+    });
+
+    let uac_transport_layer = TransportLayer::new(uac_token.child_token());
+
+    // Add UDP transport (provides addresses for Via/Contact headers, like in proxy)
+    let uac_udp = UdpConnection::create_connection(
+        "127.0.0.1:0".parse().unwrap(),
+        None,
+        Some(uac_token.child_token()),
+    )
+    .await?;
+    let uac_port = uac_udp
+        .get_addr()
+        .addr
+        .port
+        .map(|p| u16::from(p))
+        .unwrap_or(0);
+    uac_transport_layer.add_transport(uac_udp.into());
+
+    // Add WebSocket channel connection (like proxy's handle_websocket does)
+    uac_transport_layer.add_connection(sip_conn.clone());
+
+    let uac_endpoint = EndpointBuilder::new()
+        .with_user_agent("rsipstack-uac")
+        .with_transport_layer(uac_transport_layer)
+        .with_target_locator(locator)
+        .build();
+
+    uac_endpoint.inner.transport_layer.serve_listens().await?;
+    let uac_endpoint_inner = uac_endpoint.inner.clone();
+    tokio::spawn(async move {
+        let _ = uac_endpoint_inner.serve().await;
+    });
+
+    // Create channels for dialog state
+    let (uac_state_sender, _uac_state_receiver) = unbounded_channel();
+
+    // ========== Start UAC INVITE in background ==========
+    // INVITE is sent to the WebSocket contact domain which will be routed via the channel
+    let invite_option = InviteOption {
+        caller: Uri::try_from("sip:alice@example.com")?,
+        callee: Uri::try_from(format!("sip:bob@{};transport=ws", contact_host).as_str())?,
+        contact: Uri::try_from(format!("sip:alice@127.0.0.1:{}", uac_port).as_str())?,
+        ..Default::default()
+    };
+
+    let uac_endpoint_inner = uac_endpoint.inner.clone();
+    let dialog_handle = tokio::spawn(async move {
+        let uac_dialog_layer = DialogLayer::new(uac_endpoint_inner);
+        uac_dialog_layer
+            .do_invite(invite_option, uac_state_sender)
+            .await
+    });
+
+    // ========== UAS: Receive INVITE from channel and respond with 200 OK ==========
+    let invite_req =
+        tokio::time::timeout(std::time::Duration::from_secs(1), from_channel_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+
+    let TransportEvent::Incoming(rsip::SipMessage::Request(invite_req), _, _) = invite_req else {
+        panic!("Expected INVITE request");
+    };
+
+    assert_eq!(invite_req.method, rsip::Method::Invite);
+
+    // Build 200 OK with WebSocket Contact
+    let ws_contact = rsip::headers::Contact::new(&format!("<{}>", ws_contact_uri));
+    let to_with_tag: rsip::Header = invite_req
+        .to_header()?
+        .clone()
+        .with_tag("uas-tag-123".into())?
+        .into();
+
+    let ok_response = Response {
+        status_code: StatusCode::OK,
+        version: rsip::Version::V2,
+        headers: vec![
+            invite_req.via_header()?.clone().into(),
+            invite_req.from_header()?.clone().into(),
+            to_with_tag,
+            invite_req.call_id_header()?.clone().into(),
+            invite_req.cseq_header()?.clone().into(),
+            ws_contact.into(),
+            rsip::headers::ContentLength::from(0u32).into(),
+        ]
+        .into(),
+        body: vec![],
+    };
+
+    // Send 200 OK back through the channel (simulating response from WebSocket peer)
+    to_channel_tx
+        .send(TransportEvent::Incoming(
+            rsip::SipMessage::Response(ok_response),
+            sip_conn.clone(),
+            ws_addr.clone(),
+        ))
+        .unwrap();
+
+    let ack_event = tokio::time::timeout(std::time::Duration::from_secs(1), from_channel_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+
+    let TransportEvent::Incoming(rsip::SipMessage::Request(ack_req), _, _) = ack_event else {
+        panic!("Expected ACK request");
+    };
+
+    // Cleanup
+    uac_token.cancel();
+    dialog_handle.abort();
+
+    assert_eq!(ack_req.method, rsip::Method::Ack, "Expected ACK request");
+
+    // The Request-URI should match the Contact from the 200 OK
+    assert!(
+        ack_req
+            .uri
+            .host_with_port
+            .host
+            .to_string()
+            .contains(contact_host),
+        "ACK Request-URI host should contain the WebSocket contact domain, got: {}",
+        ack_req.uri.host_with_port.host
+    );
+
+    // Verify transport parameter is ws
+    let has_ws_transport = ack_req
+        .uri
+        .params
+        .iter()
+        .any(|p| matches!(p, rsip::Param::Transport(t) if *t == rsip::Transport::Ws));
+    assert!(
+        has_ws_transport,
+        "ACK Request-URI should have transport=ws parameter"
+    );
 
     Ok(())
 }

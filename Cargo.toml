@@ -60,7 +60,6 @@ axum = { version = "0.8.7", features = ["ws"] }
 tower = "0.5.2"
 tower-http = { version = "0.6.7", features = ["fs", "cors"] }
 http = "1.4.0"
-tokio-stream = "0.1.17"
 
 [[example]]
 name = "client"
