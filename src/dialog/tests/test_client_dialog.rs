@@ -3,7 +3,7 @@
 //! Tests for client-side dialog behavior and state management
 
 use crate::transaction::{endpoint::EndpointBuilder, key::TransactionRole};
-use crate::transport::{SipAddr, TransportLayer};
+use crate::transport::{udp::UdpConnection, SipAddr, TransportLayer};
 use crate::{
     dialog::{
         client_dialog::ClientInviteDialog,
@@ -12,7 +12,7 @@ use crate::{
     },
     rsip_ext::destination_from_request,
 };
-use rsip::{headers::*, Request, Response, StatusCode, Uri};
+use rsip::{headers::*, prelude::HeadersExt, Request, Response, StatusCode, Uri};
 use std::sync::Arc;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio_util::sync::CancellationToken;
@@ -469,6 +469,146 @@ async fn test_route_set_updates_from_200_ok_response() -> crate::Result<()> {
     assert_eq!(
         bye_request.uri, remote_target,
         "Record-Route application must not change the remote target",
+    );
+
+    Ok(())
+}
+
+/// Verifies CANCEL request construction per RFC 3261 Section 9.1.
+///
+/// RFC 3261 9.1 states:
+/// - Request-URI, Call-ID, To, the numeric part of CSeq, and From header
+///   fields in the CANCEL request MUST be identical to those in the
+///   request being cancelled, including tags.
+/// - A CANCEL constructed by a client MUST have only a single Via header
+///   field value matching the top Via value in the request being cancelled.
+#[tokio::test]
+async fn test_cancel_conforms_to_rfc3261_section_9_1() -> crate::Result<()> {
+    use crate::dialog::{dialog_layer::DialogLayer, invitation::InviteOption};
+
+    // Start a UDP listener to capture SIP messages
+    let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
+    let local_port = socket.local_addr()?.port();
+
+    let endpoint = create_test_endpoint().await?;
+
+    // Setup outbound transport for client
+    let udp = UdpConnection::create_connection(
+        "127.0.0.1:0".parse().unwrap(),
+        None,
+        Some(
+            endpoint
+                .inner
+                .transport_layer
+                .inner
+                .cancel_token
+                .child_token(),
+        ),
+    )
+    .await?;
+    endpoint.inner.transport_layer.add_transport(udp.into());
+
+    let dialog_layer = DialogLayer::new(endpoint.inner.clone());
+
+    let invite_option = InviteOption {
+        caller: Uri::try_from("sip:alice@example.com")?,
+        callee: Uri::try_from(format!("sip:bob@127.0.0.1:{};transport=udp", local_port).as_str())?,
+        contact: Uri::try_from("sip:alice@alice.example.com:5060")?,
+        ..Default::default()
+    };
+
+    let (state_sender, _) = unbounded_channel();
+
+    // Use create_client_invite_dialog - creates dialog and transaction without sending
+    let (client_dialog, mut tx) =
+        dialog_layer.create_client_invite_dialog(invite_option, state_sender)?;
+
+    tx.send().await?;
+
+    // Receive the INVITE request first
+    let mut buf = [0u8; 2048];
+    let (len, _) = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        socket.recv_from(&mut buf),
+    )
+    .await
+    .map_err(|_| rsip::Error::Unexpected("Timeout receiving INVITE".into()))??;
+
+    let invite_msg = std::str::from_utf8(&buf[..len]).unwrap();
+    let invite_req: Request = rsip::SipMessage::try_from(invite_msg)?.try_into()?;
+    assert_eq!(invite_req.method, rsip::Method::Invite);
+
+    let dialog_clone = client_dialog.clone();
+    tokio::spawn(async move { dialog_clone.cancel().await });
+
+    // Receive the CANCEL request
+    let (len, _) = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        socket.recv_from(&mut buf),
+    )
+    .await
+    .map_err(|_| rsip::Error::Unexpected("Timeout receiving CANCEL".into()))??;
+
+    let cancel_msg = std::str::from_utf8(&buf[..len]).unwrap();
+    let cancel_req: Request = rsip::SipMessage::try_from(cancel_msg)?.try_into()?;
+    let cancel_vias = cancel_req
+        .headers
+        .iter()
+        .filter_map(|header| {
+            if let Header::Via(via) = header {
+                Some(via)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(cancel_req.method, rsip::Method::Cancel);
+
+    assert_eq!(
+        cancel_req.uri, invite_req.uri,
+        "CANCEL Request-URI must match INVITE"
+    );
+
+    assert_eq!(
+        cancel_req.call_id_header()?.value().to_string(),
+        invite_req.call_id_header()?.value().to_string(),
+        "CANCEL Call-ID must match INVITE"
+    );
+
+    assert_eq!(
+        cancel_req.from_header()?.value().to_string(),
+        invite_req.from_header()?.value().to_string(),
+        "CANCEL From header must match INVITE (including tag)"
+    );
+
+    assert_eq!(
+        cancel_req.to_header()?.value().to_string(),
+        invite_req.to_header()?.value().to_string(),
+        "CANCEL To header must match INVITE"
+    );
+
+    assert!(
+        cancel_req.to_header()?.tag()?.is_none(),
+        "CANCEL should not have To tag, because the invite does not have"
+    );
+
+    assert_eq!(
+        cancel_req.cseq_header()?.seq()?,
+        invite_req.cseq_header()?.seq()?,
+        "CANCEL CSeq number must match INVITE"
+    );
+
+    assert_eq!(
+        cancel_vias.len(),
+        1,
+        "CANCEL must have exactly one Via header"
+    );
+
+    assert_eq!(
+        cancel_req.via_header()?.value(),
+        invite_req.via_header()?.value(),
+        "CANCEL Via must match top Via in INVITE"
     );
 
     Ok(())
