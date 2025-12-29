@@ -1,9 +1,7 @@
-//! Client dialog tests
-//!
-//! Tests for client-side dialog behavior and state management
-
-use crate::transaction::{endpoint::EndpointBuilder, key::TransactionRole};
+use crate::transaction::key::TransactionRole;
+use crate::transport::transport_layer::DomainResolver;
 use crate::transport::{udp::UdpConnection, SipAddr, TransportLayer};
+use crate::EndpointBuilder;
 use crate::{
     dialog::{
         client_dialog::ClientInviteDialog,
@@ -12,9 +10,11 @@ use crate::{
     },
     rsip_ext::destination_from_request,
 };
+use async_trait::async_trait;
 use rsip::{headers::*, prelude::HeadersExt, Request, Response, StatusCode, Uri};
 use std::sync::Arc;
 use tokio::sync::mpsc::unbounded_channel;
+use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 async fn create_test_endpoint() -> crate::Result<crate::transaction::endpoint::Endpoint> {
@@ -610,6 +610,200 @@ async fn test_cancel_conforms_to_rfc3261_section_9_1() -> crate::Result<()> {
         invite_req.via_header()?.value(),
         "CANCEL Via must match top Via in INVITE"
     );
+
+    Ok(())
+}
+
+/// Mock domain resolver that redirects all domain lookups to a local address
+struct MockDomainResolver {
+    local_addr: SipAddr,
+}
+
+#[async_trait]
+impl DomainResolver for MockDomainResolver {
+    async fn resolve(&self, target: &SipAddr) -> crate::Result<SipAddr> {
+        // Redirect domain lookups to our local test address, preserving transport
+        Ok(SipAddr {
+            r#type: target.r#type,
+            addr: self.local_addr.addr.clone(),
+        })
+    }
+}
+
+async fn create_test_endpoint_with_resolver(
+    local_addr: SipAddr,
+) -> crate::Result<crate::transaction::endpoint::Endpoint> {
+    let token = CancellationToken::new();
+    let resolver = Box::new(MockDomainResolver { local_addr });
+    let tl = TransportLayer::new_with_domain_resolver(token.child_token(), resolver);
+    let endpoint = EndpointBuilder::new()
+        .with_user_agent("rsipstack-test")
+        .with_transport_layer(tl)
+        .build();
+    Ok(endpoint)
+}
+
+/// Verifies that when the 200 OK contains a Contact header with a domain name,
+/// the ACK is sent to that domain (resolved via the DomainResolver).
+///
+/// This tests the full invite flow with two separate endpoints:
+/// 1. UAC sends INVITE to UAS endpoint
+/// 2. UAS responds with 200 OK containing Contact with domain name
+/// 3. UAC sends ACK to the domain (which gets resolved to UAS endpoint)
+#[tokio::test]
+async fn test_ack_sent_to_domain_name_from_contact() -> crate::Result<()> {
+    use crate::dialog::{dialog_layer::DialogLayer, invitation::InviteOption};
+
+    // ========== Create UAS endpoint ==========
+    let uas_token = CancellationToken::new();
+    let uas_transport_layer = TransportLayer::new(uas_token.child_token());
+
+    let uas_udp = UdpConnection::create_connection(
+        "127.0.0.1:0".parse().unwrap(),
+        None,
+        Some(uas_token.child_token()),
+    )
+    .await?;
+
+    let uas_port = uas_udp
+        .get_addr()
+        .addr
+        .port
+        .map(|p| u16::from(p))
+        .unwrap_or(0);
+    uas_transport_layer.add_transport(uas_udp.into());
+
+    let uas_endpoint = EndpointBuilder::new()
+        .with_user_agent("rsipstack-uas")
+        .with_transport_layer(uas_transport_layer)
+        .build();
+
+    uas_endpoint.inner.transport_layer.serve_listens().await?;
+    let uas_endpoint_inner = uas_endpoint.inner.clone();
+    tokio::spawn(async move {
+        let _ = uas_endpoint_inner.serve().await;
+    });
+
+    // ========== Create UAC endpoint with mock resolver ==========
+    let domain_target_addr = SipAddr {
+        r#type: Some(rsip::Transport::Udp),
+        addr: rsip::HostWithPort {
+            host: rsip::Host::IpAddr("127.0.0.1".parse().unwrap()),
+            port: Some(uas_port.into()),
+        },
+    };
+
+    let uac_endpoint = create_test_endpoint_with_resolver(domain_target_addr).await?;
+
+    let uac_udp = UdpConnection::create_connection(
+        "127.0.0.1:0".parse().unwrap(),
+        None,
+        Some(
+            uac_endpoint
+                .inner
+                .transport_layer
+                .inner
+                .cancel_token
+                .child_token(),
+        ),
+    )
+    .await?;
+    let uac_port = uac_udp
+        .get_addr()
+        .addr
+        .port
+        .map(|p| u16::from(p))
+        .unwrap_or(0);
+    uac_endpoint
+        .inner
+        .transport_layer
+        .add_transport(uac_udp.into());
+
+    uac_endpoint.inner.transport_layer.serve_listens().await?;
+    let uac_endpoint_inner = uac_endpoint.inner.clone();
+    tokio::spawn(async move {
+        let _ = uac_endpoint_inner.serve().await;
+    });
+
+    // ========== Create dialog layers ==========
+    let uac_dialog_layer = DialogLayer::new(uac_endpoint.inner.clone());
+    let uas_dialog_layer = DialogLayer::new(uas_endpoint.inner.clone());
+
+    // ========== UAS: Start listening for incoming transactions ==========
+    let mut uas_incoming = uas_endpoint.incoming_transactions()?;
+
+    let (uac_state_sender, _) = unbounded_channel();
+    let (uas_state_sender, _) = unbounded_channel();
+
+    // Oneshot channel to receive the ACK for verification
+    let (ack_sender, ack_receiver) = oneshot::channel::<Request>();
+
+    // UAS handler - wait for INVITE, respond with 200 OK containing domain Contact
+    tokio::spawn(async move {
+        let mut invite_tx = uas_incoming.recv().await.expect("failed to get the INVITE");
+        assert!(matches!(invite_tx.original.method, rsip::Method::Invite));
+
+        let contact_uri = Uri::try_from(format!(
+            "sip:bob@uas.example.com:{};transport=udp",
+            uas_port
+        ))
+        .unwrap();
+
+        let dialog = uas_dialog_layer
+            .get_or_create_server_invite(&invite_tx, uas_state_sender, None, Some(contact_uri))
+            .expect("failed to create dialog");
+
+        dialog.accept(None, None).expect("accept failed");
+
+        if let Some(msg) = invite_tx.receive().await {
+            if let rsip::SipMessage::Request(ack) = msg {
+                if ack.method == rsip::Method::Ack {
+                    let _ = ack_sender.send(ack);
+                }
+            }
+        }
+    });
+
+    // ========== UAC: Create and process INVITE ==========
+    let invite_option = InviteOption {
+        caller: Uri::try_from("sip:alice@example.com")?,
+        callee: Uri::try_from(format!("sip:bob@127.0.0.1:{};transport=udp", uas_port).as_str())?,
+        contact: Uri::try_from(format!("sip:alice@127.0.0.1:{}", uac_port).as_str())?,
+        ..Default::default()
+    };
+
+    let (client_dialog, _) = uac_dialog_layer
+        .do_invite(invite_option, uac_state_sender)
+        .await?;
+
+    // ========== Verify ACK was received by UAS with domain in Request-URI ==========
+    let ack_req = tokio::time::timeout(std::time::Duration::from_secs(2), ack_receiver)
+        .await
+        .expect("timeout receiving ACK")
+        .expect("fail to receiving ACK");
+
+    // Verify ACK Request-URI contains the domain from Contact header
+    assert_eq!(ack_req.method, rsip::Method::Ack, "Expected ACK request");
+
+    assert_eq!(
+        ack_req.uri.host_with_port.host,
+        rsip::Host::Domain("uas.example.com".into()),
+        "ACK Request-URI host should be the domain from Contact header"
+    );
+
+    assert_eq!(
+        ack_req.uri.host_with_port.port,
+        Some(uas_port.into()),
+        "ACK Request-URI port should match Contact port"
+    );
+
+    // Verify dialog was confirmed
+    assert!(
+        client_dialog.inner.is_confirmed(),
+        "Dialog should be confirmed after 200 OK"
+    );
+
+    uas_token.cancel();
 
     Ok(())
 }
