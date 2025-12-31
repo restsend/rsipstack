@@ -6,6 +6,7 @@ use crate::{
     },
     Result,
 };
+use bytes::BytesMut;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::net::UdpSocket;
 use tokio_util::sync::CancellationToken;
@@ -63,7 +64,8 @@ impl UdpConnection {
     }
 
     pub async fn serve_loop(&self, sender: TransportSender) -> Result<()> {
-        let mut buf = vec![0u8; MAX_UDP_BUF_SIZE];
+        let mut buf = BytesMut::with_capacity(MAX_UDP_BUF_SIZE);
+        buf.resize(MAX_UDP_BUF_SIZE, 0);
         loop {
             let (len, addr) = tokio::select! {
                 // Check for cancellation on each iteration
@@ -106,7 +108,7 @@ impl UdpConnection {
             let undecoded = match std::str::from_utf8(&buf[..len]) {
                 Ok(s) => s,
                 Err(e) => {
-                    info!(
+                    debug!(
                         "decoding text from: {} error: {} buf: {:?}",
                         addr,
                         e,

@@ -195,7 +195,8 @@ where
 
         let mut codec = SipCodec::new();
         let mut buffer = BytesMut::with_capacity(MAX_SIP_MESSAGE_SIZE);
-        let mut read_buf = vec![0u8; MAX_SIP_MESSAGE_SIZE];
+        let mut read_buf = BytesMut::with_capacity(MAX_SIP_MESSAGE_SIZE);
+        read_buf.resize(MAX_SIP_MESSAGE_SIZE, 0);
         loop {
             use tokio::io::AsyncReadExt;
             match read_half.read(&mut read_buf).await {
