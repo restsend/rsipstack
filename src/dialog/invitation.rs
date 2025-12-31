@@ -506,6 +506,16 @@ impl DialogLayer {
             tx.tu_sender.clone(),
         )?;
 
+        if let Some(destination) = &tx.destination {
+            let uri = destination.clone().into();
+            dlg_inner
+                .remote_uri
+                .lock()
+                .map(|mut guard| {
+                    *guard = uri;
+                })
+                .ok();
+        }
         let dialog = ClientInviteDialog {
             inner: Arc::new(dlg_inner),
         };
