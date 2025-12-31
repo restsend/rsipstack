@@ -700,6 +700,15 @@ impl DialogInner {
         let key = TransactionKey::from_request(&request, TransactionRole::Client)?;
         let mut tx = Transaction::new_client(key, request, self.endpoint_inner.clone(), None);
 
+        if matches!(method, Method::Cancel) {
+            self.remote_uri
+                .lock()
+                .map(|guard| {
+                    tx.destination = SipAddr::try_from(guard.clone()).ok();
+                })
+                .ok();
+        }
+
         if let Some(route) = tx.original.route_header() {
             if let Some(first_route) = route.typed().ok().and_then(|r| r.uris().first().cloned()) {
                 tx.destination = SipAddr::try_from(&first_route.uri).ok();
