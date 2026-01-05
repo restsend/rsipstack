@@ -1,7 +1,7 @@
 use super::authenticate::Credential;
 use super::dialog::DialogStateSender;
-use super::{dialog::Dialog, server_dialog::ServerInviteDialog, DialogId};
 use super::subscription::ServerSubscriptionDialog;
+use super::{dialog::Dialog, server_dialog::ServerInviteDialog, DialogId};
 use crate::dialog::client_dialog::ClientInviteDialog;
 use crate::dialog::dialog::{DialogInner, DialogStateReceiver};
 use crate::transaction::key::TransactionRole;

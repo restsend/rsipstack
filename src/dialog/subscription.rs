@@ -1,6 +1,4 @@
-use super::dialog::{
-    DialogInnerRef, DialogState, TerminatedReason, TransactionHandle,
-};
+use super::dialog::{DialogInnerRef, DialogState, TerminatedReason, TransactionHandle};
 use super::DialogId;
 use crate::transaction::transaction::Transaction;
 use crate::Result;
