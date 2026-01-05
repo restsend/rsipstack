@@ -4,7 +4,7 @@
 //! according to RFC 3261 Section 12.
 
 use crate::dialog::{
-    dialog::{DialogInner, DialogState, TerminatedReason},
+    dialog::{DialogInner, DialogState, TerminatedReason, TransactionHandle},
     DialogId,
 };
 use crate::transaction::{endpoint::EndpointBuilder, key::TransactionRole};
@@ -264,6 +264,7 @@ async fn test_dialog_in_dialog_requests() -> crate::Result<()> {
         method: rsip::Method::Info,
         uri: rsip::Uri::try_from("sip:bob@example.com:5060")?,
         headers: vec![
+            Via::new("SIP/2.0/UDP 127.0.0.1:5060;branch=z9hG4bK-info").into(),
             CSeq::new("2 INFO").into(),
             From::new("Alice <sip:alice@example.com>;tag=alice-tag-456").into(),
             To::new("Bob <sip:bob@example.com>;tag=bob-tag-789").into(),
@@ -274,13 +275,15 @@ async fn test_dialog_in_dialog_requests() -> crate::Result<()> {
         body: vec![],
     };
 
-    dialog_inner.transition(DialogState::Info(dialog_id.clone(), info_req))?;
+    let (handle, _) = TransactionHandle::new();
+    dialog_inner.transition(DialogState::Info(dialog_id.clone(), info_req, handle))?;
 
     // Test UPDATE request in dialog
     let update_req = Request {
         method: rsip::Method::Update,
         uri: rsip::Uri::try_from("sip:bob@example.com:5060")?,
         headers: vec![
+            Via::new("SIP/2.0/UDP 127.0.0.1:5060;branch=z9hG4bK-update").into(),
             CSeq::new("3 UPDATE").into(),
             From::new("Alice <sip:alice@example.com>;tag=alice-tag-456").into(),
             To::new("Bob <sip:bob@example.com>;tag=bob-tag-789").into(),
@@ -291,13 +294,15 @@ async fn test_dialog_in_dialog_requests() -> crate::Result<()> {
         body: b"v=0\r\no=alice 2890844526 2890844528 IN IP4 host.atlanta.com\r\n".to_vec(),
     };
 
-    dialog_inner.transition(DialogState::Updated(dialog_id.clone(), update_req))?;
+    let (handle, _) = TransactionHandle::new();
+    dialog_inner.transition(DialogState::Updated(dialog_id.clone(), update_req, handle))?;
 
     // Test OPTIONS request in dialog
     let options_req = Request {
         method: rsip::Method::Options,
         uri: rsip::Uri::try_from("sip:bob@example.com:5060")?,
         headers: vec![
+            Via::new("SIP/2.0/UDP 127.0.0.1:5060;branch=z9hG4bK-options").into(),
             CSeq::new("4 OPTIONS").into(),
             From::new("Alice <sip:alice@example.com>;tag=alice-tag-456").into(),
             To::new("Bob <sip:bob@example.com>;tag=bob-tag-789").into(),
@@ -308,7 +313,8 @@ async fn test_dialog_in_dialog_requests() -> crate::Result<()> {
         body: vec![],
     };
 
-    dialog_inner.transition(DialogState::Options(dialog_id.clone(), options_req))?;
+    let (handle, _) = TransactionHandle::new();
+    dialog_inner.transition(DialogState::Options(dialog_id.clone(), options_req, handle))?;
 
     // Dialog should still be confirmed after in-dialog requests
     assert!(dialog_inner.is_confirmed());

@@ -2,6 +2,7 @@ use super::{
     authenticate::{handle_client_authenticate, Credential},
     client_dialog::ClientInviteDialog,
     server_dialog::ServerInviteDialog,
+    subscription::{ClientSubscriptionDialog, ServerSubscriptionDialog},
     DialogId,
 };
 use crate::{
@@ -27,9 +28,37 @@ use std::sync::{
     atomic::{AtomicU32, Ordering},
     Arc, Mutex,
 };
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
+
+pub type TransactionCommandSender = mpsc::Sender<TransactionCommand>;
+pub type TransactionCommandReceiver = mpsc::Receiver<TransactionCommand>;
+#[derive(Debug)]
+pub enum TransactionCommand {
+    Respond(rsip::Response),
+}
+
+#[derive(Clone, Debug)]
+pub struct TransactionHandle {
+    sender: TransactionCommandSender,
+}
+
+impl TransactionHandle {
+    pub fn new() -> (Self, TransactionCommandReceiver) {
+        let (tx, rx) = mpsc::channel(4);
+        (Self { sender: tx }, rx)
+    }
+
+    pub async fn respond(
+        &self,
+        response: rsip::Response,
+    ) -> std::result::Result<(), mpsc::error::SendError<TransactionCommand>> {
+        self.sender
+            .send(TransactionCommand::Respond(response))
+            .await
+    }
+}
 
 /// SIP Dialog State
 ///
@@ -74,10 +103,12 @@ pub enum DialogState {
     Early(DialogId, rsip::Response),
     WaitAck(DialogId, rsip::Response),
     Confirmed(DialogId, rsip::Response),
-    Updated(DialogId, rsip::Request),
-    Notify(DialogId, rsip::Request),
-    Info(DialogId, rsip::Request),
-    Options(DialogId, rsip::Request),
+    Updated(DialogId, rsip::Request, TransactionHandle),
+    Notify(DialogId, rsip::Request, TransactionHandle),
+    Refer(DialogId, rsip::Request, TransactionHandle),
+    Message(DialogId, rsip::Request, TransactionHandle),
+    Info(DialogId, rsip::Request, TransactionHandle),
+    Options(DialogId, rsip::Request, TransactionHandle),
     Terminated(DialogId, TerminatedReason),
 }
 
@@ -94,6 +125,59 @@ pub enum TerminatedReason {
     ProxyAuthRequired,
     UacOther(rsip::StatusCode),
     UasOther(rsip::StatusCode),
+}
+
+/// Represents the status of a REFER operation parsed from a NOTIFY request.
+#[derive(Debug, Clone)]
+pub struct ReferStatus {
+    pub status_code: rsip::StatusCode,
+    pub is_terminated: bool,
+}
+
+impl ReferStatus {
+    pub fn parse(req: &rsip::Request) -> Option<Self> {
+        use rsip::prelude::HasHeaders;
+
+        let mut event = None;
+        for header in req.headers().iter() {
+            if let rsip::Header::Other(name, value) = header {
+                if name.to_string().eq_ignore_ascii_case("event") {
+                    event = Some(value.to_string().to_lowercase());
+                    break;
+                }
+            }
+        }
+        let event = event?;
+        if !event.contains("refer") {
+            return None;
+        }
+
+        let mut sub_state = None;
+        for header in req.headers().iter() {
+            if let rsip::Header::Other(name, value) = header {
+                if name.to_string().eq_ignore_ascii_case("subscription-state") {
+                    sub_state = Some(value.to_string().to_lowercase());
+                    break;
+                }
+            }
+        }
+        let sub_state = sub_state?;
+        let is_terminated = sub_state.contains("terminated");
+
+        let body = std::str::from_utf8(&req.body).ok()?;
+        let status_line = body.lines().find(|l| l.starts_with("SIP/2.0"))?;
+        let parts: Vec<&str> = status_line.split_whitespace().collect();
+        if parts.len() < 2 {
+            return None;
+        }
+        let code: u16 = parts[1].parse().ok()?;
+        let status_code = rsip::StatusCode::from(code);
+
+        Some(Self {
+            status_code,
+            is_terminated,
+        })
+    }
 }
 
 /// SIP Dialog
@@ -119,6 +203,12 @@ pub enum TerminatedReason {
 ///     },
 ///     Dialog::ClientInvite(client_dialog) => {
 ///         // Handle client dialog  
+///     },
+///     Dialog::ServerSubscription(server_dialog) => {
+///         // Handle server subscription dialog
+///     },
+///     Dialog::ClientSubscription(client_dialog) => {
+///         // Handle client subscription dialog
 ///     }
 /// }
 /// # }
@@ -127,6 +217,30 @@ pub enum TerminatedReason {
 pub enum Dialog {
     ServerInvite(ServerInviteDialog),
     ClientInvite(ClientInviteDialog),
+    ServerSubscription(ServerSubscriptionDialog),
+    ClientSubscription(ClientSubscriptionDialog),
+}
+
+impl Dialog {
+    pub fn state(&self) -> DialogState {
+        match self {
+            Dialog::ServerInvite(d) => d.state(),
+            Dialog::ClientInvite(d) => d.state(),
+            Dialog::ServerSubscription(d) => d.state(),
+            Dialog::ClientSubscription(d) => d.state(),
+        }
+    }
+
+    /// Convert this dialog to a subscription dialog if possible.
+    /// For INVITE dialogs, this creates a subscription dialog sharing the same inner state.
+    pub fn as_subscription(&self) -> Option<Dialog> {
+        match self {
+            Dialog::ServerInvite(d) => Some(Dialog::ServerSubscription(d.as_subscription())),
+            Dialog::ClientInvite(d) => Some(Dialog::ClientSubscription(d.as_subscription())),
+            Dialog::ServerSubscription(_) => Some(self.clone()),
+            Dialog::ClientSubscription(_) => Some(self.clone()),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -208,10 +322,12 @@ impl DialogState {
             | DialogState::Early(id, _)
             | DialogState::WaitAck(id, _)
             | DialogState::Confirmed(id, _)
-            | DialogState::Updated(id, _)
-            | DialogState::Notify(id, _)
-            | DialogState::Info(id, _)
-            | DialogState::Options(id, _)
+            | DialogState::Updated(id, _, _)
+            | DialogState::Notify(id, _, _)
+            | DialogState::Info(id, _, _)
+            | DialogState::Options(id, _, _)
+            | DialogState::Refer(id, _, _)
+            | DialogState::Message(id, _, _)
             | DialogState::Terminated(id, _) => id,
         }
     }
@@ -815,10 +931,10 @@ impl DialogInner {
         self.state_sender.send(state.clone()).ok();
 
         match state {
-            DialogState::Updated(_, _)
-            | DialogState::Notify(_, _)
-            | DialogState::Info(_, _)
-            | DialogState::Options(_, _) => {
+            DialogState::Updated(_, _, _)
+            | DialogState::Notify(_, _, _)
+            | DialogState::Info(_, _, _)
+            | DialogState::Options(_, _, _) => {
                 return Ok(());
             }
             _ => {}
@@ -842,6 +958,46 @@ impl DialogInner {
         *old_state = state;
         Ok(())
     }
+
+    pub async fn process_transaction_handle(
+        &self,
+        tx: &mut Transaction,
+        mut rx: TransactionCommandReceiver,
+    ) -> Result<()> {
+        let timeout_duration = self.endpoint_inner.option.t1x64;
+        let result = tokio::time::timeout(timeout_duration, async {
+            while let Some(cmd) = rx.recv().await {
+                match cmd {
+                    TransactionCommand::Respond(response) => {
+                        let is_final =
+                            response.status_code.kind() != rsip::StatusCodeKind::Provisional;
+                        tx.respond(response).await?;
+                        if is_final {
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+            Err(crate::Error::TransactionError(
+                "User dropped handle without final response".into(),
+                tx.key.clone(),
+            ))
+        })
+        .await;
+
+        match result {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(_)) | Err(_) => {
+                let id = self.id.lock().unwrap().to_string();
+                warn!(
+                    id,
+                    "{} handle dropped or timed out without final reply, returning 501",
+                    tx.original.method,
+                );
+                tx.reply(StatusCode::NotImplemented).await
+            }
+        }
+    }
 }
 
 impl std::fmt::Display for DialogState {
@@ -852,10 +1008,12 @@ impl std::fmt::Display for DialogState {
             DialogState::Early(id, _) => write!(f, "{}(Early)", id),
             DialogState::WaitAck(id, _) => write!(f, "{}(WaitAck)", id),
             DialogState::Confirmed(id, _) => write!(f, "{}(Confirmed)", id),
-            DialogState::Updated(id, _) => write!(f, "{}(Updated)", id),
-            DialogState::Notify(id, _) => write!(f, "{}(Notify)", id),
-            DialogState::Info(id, _) => write!(f, "{}(Info)", id),
-            DialogState::Options(id, _) => write!(f, "{}(Options)", id),
+            DialogState::Updated(id, _, _) => write!(f, "{}(Updated)", id),
+            DialogState::Notify(id, _, _) => write!(f, "{}(Notify)", id),
+            DialogState::Info(id, _, _) => write!(f, "{}(Info)", id),
+            DialogState::Options(id, _, _) => write!(f, "{}(Options)", id),
+            DialogState::Refer(id, _, _) => write!(f, "{}(Refer)", id),
+            DialogState::Message(id, _, _) => write!(f, "{}(Message)", id),
             DialogState::Terminated(id, reason) => write!(f, "{}(Terminated {:?})", id, reason),
         }
     }
@@ -866,6 +1024,8 @@ impl Dialog {
         match self {
             Dialog::ServerInvite(d) => d.inner.id.lock().unwrap().clone(),
             Dialog::ClientInvite(d) => d.inner.id.lock().unwrap().clone(),
+            Dialog::ServerSubscription(d) => d.inner.id.lock().unwrap().clone(),
+            Dialog::ClientSubscription(d) => d.inner.id.lock().unwrap().clone(),
         }
     }
 
@@ -873,6 +1033,8 @@ impl Dialog {
         match self {
             Dialog::ServerInvite(d) => &d.inner.from,
             Dialog::ClientInvite(d) => &d.inner.from,
+            Dialog::ServerSubscription(d) => &d.inner.from,
+            Dialog::ClientSubscription(d) => &d.inner.from,
         }
     }
 
@@ -880,6 +1042,8 @@ impl Dialog {
         match self {
             Dialog::ServerInvite(d) => d.inner.to.lock().unwrap().clone(),
             Dialog::ClientInvite(d) => d.inner.to.lock().unwrap().clone(),
+            Dialog::ServerSubscription(d) => d.inner.to.lock().unwrap().clone(),
+            Dialog::ClientSubscription(d) => d.inner.to.lock().unwrap().clone(),
         }
     }
 
@@ -901,6 +1065,22 @@ impl Dialog {
                 .as_ref()
                 .map(|c| extract_uri_from_contact(c.value()).ok())
                 .flatten(),
+            Dialog::ServerSubscription(d) => d
+                .inner
+                .remote_contact
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|c| extract_uri_from_contact(c.value()).ok())
+                .flatten(),
+            Dialog::ClientSubscription(d) => d
+                .inner
+                .remote_contact
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|c| extract_uri_from_contact(c.value()).ok())
+                .flatten(),
         }
     }
 
@@ -908,6 +1088,8 @@ impl Dialog {
         match self {
             Dialog::ServerInvite(d) => d.handle(tx).await,
             Dialog::ClientInvite(d) => d.handle(tx).await,
+            Dialog::ServerSubscription(d) => d.handle(tx).await,
+            Dialog::ClientSubscription(d) => d.handle(tx).await,
         }
     }
     pub fn on_remove(&self) {
@@ -918,6 +1100,12 @@ impl Dialog {
             Dialog::ClientInvite(d) => {
                 d.inner.cancel_token.cancel();
             }
+            Dialog::ServerSubscription(d) => {
+                d.inner.cancel_token.cancel();
+            }
+            Dialog::ClientSubscription(d) => {
+                d.inner.cancel_token.cancel();
+            }
         }
     }
 
@@ -925,6 +1113,8 @@ impl Dialog {
         match self {
             Dialog::ServerInvite(d) => d.bye().await,
             Dialog::ClientInvite(d) => d.hangup().await,
+            Dialog::ServerSubscription(d) => d.unsubscribe().await,
+            Dialog::ClientSubscription(d) => d.unsubscribe().await,
         }
     }
 
@@ -932,6 +1122,8 @@ impl Dialog {
         match self {
             Dialog::ServerInvite(d) => d.inner.can_cancel(),
             Dialog::ClientInvite(d) => d.inner.can_cancel(),
+            Dialog::ServerSubscription(d) => d.inner.can_cancel(),
+            Dialog::ClientSubscription(d) => d.inner.can_cancel(),
         }
     }
 
@@ -945,6 +1137,49 @@ impl Dialog {
         match self {
             Dialog::ServerInvite(d) => d.inner.set_remote_target(uri, contact),
             Dialog::ClientInvite(d) => d.inner.set_remote_target(uri, contact),
+            Dialog::ServerSubscription(d) => d.inner.set_remote_target(uri, contact),
+            Dialog::ClientSubscription(d) => d.inner.set_remote_target(uri, contact),
+        }
+    }
+
+    pub async fn request(
+        &self,
+        method: rsip::Method,
+        headers: Option<Vec<rsip::Header>>,
+        body: Option<Vec<u8>>,
+    ) -> Result<Option<rsip::Response>> {
+        match self {
+            Dialog::ServerInvite(d) => d.request(method, headers, body).await,
+            Dialog::ClientInvite(d) => d.request(method, headers, body).await,
+            Dialog::ServerSubscription(d) => d.request(method, headers, body).await,
+            Dialog::ClientSubscription(d) => d.request(method, headers, body).await,
+        }
+    }
+
+    pub async fn refer(
+        &self,
+        refer_to: rsip::Uri,
+        headers: Option<Vec<rsip::Header>>,
+        body: Option<Vec<u8>>,
+    ) -> Result<Option<rsip::Response>> {
+        match self {
+            Dialog::ServerInvite(d) => d.refer(refer_to, headers, body).await,
+            Dialog::ClientInvite(d) => d.refer(refer_to, headers, body).await,
+            Dialog::ServerSubscription(d) => d.refer(refer_to, headers, body).await,
+            Dialog::ClientSubscription(d) => d.refer(refer_to, headers, body).await,
+        }
+    }
+
+    pub async fn message(
+        &self,
+        headers: Option<Vec<rsip::Header>>,
+        body: Option<Vec<u8>>,
+    ) -> Result<Option<rsip::Response>> {
+        match self {
+            Dialog::ServerInvite(d) => d.message(headers, body).await,
+            Dialog::ClientInvite(d) => d.message(headers, body).await,
+            Dialog::ServerSubscription(d) => d.message(headers, body).await,
+            Dialog::ClientSubscription(d) => d.message(headers, body).await,
         }
     }
 }

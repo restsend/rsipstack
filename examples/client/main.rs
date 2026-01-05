@@ -388,6 +388,12 @@ async fn process_dialog(
                     Dialog::ClientInvite(_) => {
                         info!("Client invite dialog {}", id);
                     }
+                    Dialog::ServerSubscription(_) => {
+                        info!("Server subscription dialog {}", id);
+                    }
+                    Dialog::ClientSubscription(_) => {
+                        info!("Client subscription dialog {}", id);
+                    }
                 }
             }
             DialogState::Early(id, resp) => {
@@ -396,6 +402,12 @@ async fn process_dialog(
             DialogState::Terminated(id, reason) => {
                 info!("Dialog terminated {} {:?}", id, reason);
                 dialog_layer.remove_dialog(&id);
+            }
+            DialogState::Refer(id, req, _handle) => {
+                info!("Received REFER for dialog {}: {}", id, req.uri);
+            }
+            DialogState::Message(id, req, _handle) => {
+                info!("Received MESSAGE for dialog {}: {}", id, req.uri);
             }
             _ => {
                 info!("Received dialog state: {}", state);

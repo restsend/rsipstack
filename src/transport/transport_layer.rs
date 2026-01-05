@@ -110,6 +110,7 @@ pub struct TransportLayerInner {
 }
 pub(crate) type TransportLayerInnerRef = Arc<TransportLayerInner>;
 
+#[derive(Clone)]
 pub struct TransportLayer {
     pub outbound: Option<SipAddr>,
     pub inner: TransportLayerInnerRef,

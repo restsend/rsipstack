@@ -2,7 +2,8 @@ use super::dialog::DialogInnerRef;
 use super::DialogId;
 use crate::dialog::{
     authenticate::handle_client_authenticate,
-    dialog::{DialogState, TerminatedReason},
+    dialog::{DialogState, TerminatedReason, TransactionHandle},
+    subscription::ClientSubscriptionDialog,
 };
 use crate::rsip_ext::RsipResponseExt;
 use crate::transaction::transaction::Transaction;
@@ -12,7 +13,7 @@ use rsip::{prelude::HeadersExt, Header};
 use rsip::{Response, SipMessage, StatusCode};
 use std::sync::atomic::Ordering;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, trace};
+use tracing::{debug, info, trace};
 
 /// Client-side INVITE Dialog (UAC)
 ///
@@ -257,8 +258,9 @@ impl ClientInviteDialog {
         match resp {
             Ok(Some(ref resp)) => {
                 if resp.status_code == StatusCode::OK {
+                    let (handle, _) = TransactionHandle::new();
                     self.inner
-                        .transition(DialogState::Updated(self.id(), request))?;
+                        .transition(DialogState::Updated(self.id(), request, handle))?;
                 }
             }
             _ => {}
@@ -370,6 +372,104 @@ impl ClientInviteDialog {
                 .make_request(rsip::Method::Options, None, None, None, headers, body)?;
         self.inner.do_request(request.clone()).await
     }
+
+    /// Send a generic in-dialog request
+    ///
+    /// This method allows sending any SIP request within the dialog.
+    /// It automatically handles CSeq increment, Call-ID, From/To tags, and Route set.
+    pub async fn request(
+        &self,
+        method: rsip::Method,
+        headers: Option<Vec<rsip::Header>>,
+        body: Option<Vec<u8>>,
+    ) -> Result<Option<rsip::Response>> {
+        if !self.inner.is_confirmed() {
+            return Ok(None);
+        }
+        info!(id=%self.id(),"sending {} request", method);
+        let request = self
+            .inner
+            .make_request(method, None, None, None, headers, body)?;
+        self.inner.do_request(request).await
+    }
+
+    /// Send a NOTIFY request
+    pub async fn notify(
+        &self,
+        headers: Option<Vec<rsip::Header>>,
+        body: Option<Vec<u8>>,
+    ) -> Result<Option<rsip::Response>> {
+        self.request(rsip::Method::Notify, headers, body).await
+    }
+
+    /// Send a REFER request
+    ///
+    /// Sends a REFER request to transfer the call to another destination.
+    ///
+    /// # Parameters
+    ///
+    /// * `refer_to` - The URI to refer to (Refer-To header value)
+    /// * `headers` - Optional additional headers
+    /// * `body` - Optional message body
+    pub async fn refer(
+        &self,
+        refer_to: rsip::Uri,
+        headers: Option<Vec<rsip::Header>>,
+        body: Option<Vec<u8>>,
+    ) -> Result<Option<rsip::Response>> {
+        let mut headers = headers.unwrap_or_default();
+        headers.push(rsip::Header::Other(
+            "Refer-To".into(),
+            format!("<{}>", refer_to).into(),
+        ));
+        self.request(rsip::Method::Refer, Some(headers), body).await
+    }
+
+    /// Send a REFER progress notification (RFC 3515)
+    ///
+    /// This is used by the REFER recipient to notify the sender about the
+    /// progress of the referred action.
+    ///
+    /// # Parameters
+    ///
+    /// * `status` - The status of the referred action (e.g., 100 Trying, 200 OK)
+    /// * `sub_state` - The subscription state (e.g., "active", "terminated;reason=noresource")
+    pub async fn notify_refer(
+        &self,
+        status: rsip::StatusCode,
+        sub_state: &str,
+    ) -> Result<Option<rsip::Response>> {
+        let headers = vec![
+            rsip::Header::Other("Event".into(), "refer".into()),
+            rsip::Header::Other("Subscription-State".into(), sub_state.into()),
+            rsip::Header::ContentType("message/sipfrag".into()),
+        ];
+
+        let body = format!("SIP/2.0 {} {:?}", u16::from(status.clone()), status).into_bytes();
+
+        self.notify(Some(headers), Some(body)).await
+    }
+
+    /// Convert this INVITE dialog to a subscription dialog
+    ///
+    /// This is useful for handling implicit subscriptions created by REFER.
+    pub fn as_subscription(&self) -> ClientSubscriptionDialog {
+        ClientSubscriptionDialog {
+            inner: self.inner.clone(),
+        }
+    }
+
+    /// Send a MESSAGE request
+    ///
+    /// Sends an instant message within the dialog.
+    pub async fn message(
+        &self,
+        headers: Option<Vec<rsip::Header>>,
+        body: Option<Vec<u8>>,
+    ) -> Result<Option<rsip::Response>> {
+        self.request(rsip::Method::Message, headers, body).await
+    }
+
     /// Handle incoming transaction for this dialog
     ///
     /// Processes incoming SIP requests that are routed to this dialog.
@@ -420,6 +520,9 @@ impl ClientInviteDialog {
                 rsip::Method::Info => return self.handle_info(tx).await,
                 rsip::Method::Options => return self.handle_options(tx).await,
                 rsip::Method::Update => return self.handle_update(tx).await,
+                rsip::Method::Refer => return self.handle_refer(tx).await,
+                rsip::Method::Message => return self.handle_message(tx).await,
+                rsip::Method::Notify => return self.handle_notify(tx).await,
                 _ => {
                     info!(id=%self.id(), "invalid request method: {:?}", tx.original.method);
                     tx.reply(rsip::StatusCode::MethodNotAllowed).await?;
@@ -448,34 +551,36 @@ impl ClientInviteDialog {
     }
 
     async fn handle_info(&mut self, tx: &mut Transaction) -> Result<()> {
-        info!(id=%self.id(),"received info {}", tx.original.uri);
+        debug!(id=%self.id(),"received info {}", tx.original.uri);
+        let (handle, rx) = TransactionHandle::new();
         self.inner
-            .transition(DialogState::Info(self.id(), tx.original.clone()))?;
-        tx.reply(rsip::StatusCode::OK).await?;
-        Ok(())
+            .transition(DialogState::Info(self.id(), tx.original.clone(), handle))?;
+        self.inner.process_transaction_handle(tx, rx).await
     }
 
     async fn handle_options(&mut self, tx: &mut Transaction) -> Result<()> {
-        info!(id=%self.id(),"received options {}", tx.original.uri);
+        debug!(id=%self.id(),"received options {}", tx.original.uri);
+        let (handle, rx) = TransactionHandle::new();
         self.inner
-            .transition(DialogState::Options(self.id(), tx.original.clone()))?;
-        tx.reply(rsip::StatusCode::OK).await?;
-        Ok(())
+            .transition(DialogState::Options(self.id(), tx.original.clone(), handle))?;
+        self.inner.process_transaction_handle(tx, rx).await
     }
 
     async fn handle_update(&mut self, tx: &mut Transaction) -> Result<()> {
-        info!(id=%self.id(),"received update {}", tx.original.uri);
+        debug!(id=%self.id(),"received update {}", tx.original.uri);
+        let (handle, rx) = TransactionHandle::new();
         self.inner
-            .transition(DialogState::Updated(self.id(), tx.original.clone()))?;
-        tx.reply(rsip::StatusCode::OK).await?;
-        Ok(())
+            .transition(DialogState::Updated(self.id(), tx.original.clone(), handle))?;
+        self.inner.process_transaction_handle(tx, rx).await
     }
 
     async fn handle_reinvite(&mut self, tx: &mut Transaction) -> Result<()> {
-        info!(id=%self.id(),"received reinvite {}", tx.original.uri);
+        debug!(id=%self.id(),"received reinvite {}", tx.original.uri);
+        let (handle, rx) = TransactionHandle::new();
         self.inner
-            .transition(DialogState::Updated(self.id(), tx.original.clone()))?;
-        tx.reply(rsip::StatusCode::OK).await?;
+            .transition(DialogState::Updated(self.id(), tx.original.clone(), handle))?;
+
+        self.inner.process_transaction_handle(tx, rx).await?;
 
         // wait for ACK
         while let Some(msg) = tx.receive().await {
@@ -488,6 +593,32 @@ impl ClientInviteDialog {
             }
         }
         Ok(())
+    }
+
+    async fn handle_refer(&mut self, tx: &mut Transaction) -> Result<()> {
+        debug!(id=%self.id(),"received refer {}", tx.original.uri);
+        let (handle, rx) = TransactionHandle::new();
+        self.inner
+            .transition(DialogState::Refer(self.id(), tx.original.clone(), handle))?;
+
+        self.inner.process_transaction_handle(tx, rx).await
+    }
+
+    async fn handle_message(&mut self, tx: &mut Transaction) -> Result<()> {
+        debug!(id=%self.id(),"received message {}", tx.original.uri);
+        let (handle, rx) = TransactionHandle::new();
+        self.inner
+            .transition(DialogState::Message(self.id(), tx.original.clone(), handle))?;
+
+        self.inner.process_transaction_handle(tx, rx).await
+    }
+
+    async fn handle_notify(&mut self, tx: &mut Transaction) -> Result<()> {
+        debug!(id=%self.id(),"received notify {}", tx.original.uri);
+        let (handle, rx) = TransactionHandle::new();
+        self.inner
+            .transition(DialogState::Notify(self.id(), tx.original.clone(), handle))?;
+        self.inner.process_transaction_handle(tx, rx).await
     }
 
     pub async fn process_invite(

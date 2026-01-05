@@ -1,6 +1,7 @@
 use super::authenticate::Credential;
 use super::dialog::DialogStateSender;
 use super::{dialog::Dialog, server_dialog::ServerInviteDialog, DialogId};
+use super::subscription::ServerSubscriptionDialog;
 use crate::dialog::client_dialog::ClientInviteDialog;
 use crate::dialog::dialog::{DialogInner, DialogStateReceiver};
 use crate::transaction::key::TransactionRole;
@@ -204,6 +205,67 @@ impl DialogLayer {
             .unwrap()
             .insert(id.to_string(), Dialog::ServerInvite(dialog.clone()));
         info!(%id, "server invite dialog created");
+        Ok(dialog)
+    }
+
+    pub fn get_or_create_server_subscription(
+        &self,
+        tx: &Transaction,
+        state_sender: DialogStateSender,
+        credential: Option<Credential>,
+        local_contact: Option<rsip::Uri>,
+    ) -> Result<ServerSubscriptionDialog> {
+        let mut id = DialogId::try_from(&tx.original)?;
+        if !id.to_tag.is_empty() {
+            let dlg = self
+                .inner
+                .dialogs
+                .read()
+                .unwrap()
+                .get(&id.to_string())
+                .cloned();
+            match dlg {
+                Some(Dialog::ServerSubscription(dlg)) => return Ok(dlg),
+                _ => {
+                    return Err(crate::Error::DialogError(
+                        "the dialog not found".to_string(),
+                        id,
+                        rsip::StatusCode::CallTransactionDoesNotExist,
+                    ));
+                }
+            }
+        }
+        id.to_tag = make_tag().to_string(); // generate to tag
+
+        let mut local_contact = local_contact;
+        if local_contact.is_none() {
+            local_contact = self
+                .build_local_contact(credential.as_ref().map(|cred| cred.username.clone()), None)
+                .ok();
+        }
+
+        let dlg_inner = DialogInner::new(
+            TransactionRole::Server,
+            id.clone(),
+            tx.original.clone(),
+            self.endpoint.clone(),
+            state_sender,
+            credential,
+            local_contact,
+            tx.tu_sender.clone(),
+        )?;
+
+        *dlg_inner.remote_contact.lock().unwrap() = tx.original.contact_header().ok().cloned();
+
+        let dialog = ServerSubscriptionDialog {
+            inner: Arc::new(dlg_inner),
+        };
+        self.inner
+            .dialogs
+            .write()
+            .unwrap()
+            .insert(id.to_string(), Dialog::ServerSubscription(dialog.clone()));
+        info!(%id, "server subscription dialog created");
         Ok(dialog)
     }
 

@@ -11,6 +11,7 @@ pub mod dialog_layer;
 pub mod invitation;
 pub mod registration;
 pub mod server_dialog;
+pub mod subscription;
 
 #[cfg(test)]
 mod tests;
@@ -132,7 +133,11 @@ impl TryFrom<&Response> for DialogId {
 impl std::fmt::Display for DialogId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.from_tag > self.to_tag {
-            write!(f, "{}-{}-{}", self.call_id, self.from_tag, self.to_tag)
+            if self.to_tag.is_empty() {
+                write!(f, "{}-{}", self.call_id, self.from_tag)
+            } else {
+                write!(f, "{}-{}-{}", self.call_id, self.from_tag, self.to_tag)
+            }
         } else {
             write!(f, "{}-{}-{}", self.call_id, self.to_tag, self.from_tag)
         }
