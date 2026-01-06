@@ -403,12 +403,6 @@ async fn process_dialog(
                 info!("Dialog terminated {} {:?}", id, reason);
                 dialog_layer.remove_dialog(&id);
             }
-            DialogState::Refer(id, req, _handle) => {
-                info!("Received REFER for dialog {}: {}", id, req.uri);
-            }
-            DialogState::Message(id, req, _handle) => {
-                info!("Received MESSAGE for dialog {}: {}", id, req.uri);
-            }
             _ => {
                 info!("Received dialog state: {}", state);
             }
