@@ -36,7 +36,11 @@ pub type TransactionCommandSender = mpsc::Sender<TransactionCommand>;
 pub type TransactionCommandReceiver = mpsc::Receiver<TransactionCommand>;
 #[derive(Debug)]
 pub enum TransactionCommand {
-    Respond(rsip::Response),
+    Respond {
+        status: StatusCode,
+        headers: Option<Vec<rsip::Header>>,
+        body: Option<Vec<u8>>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -50,12 +54,25 @@ impl TransactionHandle {
         (Self { sender: tx }, rx)
     }
 
+    pub async fn reply(
+        &self,
+        status: StatusCode,
+    ) -> std::result::Result<(), mpsc::error::SendError<TransactionCommand>> {
+        self.respond(status, None, None).await
+    }
+
     pub async fn respond(
         &self,
-        response: rsip::Response,
+        status: StatusCode,
+        headers: Option<Vec<rsip::Header>>,
+        body: Option<Vec<u8>>,
     ) -> std::result::Result<(), mpsc::error::SendError<TransactionCommand>> {
         self.sender
-            .send(TransactionCommand::Respond(response))
+            .send(TransactionCommand::Respond {
+                status,
+                headers,
+                body,
+            })
             .await
     }
 }
@@ -968,10 +985,15 @@ impl DialogInner {
         let result = tokio::time::timeout(timeout_duration, async {
             while let Some(cmd) = rx.recv().await {
                 match cmd {
-                    TransactionCommand::Respond(response) => {
-                        let is_final =
-                            response.status_code.kind() != rsip::StatusCodeKind::Provisional;
+                    TransactionCommand::Respond {
+                        status,
+                        headers,
+                        body,
+                    } => {
+                        let is_final = status.kind() != StatusCodeKind::Provisional;
+                        let response = self.make_response(&tx.original, status, headers, body);
                         tx.respond(response).await?;
+
                         if is_final {
                             return Ok(());
                         }
