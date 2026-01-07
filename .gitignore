@@ -7,3 +7,4 @@ Cargo.lock
 prompt.txt
 /test/web/.next
 /test/web/node_modules
+.idea

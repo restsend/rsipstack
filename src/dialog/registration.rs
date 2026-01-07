@@ -119,7 +119,26 @@ pub struct Registration {
     pub allow: rsip::headers::Allow,
     /// Public address detected by the server (IP and port)
     pub public_address: Option<rsip::HostWithPort>,
-    pub call_id: rsip::headers::CallId,
+    /// Call-ID header value for the registration dialog
+    ///
+    /// The Call-ID is a unique identifier for this registration session.
+    /// If not explicitly set, a new Call-ID will be automatically generated
+    /// during the first registration attempt. Once set, the same Call-ID
+    /// will be reused for all subsequent re-registrations to maintain
+    /// dialog continuity.
+    pub call_id: Option<rsip::headers::CallId>,
+    /// Outbound proxy URI for SIP requests
+    ///
+    /// When set, all SIP REGISTER requests will be sent to this proxy server
+    /// instead of directly to the registrar. The Request-URI will use the
+    /// proxy address while keeping the To/From headers pointing to the
+    /// actual registrar. This is useful for:
+    ///
+    /// * **NAT Traversal** - Route through an edge proxy for better connectivity
+    /// * **Security** - Force all traffic through a trusted proxy server
+    /// * **Load Balancing** - Distribute requests across multiple servers
+    /// * **Corporate Networks** - Comply with outbound proxy requirements
+    pub outbound_proxy: Option<rsip::Uri>
 }
 
 impl Registration {
@@ -159,7 +178,6 @@ impl Registration {
     /// # }
     /// ```
     pub fn new(endpoint: EndpointInnerRef, credential: Option<Credential>) -> Self {
-        let call_id = make_call_id(endpoint.option.callid_suffix.as_deref());
         Self {
             last_seq: 0,
             endpoint,
@@ -167,10 +185,158 @@ impl Registration {
             contact: None,
             allow: Default::default(),
             public_address: None,
-            call_id,
+            call_id: None,
+            outbound_proxy: None
         }
     }
 
+    /// Set a custom Call-ID for the registration dialog
+    ///
+    /// Sets a specific Call-ID header value to be used for this registration
+    /// session. The Call-ID uniquely identifies the registration dialog and
+    /// must remain consistent across re-registrations.
+    ///
+    /// If not set, a Call-ID will be automatically generated during the first
+    /// registration attempt. Use this method when you need to:
+    ///
+    /// * **Resume Registration** - Continue an existing registration session
+    /// * **Custom Format** - Use a specific Call-ID format or pattern
+    /// * **Debugging** - Use predictable Call-IDs for testing
+    /// * **Compliance** - Meet specific protocol requirements
+    ///
+    /// # Parameters
+    ///
+    /// * `call_id` - The Call-ID header to use for registration
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining
+    ///
+    /// # Examples
+    ///
+    /// ## Using a Custom Call-ID
+    ///
+    /// ```rust,no_run
+    /// # use rsipstack::dialog::registration::Registration;
+    /// # use rsipstack::transaction::endpoint::Endpoint;
+    /// # fn example() {
+    /// # let endpoint: Endpoint = todo!();
+    /// let call_id = rsip::headers::CallId::new("my-custom-id@example.com");
+    /// let registration = Registration::new(endpoint.inner.clone(), None)
+    ///     .set_call_id(call_id);
+    /// # }
+    /// ```
+    ///
+    /// ## Resuming a Registration Session
+    ///
+    /// ```rust,no_run
+    /// # use rsipstack::dialog::registration::Registration;
+    /// # use rsipstack::transaction::endpoint::Endpoint;
+    /// # fn example() {
+    /// # let endpoint: Endpoint = todo!();
+    /// // First registration
+    /// let mut registration = Registration::new(endpoint.inner.clone(), None);
+    /// // ... perform registration and save call_id
+    /// # let saved_call_id = rsip::headers::CallId::new("session-123@device");
+    ///
+    /// // Later, resume with the same Call-ID
+    /// let resumed_registration = Registration::new(endpoint.inner.clone(), None)
+    ///     .set_call_id(saved_call_id);
+    /// # }
+    /// ```
+    pub fn set_call_id(mut self, call_id: rsip::headers::CallId) -> Self {
+        self.call_id = Some(call_id);
+        self
+    }
+
+    /// Set an outbound proxy for SIP REGISTER requests
+    ///
+    /// Configures an outbound proxy server that will receive all SIP REGISTER
+    /// requests instead of sending them directly to the registrar. When set,
+    /// the Request-URI will point to the proxy while the To/From headers
+    /// continue to identify the actual registrar server.
+    ///
+    /// This is commonly used for:
+    ///
+    /// * **NAT Traversal** - Route through edge proxies for better reachability
+    /// * **Network Requirements** - Corporate networks requiring proxy usage
+    /// * **Load Distribution** - Balance load across multiple proxy servers
+    /// * **Security Policies** - Enforce traffic through authorized proxies
+    ///
+    /// # Parameters
+    ///
+    /// * `outbound_proxy` - URI of the outbound proxy server
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining
+    ///
+    /// # Examples
+    ///
+    /// ## Using an Outbound Proxy
+    ///
+    /// ```rust,no_run
+    /// # use rsipstack::dialog::registration::Registration;
+    /// # use rsipstack::transaction::endpoint::Endpoint;
+    /// # async fn example() -> rsipstack::Result<()> {
+    /// # let endpoint: Endpoint = todo!();
+    /// let proxy = rsip::Uri::try_from("sip:proxy.example.com:5060").unwrap();
+    /// let registrar = rsip::Uri::try_from("sip:registrar.example.com").unwrap();
+    ///
+    /// let mut registration = Registration::new(endpoint.inner.clone(), None)
+    ///     .set_outbound_proxy(proxy);
+    ///
+    /// // REGISTER will be sent to proxy.example.com, but
+    /// // To/From headers will reference registrar.example.com
+    /// let response = registration.register(registrar, None).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// ## Proxy with Authentication
+    ///
+    /// ```rust,no_run
+    /// # use rsipstack::dialog::registration::Registration;
+    /// # use rsipstack::dialog::authenticate::Credential;
+    /// # use rsipstack::transaction::endpoint::Endpoint;
+    /// # async fn example() -> rsipstack::Result<()> {
+    /// # let endpoint: Endpoint = todo!();
+    /// let credential = Credential {
+    ///     username: "alice".to_string(),
+    ///     password: "secret123".to_string(),
+    ///     realm: Some("example.com".to_string()),
+    /// };
+    ///
+    /// let proxy = rsip::Uri::try_from("sip:10.0.0.1:5060").unwrap();
+    /// let registrar = rsip::Uri::try_from("sip:sip.example.com").unwrap();
+    ///
+    /// let mut registration = Registration::new(endpoint.inner.clone(), Some(credential))
+    ///     .set_outbound_proxy(proxy);
+    ///
+    /// let response = registration.register(registrar, None).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// ## Chaining Multiple Configurations
+    ///
+    /// ```rust,no_run
+    /// # use rsipstack::dialog::registration::Registration;
+    /// # use rsipstack::transaction::endpoint::Endpoint;
+    /// # fn example() {
+    /// # let endpoint: Endpoint = todo!();
+    /// let call_id = rsip::headers::CallId::new("session-456@device");
+    /// let proxy = rsip::Uri::try_from("sip:proxy.example.com").unwrap();
+    ///
+    /// let registration = Registration::new(endpoint.inner.clone(), None)
+    ///     .set_call_id(call_id)
+    ///     .set_outbound_proxy(proxy);
+    /// # }
+    /// ```
+    pub fn set_outbound_proxy(mut self, outbound_proxy: rsip::Uri) -> Self {
+        self.outbound_proxy = Some(outbound_proxy);
+        self
+    }
     /// Get the discovered public address
     ///
     /// Returns the public IP address and port discovered during the registration
@@ -395,9 +561,18 @@ impl Registration {
                 params: vec![],
             }
         });
+
+        let request_uri = if let Some(ref proxy) = self.outbound_proxy {
+            debug!("use Outbound proxy mode: proxy={}", proxy);
+            proxy.clone()
+        } else {
+            debug!("Use standard mode: server={}", server);
+            server.clone()
+        };
+
         let mut request = self.endpoint.make_request(
             rsip::Method::Register,
-            server,
+            request_uri,
             via,
             from,
             to,
@@ -405,8 +580,14 @@ impl Registration {
             None,
         );
 
+        let call_id = self.call_id.clone().unwrap_or_else(|| {
+            let new_call_id = make_call_id(self.endpoint.option.callid_suffix.as_deref());
+            self.call_id = Some(new_call_id.clone());  // ← 保存生成的 call_id
+            new_call_id
+        });
+
         // Thanks to https://github.com/restsend/rsipstack/issues/32
-        request.headers.unique_push(self.call_id.clone().into());
+        request.headers.unique_push(call_id.into());
         request.headers.unique_push(contact.into());
         request.headers.unique_push(self.allow.clone().into());
         if let Some(expires) = expires {
