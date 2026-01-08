@@ -402,15 +402,19 @@ impl EndpointInner {
                                             return Ok(());
                                         }
                                     }
-                                    rsip::StatusCodeKind::RequestFailure => {
-                                        // for ACK to 487, send it where it came from
-                                        connection.send(last_message, Some(from)).await?;
-                                        return Ok(());
-                                    }
                                     _ => {}
                                 }
-                                if let Ok(Some(tag)) = resp.to_header()?.tag() {
+
+                                if let Ok(Some(tag)) = resp.to_header().and_then(|h| h.tag()) {
                                     last_req.to_header_mut().and_then(|h| h.mut_tag(tag)).ok();
+                                }
+
+                                if let rsip::StatusCodeKind::RequestFailure =
+                                    resp.status_code.kind()
+                                {
+                                    // for ACK to 487, send it where it came from
+                                    connection.send(last_message, Some(from)).await?;
+                                    return Ok(());
                                 }
                             }
                         }
