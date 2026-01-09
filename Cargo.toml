@@ -60,10 +60,15 @@ axum = { version = "0.8.8", features = ["ws"] }
 tower = "0.5.2"
 tower-http = { version = "0.6.7", features = ["fs", "cors"] }
 http = "1.4.0"
+uuid = { version = "1.0", features = ["v4"] }
 
 [[example]]
 name = "client"
 path = "examples/client/main.rs"
+
+[[example]]
+name = "sip-caller"
+path = "examples/sip-caller/main.rs"
 
 [[example]]
 name = "proxy"

@@ -292,13 +292,74 @@ pub fn make_via_branch() -> rsip::Param {
     rsip::Param::Branch(format!("z9hG4bK{}", random_text(BRANCH_LEN)).into())
 }
 
-pub fn make_call_id(domain: Option<&str>) -> rsip::headers::CallId {
+// Global Call-ID generator function pointer (similar to Go's approach)
+static MAKE_CALL_ID_GENERATOR: std::sync::RwLock<fn(Option<&str>) -> rsip::headers::CallId> =
+    std::sync::RwLock::new(default_make_call_id);
+
+/// Default Call-ID generator implementation
+///
+/// Generates Call-ID in the format: `<random-22-chars>@<domain>`
+fn default_make_call_id(domain: Option<&str>) -> rsip::headers::CallId {
     format!(
         "{}@{}",
         random_text(CALL_ID_LEN),
         domain.unwrap_or("restsend.com")
     )
     .into()
+}
+
+/// Set a custom Call-ID generator function
+///
+/// This allows external projects to override the default Call-ID generation
+/// logic globally. The custom generator will be used by all endpoints and
+/// registrations.
+///
+/// # Parameters
+///
+/// * `generator` - Function that takes an optional domain and returns a Call-ID
+///
+/// # Examples
+///
+/// ```rust
+/// use rsipstack::transaction::set_make_call_id_generator;
+///
+/// // Use custom UUID-based Call-ID
+/// set_make_call_id_generator(|domain| {
+///     format!(
+///         "{}@{}",
+///         uuid::Uuid::new_v4(),
+///         domain.unwrap_or("example.com")
+///     )
+///     .into()
+/// });
+/// ```
+pub fn set_make_call_id_generator(generator: fn(Option<&str>) -> rsip::headers::CallId) {
+    *MAKE_CALL_ID_GENERATOR.write().unwrap() = generator;
+}
+
+/// Generate a Call-ID header value
+///
+/// Uses the configured generator (set via `set_make_call_id_generator`),
+/// or the default implementation if no custom generator is set.
+///
+/// # Parameters
+///
+/// * `domain` - Optional domain suffix for the Call-ID
+///
+/// # Returns
+///
+/// A Call-ID header value
+///
+/// # Examples
+///
+/// ```rust
+/// use rsipstack::transaction::make_call_id;
+///
+/// let call_id = make_call_id(Some("example.com"));
+/// ```
+pub fn make_call_id(domain: Option<&str>) -> rsip::headers::CallId {
+    let generator = MAKE_CALL_ID_GENERATOR.read().unwrap();
+    generator(domain)
 }
 
 pub fn make_tag() -> rsip::param::Tag {

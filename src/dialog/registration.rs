@@ -127,18 +127,6 @@ pub struct Registration {
     /// will be reused for all subsequent re-registrations to maintain
     /// dialog continuity.
     pub call_id: Option<rsip::headers::CallId>,
-    /// Outbound proxy URI for SIP requests
-    ///
-    /// When set, all SIP REGISTER requests will be sent to this proxy server
-    /// instead of directly to the registrar. The Request-URI will use the
-    /// proxy address while keeping the To/From headers pointing to the
-    /// actual registrar. This is useful for:
-    ///
-    /// * **NAT Traversal** - Route through an edge proxy for better connectivity
-    /// * **Security** - Force all traffic through a trusted proxy server
-    /// * **Load Balancing** - Distribute requests across multiple servers
-    /// * **Corporate Networks** - Comply with outbound proxy requirements
-    pub outbound_proxy: Option<rsip::Uri>
 }
 
 impl Registration {
@@ -186,7 +174,6 @@ impl Registration {
             allow: Default::default(),
             public_address: None,
             call_id: None,
-            outbound_proxy: None
         }
     }
 
@@ -223,7 +210,7 @@ impl Registration {
     /// # let endpoint: Endpoint = todo!();
     /// let call_id = rsip::headers::CallId::new("my-custom-id@example.com");
     /// let registration = Registration::new(endpoint.inner.clone(), None)
-    ///     .set_call_id(call_id);
+    ///     .with_call_id(call_id);
     /// # }
     /// ```
     ///
@@ -241,102 +228,14 @@ impl Registration {
     ///
     /// // Later, resume with the same Call-ID
     /// let resumed_registration = Registration::new(endpoint.inner.clone(), None)
-    ///     .set_call_id(saved_call_id);
+    ///     .with_call_id(saved_call_id);
     /// # }
     /// ```
-    pub fn set_call_id(mut self, call_id: rsip::headers::CallId) -> Self {
+    pub fn with_call_id(mut self, call_id: rsip::headers::CallId) -> Self {
         self.call_id = Some(call_id);
         self
     }
 
-    /// Set an outbound proxy for SIP REGISTER requests
-    ///
-    /// Configures an outbound proxy server that will receive all SIP REGISTER
-    /// requests instead of sending them directly to the registrar. When set,
-    /// the Request-URI will point to the proxy while the To/From headers
-    /// continue to identify the actual registrar server.
-    ///
-    /// This is commonly used for:
-    ///
-    /// * **NAT Traversal** - Route through edge proxies for better reachability
-    /// * **Network Requirements** - Corporate networks requiring proxy usage
-    /// * **Load Distribution** - Balance load across multiple proxy servers
-    /// * **Security Policies** - Enforce traffic through authorized proxies
-    ///
-    /// # Parameters
-    ///
-    /// * `outbound_proxy` - URI of the outbound proxy server
-    ///
-    /// # Returns
-    ///
-    /// Self for method chaining
-    ///
-    /// # Examples
-    ///
-    /// ## Using an Outbound Proxy
-    ///
-    /// ```rust,no_run
-    /// # use rsipstack::dialog::registration::Registration;
-    /// # use rsipstack::transaction::endpoint::Endpoint;
-    /// # async fn example() -> rsipstack::Result<()> {
-    /// # let endpoint: Endpoint = todo!();
-    /// let proxy = rsip::Uri::try_from("sip:proxy.example.com:5060").unwrap();
-    /// let registrar = rsip::Uri::try_from("sip:registrar.example.com").unwrap();
-    ///
-    /// let mut registration = Registration::new(endpoint.inner.clone(), None)
-    ///     .set_outbound_proxy(proxy);
-    ///
-    /// // REGISTER will be sent to proxy.example.com, but
-    /// // To/From headers will reference registrar.example.com
-    /// let response = registration.register(registrar, None).await?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    ///
-    /// ## Proxy with Authentication
-    ///
-    /// ```rust,no_run
-    /// # use rsipstack::dialog::registration::Registration;
-    /// # use rsipstack::dialog::authenticate::Credential;
-    /// # use rsipstack::transaction::endpoint::Endpoint;
-    /// # async fn example() -> rsipstack::Result<()> {
-    /// # let endpoint: Endpoint = todo!();
-    /// let credential = Credential {
-    ///     username: "alice".to_string(),
-    ///     password: "secret123".to_string(),
-    ///     realm: Some("example.com".to_string()),
-    /// };
-    ///
-    /// let proxy = rsip::Uri::try_from("sip:10.0.0.1:5060").unwrap();
-    /// let registrar = rsip::Uri::try_from("sip:sip.example.com").unwrap();
-    ///
-    /// let mut registration = Registration::new(endpoint.inner.clone(), Some(credential))
-    ///     .set_outbound_proxy(proxy);
-    ///
-    /// let response = registration.register(registrar, None).await?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    ///
-    /// ## Chaining Multiple Configurations
-    ///
-    /// ```rust,no_run
-    /// # use rsipstack::dialog::registration::Registration;
-    /// # use rsipstack::transaction::endpoint::Endpoint;
-    /// # fn example() {
-    /// # let endpoint: Endpoint = todo!();
-    /// let call_id = rsip::headers::CallId::new("session-456@device");
-    /// let proxy = rsip::Uri::try_from("sip:proxy.example.com").unwrap();
-    ///
-    /// let registration = Registration::new(endpoint.inner.clone(), None)
-    ///     .set_call_id(call_id)
-    ///     .set_outbound_proxy(proxy);
-    /// # }
-    /// ```
-    pub fn set_outbound_proxy(mut self, outbound_proxy: rsip::Uri) -> Self {
-        self.outbound_proxy = Some(outbound_proxy);
-        self
-    }
     /// Get the discovered public address
     ///
     /// Returns the public IP address and port discovered during the registration
@@ -511,6 +410,41 @@ impl Registration {
     /// If you want to use a specific Contact header, you can set it manually
     /// before calling this method.
     ///
+    /// # Outbound Proxy / Route Headers
+    ///
+    /// If a route_set is configured via `with_route_set()`, this method will add
+    /// Route headers to the REGISTER request according to RFC 3261 routing rules.
+    /// The implementation supports both loose routing and strict routing:
+    ///
+    /// ## Loose Routing (Modern, Recommended)
+    ///
+    /// When the first route URI contains the 'lr' parameter:
+    /// * **Request-URI**: Always set to the target server (registrar)
+    /// * **Route Headers**: Added for each proxy in the route_set
+    /// * **Example**:
+    ///   ```text
+    ///   REGISTER sip:registrar.example.com SIP/2.0
+    ///   Route: <sip:proxy.example.com:5060;lr>
+    ///   To: <sip:user@example.com>
+    ///   From: <sip:user@example.com>;tag=...
+    ///   ```
+    ///
+    /// ## Strict Routing (Legacy)
+    ///
+    /// When the first route URI lacks the 'lr' parameter:
+    /// * **Request-URI**: Set to the first proxy from route_set
+    /// * **Route Headers**: Remaining proxies + target server as last value
+    /// * **Example**:
+    ///   ```text
+    ///   REGISTER sip:proxy.example.com:5060 SIP/2.0
+    ///   Route: <sip:registrar.example.com>
+    ///   To: <sip:user@example.com>
+    ///   From: <sip:user@example.com>;tag=...
+    ///   ```
+    ///
+    /// **Recommendation**: Always use the 'lr' parameter in proxy URIs for loose
+    /// routing, as it's the modern standard and provides better compatibility.
+    ///
     pub async fn register(&mut self, server: rsip::Uri, expires: Option<u32>) -> Result<Response> {
         self.last_seq += 1;
 
@@ -562,12 +496,42 @@ impl Registration {
             }
         });
 
-        let request_uri = if let Some(ref proxy) = self.outbound_proxy {
-            debug!("use Outbound proxy mode: proxy={}", proxy);
-            proxy.clone()
+        // RFC 3261 Section 12.2.1.1: Request construction with route set
+        // Use Endpoint's global route_set
+        let effective_route_set = &self.endpoint.route_set;
+
+        // Determine Request-URI and Route headers based on routing mode
+        let (request_uri, route_headers) = if !effective_route_set.is_empty() {
+            // Check if the first route URI contains the 'lr' parameter (loose routing)
+            let first_route = &effective_route_set[0];
+            let is_loose_routing = first_route.params.iter().any(|p| matches!(p, rsip::Param::Lr));
+
+            if is_loose_routing {
+                // Loose Routing (RFC 3261 Section 12.2.1.1):
+                // - Request-URI is the remote target (server/registrar)
+                // - Route headers contain all route set values in order
+                info!("Using loose routing (lr parameter present)");
+                (server.clone(), effective_route_set.clone())
+            } else {
+                // Strict Routing (RFC 3261 Section 12.2.1.1):
+                // - Request-URI is the first route from route set (without headers)
+                // - Route headers contain remaining routes + remote target as last value
+                info!("Using strict routing (lr parameter absent)");
+
+                // Create Request-URI from first route, stripping headers per RFC 3261
+                let mut request_uri = first_route.clone();
+                request_uri.headers.clear(); // RFC 3261: strip headers not allowed in Request-URI
+
+                // Build Route header values: remaining routes + server as last value
+                let mut routes = effective_route_set[1..].to_vec(); // Skip first route
+                routes.push(server.clone()); // Add server as last route
+
+                (request_uri, routes)
+            }
         } else {
-            debug!("Use standard mode: server={}", server);
-            server.clone()
+            // No route set: standard direct routing
+            // Request-URI is the server, no Route headers
+            (server.clone(), vec![])
         };
 
         let mut request = self.endpoint.make_request(
@@ -582,7 +546,7 @@ impl Registration {
 
         let call_id = self.call_id.clone().unwrap_or_else(|| {
             let new_call_id = make_call_id(self.endpoint.option.callid_suffix.as_deref());
-            self.call_id = Some(new_call_id.clone());  // ← 保存生成的 call_id
+            self.call_id = Some(new_call_id.clone());
             new_call_id
         });
 
@@ -594,6 +558,20 @@ impl Registration {
             request
                 .headers
                 .unique_push(rsip::headers::Expires::from(expires).into());
+        }
+
+        // Inject Route headers based on routing mode
+        if !route_headers.is_empty() {
+            for route_uri in &route_headers {
+                let uri_with_params = rsip::UriWithParams {
+                    uri: route_uri.clone(),
+                    params: vec![],
+                };
+                let uri_with_params_list = rsip::UriWithParamsList(vec![uri_with_params]);
+                let typed_route = rsip::typed::Route(uri_with_params_list);
+                request.headers.push(rsip::headers::Route::from(typed_route).into());
+            }
+            info!("Route headers added: {} route(s)", route_headers.len());
         }
 
         let key = TransactionKey::from_request(&request, TransactionRole::Client)?;

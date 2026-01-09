@@ -100,7 +100,33 @@ impl EndpointInner {
         call_id: Option<rsip::headers::CallId>,
     ) -> rsip::Request {
         let call_id = call_id.unwrap_or_else(|| make_call_id(self.option.callid_suffix.as_deref()));
-        let headers = vec![
+
+        // RFC 3261 Section 12.2.1.1: Apply global route set if configured
+        // Determine Request-URI and Route headers based on routing mode
+        let (final_req_uri, route_headers) = if !self.route_set.is_empty() {
+            // Check if the first route URI contains the 'lr' parameter (loose routing)
+            let first_route = &self.route_set[0];
+            let is_loose_routing = first_route.params.iter().any(|p| matches!(p, rsip::Param::Lr));
+
+            if is_loose_routing {
+                // Loose Routing: Request-URI unchanged, Route headers = all proxies
+                (req_uri.clone(), self.route_set.clone())
+            } else {
+                // Strict Routing: Request-URI = first proxy, Route headers = remaining + target
+                let mut request_uri = first_route.clone();
+                request_uri.headers.clear(); // RFC 3261: strip headers
+
+                let mut routes = self.route_set[1..].to_vec();
+                routes.push(req_uri.clone());
+
+                (request_uri, routes)
+            }
+        } else {
+            // No global route set: use Request-URI as-is
+            (req_uri, vec![])
+        };
+
+        let mut headers = vec![
             Header::Via(via.into()),
             Header::CallId(call_id),
             Header::From(from.into()),
@@ -109,9 +135,23 @@ impl EndpointInner {
             Header::MaxForwards(70.into()),
             Header::UserAgent(self.user_agent.clone().into()),
         ];
+
+        // Inject Route headers if route_set is configured
+        if !route_headers.is_empty() {
+            for route_uri in &route_headers {
+                let uri_with_params = rsip::UriWithParams {
+                    uri: route_uri.clone(),
+                    params: vec![],
+                };
+                let uri_with_params_list = rsip::UriWithParamsList(vec![uri_with_params]);
+                let typed_route = rsip::typed::Route(uri_with_params_list);
+                headers.push(rsip::headers::Route::from(typed_route).into());
+            }
+        }
+
         rsip::Request {
             method,
-            uri: req_uri,
+            uri: final_req_uri,
             headers: headers.into(),
             body: vec![],
             version: rsip::Version::V2,

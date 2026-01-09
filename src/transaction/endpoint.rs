@@ -91,12 +91,19 @@ pub struct EndpointStats {
 /// * `cancel_token` - Cancellation token for graceful shutdown
 /// * `timer_interval` - Interval for timer processing
 /// * `t1`, `t4`, `t1x64` - SIP timer values as per RFC 3261
+/// * `route_set` - Global route set for outbound proxy support (RFC 3261)
 ///
 /// # Timer Values
 ///
 /// * `t1` - RTT estimate (default 500ms)
 /// * `t4` - Maximum duration a message will remain in the network (default 4s)
 /// * `t1x64` - Maximum retransmission timeout (default 32s)
+///
+/// # Route Set
+///
+/// The global route set defines a default proxy path that all out-of-dialog
+/// requests will use. This implements RFC 3261 outbound proxy support.
+/// Individual dialogs or registrations can override this with their own route sets.
 pub struct EndpointInner {
     pub allows: Mutex<Option<Vec<rsip::Method>>>,
     pub user_agent: String,
@@ -114,6 +121,17 @@ pub struct EndpointInner {
     pub(super) locator: Option<Box<dyn TargetLocator>>,
     pub(super) transport_inspector: Option<Box<dyn TransportEventInspector>>,
     pub option: EndpointOption,
+    /// Global route set for outbound proxy support
+    ///
+    /// When configured, all out-of-dialog requests created by this endpoint
+    /// will include Route headers based on this route set. Supports both
+    /// loose routing (with 'lr' parameter) and strict routing.
+    ///
+    /// This is useful for:
+    /// * Corporate networks requiring all traffic through a specific proxy
+    /// * NAT traversal via edge proxies
+    /// * Load balancing across multiple proxy servers
+    pub route_set: Vec<rsip::Uri>,
 }
 pub type EndpointInnerRef = Arc<EndpointInner>;
 
@@ -145,6 +163,7 @@ pub struct EndpointBuilder {
     message_inspector: Option<Box<dyn MessageInspector>>,
     target_locator: Option<Box<dyn TargetLocator>>,
     transport_inspector: Option<Box<dyn TransportEventInspector>>,
+    route_set: Vec<rsip::Uri>,
 }
 
 /// SIP Endpoint
@@ -213,6 +232,7 @@ impl EndpointInner {
         message_inspector: Option<Box<dyn MessageInspector>>,
         locator: Option<Box<dyn TargetLocator>>,
         transport_inspector: Option<Box<dyn TransportEventInspector>>,
+        route_set: Vec<rsip::Uri>,
     ) -> Arc<Self> {
         let (incoming_sender, incoming_receiver) = unbounded_channel();
         Arc::new(EndpointInner {
@@ -231,6 +251,7 @@ impl EndpointInner {
             message_inspector,
             locator,
             transport_inspector,
+            route_set,
         })
     }
 
@@ -590,6 +611,7 @@ impl EndpointBuilder {
             message_inspector: None,
             target_locator: None,
             transport_inspector: None,
+            route_set: Vec::new(),
         }
     }
     pub fn with_option(&mut self, option: EndpointOption) -> &mut Self {
@@ -636,6 +658,31 @@ impl EndpointBuilder {
         self
     }
 
+    /// Configure global route set for outbound proxy support
+    ///
+    /// Sets a global route set that will be used for all out-of-dialog requests
+    /// created by this endpoint. This implements RFC 3261 compliant outbound
+    /// proxy support with both loose routing and strict routing.
+    ///
+    /// # Parameters
+    ///
+    /// * `route_set` - Ordered list of proxy URIs to route through
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use rsipstack::EndpointBuilder;
+    ///
+    /// let proxy = rsip::Uri::try_from("sip:proxy.example.com:5060;lr").unwrap();
+    /// let mut builder = EndpointBuilder::new();
+    /// builder.with_route_set(vec![proxy]);
+    /// let endpoint = builder.build();
+    /// ```
+    pub fn with_route_set(&mut self, route_set: Vec<rsip::Uri>) -> &mut Self {
+        self.route_set = route_set;
+        self
+    }
+
     pub fn build(&mut self) -> Endpoint {
         let cancel_token = self.cancel_token.take().unwrap_or_default();
 
@@ -651,6 +698,7 @@ impl EndpointBuilder {
         let message_inspector = self.message_inspector.take();
         let locator = self.target_locator.take();
         let transport_inspector = self.transport_inspector.take();
+        let route_set = self.route_set.clone();
 
         let core = EndpointInner::new(
             user_agent,
@@ -662,6 +710,7 @@ impl EndpointBuilder {
             message_inspector,
             locator,
             transport_inspector,
+            route_set,
         );
 
         Endpoint { inner: core }
