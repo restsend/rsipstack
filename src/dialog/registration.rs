@@ -504,7 +504,10 @@ impl Registration {
         let (request_uri, route_headers) = if !effective_route_set.is_empty() {
             // Check if the first route URI contains the 'lr' parameter (loose routing)
             let first_route = &effective_route_set[0];
-            let is_loose_routing = first_route.params.iter().any(|p| matches!(p, rsip::Param::Lr));
+            let is_loose_routing = first_route
+                .params
+                .iter()
+                .any(|p| matches!(p, rsip::Param::Lr));
 
             if is_loose_routing {
                 // Loose Routing (RFC 3261 Section 12.2.1.1):
@@ -569,7 +572,9 @@ impl Registration {
                 };
                 let uri_with_params_list = rsip::UriWithParamsList(vec![uri_with_params]);
                 let typed_route = rsip::typed::Route(uri_with_params_list);
-                request.headers.push(rsip::headers::Route::from(typed_route).into());
+                request
+                    .headers
+                    .push(rsip::headers::Route::from(typed_route).into());
             }
             info!("Route headers added: {} route(s)", route_headers.len());
         }

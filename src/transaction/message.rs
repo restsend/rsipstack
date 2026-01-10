@@ -106,7 +106,10 @@ impl EndpointInner {
         let (final_req_uri, route_headers) = if !self.route_set.is_empty() {
             // Check if the first route URI contains the 'lr' parameter (loose routing)
             let first_route = &self.route_set[0];
-            let is_loose_routing = first_route.params.iter().any(|p| matches!(p, rsip::Param::Lr));
+            let is_loose_routing = first_route
+                .params
+                .iter()
+                .any(|p| matches!(p, rsip::Param::Lr));
 
             if is_loose_routing {
                 // Loose Routing: Request-URI unchanged, Route headers = all proxies

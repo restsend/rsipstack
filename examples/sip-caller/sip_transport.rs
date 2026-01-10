@@ -39,10 +39,8 @@ pub async fn create_transport_connection(
         Protocol::Tcp => {
             info!("创建 TCP 连接到服务器: {}", server_addr);
             // 将服务器地址转换为 SipAddr
-            let server_sip_addr = SipAddr::new(
-                rsip::transport::Transport::Tcp,
-                server_addr.try_into()?,
-            );
+            let server_sip_addr =
+                SipAddr::new(rsip::transport::Transport::Tcp, server_addr.try_into()?);
             let connection =
                 TcpConnection::connect(&server_sip_addr, Some(cancel_token.child_token())).await?;
             Ok(connection.into())
@@ -50,29 +48,21 @@ pub async fn create_transport_connection(
         Protocol::Ws => {
             info!("创建 WebSocket 连接到服务器: ws://{}", server_addr);
             // 将服务器地址转换为 SipAddr
-            let server_sip_addr = SipAddr::new(
-                rsip::transport::Transport::Ws,
-                server_addr.try_into()?,
-            );
-            let connection = WebSocketConnection::connect(
-                &server_sip_addr,
-                Some(cancel_token.child_token()),
-            )
-            .await?;
+            let server_sip_addr =
+                SipAddr::new(rsip::transport::Transport::Ws, server_addr.try_into()?);
+            let connection =
+                WebSocketConnection::connect(&server_sip_addr, Some(cancel_token.child_token()))
+                    .await?;
             Ok(connection.into())
         }
         Protocol::Wss => {
             info!("创建 WebSocket Secure 连接到服务器: wss://{}", server_addr);
             // 将服务器地址转换为 SipAddr
-            let server_sip_addr = SipAddr::new(
-                rsip::transport::Transport::Wss,
-                server_addr.try_into()?,
-            );
-            let connection = WebSocketConnection::connect(
-                &server_sip_addr,
-                Some(cancel_token.child_token()),
-            )
-            .await?;
+            let server_sip_addr =
+                SipAddr::new(rsip::transport::Transport::Wss, server_addr.try_into()?);
+            let connection =
+                WebSocketConnection::connect(&server_sip_addr, Some(cancel_token.child_token()))
+                    .await?;
             Ok(connection.into())
         }
     }

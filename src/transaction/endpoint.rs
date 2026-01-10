@@ -686,10 +686,45 @@ impl EndpointBuilder {
     pub fn build(&mut self) -> Endpoint {
         let cancel_token = self.cancel_token.take().unwrap_or_default();
 
-        let transport_layer = self
+        let mut transport_layer = self
             .transport_layer
             .take()
             .unwrap_or(TransportLayer::new(cancel_token.child_token()));
+
+        // If route_set is configured, set the first route as the outbound proxy
+        // for physical connection target (RFC 3261 Section 8.1.2)
+        if !self.route_set.is_empty() {
+            let first_route = &self.route_set[0];
+
+            // Try to determine transport from URI params first
+            let transport = first_route
+                .params
+                .iter()
+                .find_map(|p| match p {
+                    rsip::Param::Transport(t) => Some(*t),
+                    _ => None,
+                })
+                .or_else(|| {
+                    // Fallback: use default transport based on scheme
+                    // Do NOT infer from port numb er as ports are often customized
+                    match first_route.scheme.as_ref() {
+                        Some(rsip::Scheme::Sips) => {
+                            // Default sips: to TLS (RFC 3261)
+                            Some(rsip::Transport::Tls)
+                        }
+                        Some(rsip::Scheme::Sip) | Some(rsip::Scheme::Other(_)) | None => {
+                            // Default sip: to UDP (RFC 3261)
+                            Some(rsip::Transport::Udp)
+                        }
+                    }
+                });
+
+            let outbound_addr = crate::transport::SipAddr {
+                r#type: transport,
+                addr: first_route.host_with_port.clone(),
+            };
+            transport_layer.outbound = Some(outbound_addr);
+        }
 
         let allows = self.allows.to_owned();
         let user_agent = self.user_agent.to_owned();

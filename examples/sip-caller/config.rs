@@ -75,6 +75,33 @@ impl std::fmt::Display for Protocol {
     }
 }
 
+/// 从 rsip::Transport 转换为 Protocol
+impl From<rsip::transport::Transport> for Protocol {
+    fn from(transport: rsip::transport::Transport) -> Self {
+        match transport {
+            rsip::transport::Transport::Udp => Protocol::Udp,
+            rsip::transport::Transport::Tcp => Protocol::Tcp,
+            rsip::transport::Transport::Ws => Protocol::Ws,
+            rsip::transport::Transport::Wss => Protocol::Wss,
+            rsip::transport::Transport::Tls => Protocol::Tcp, // TLS over TCP
+            rsip::transport::Transport::Sctp => Protocol::Udp, // Fallback to UDP
+            rsip::transport::Transport::TlsSctp => Protocol::Tcp, // Fallback to TCP
+        }
+    }
+}
+
+/// 从 Protocol 转换为 rsip::Transport
+impl From<Protocol> for rsip::transport::Transport {
+    fn from(protocol: Protocol) -> Self {
+        match protocol {
+            Protocol::Udp => rsip::transport::Transport::Udp,
+            Protocol::Tcp => rsip::transport::Transport::Tcp,
+            Protocol::Ws => rsip::transport::Transport::Ws,
+            Protocol::Wss => rsip::transport::Transport::Wss,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

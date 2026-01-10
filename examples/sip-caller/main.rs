@@ -1,17 +1,34 @@
 use clap::Parser;
+mod config;
+mod rtp;
 /// SIP Caller 主程序（使用 rsipstack）
 ///
 /// 演示如何使用 rsipstack 进行注册和呼叫
 mod sip_client;
-mod config;
 mod sip_dialog;
-mod rtp;
 mod sip_transport;
 mod utils;
 
 use sip_client::{SipClient, SipClientConfig};
-use config::Protocol;
 use tracing::info;
+
+/// 解析 SIP URI，支持简单格式和完整 URI 格式
+///
+/// 简单格式如 "example.com:5060" 会自动添加 "sip:" scheme
+/// 完整格式如 "sip:example.com:5060;transport=tcp" 直接解析
+fn parse_sip_uri(s: &str) -> Result<rsip::Uri, String> {
+    // 如果不包含 scheme，添加默认的 sip:
+    let uri_with_scheme = if !s.contains(':') || s.chars().filter(|&c| c == ':').count() == 1 {
+        format!("sip:{}", s)
+    } else {
+        s.to_string()
+    };
+
+    uri_with_scheme
+        .as_str()
+        .try_into()
+        .map_err(|e: rsip::Error| format!("无效的 SIP URI '{}': {}", s, e))
+}
 
 /// SIP Caller - 基于 Rust 的 SIP 客户端
 #[derive(Parser, Debug)]
@@ -20,17 +37,19 @@ use tracing::info;
 #[command(version = "0.2.0")]
 #[command(about = "SIP 客户端，支持注册和呼叫功能", long_about = None)]
 struct Args {
-    /// SIP 服务器地址（例如：127.0.0.1:5060）
-    #[arg(short, long, default_value = "xfc:5060")]
-    server: String,
+    /// SIP 服务器地址
+    /// 支持多种格式：
+    ///   - 简单格式: "example.com:5060" (默认UDP)
+    ///   - 完整URI: "sip:example.com:5060;transport=tcp"
+    ///   - SIPS URI: "sips:example.com:5061" (自动使用TLS over TCP)
+    #[arg(short, long, value_parser = parse_sip_uri, default_value = "xfc:5060")]
+    server: rsip::Uri,
 
-    /// 传输协议类型 (udp, tcp, ws, wss)
-    #[arg(long, default_value = "udp")]
-    protocol: Protocol,
-
-    /// Outbound 代理服务器地址（可选，例如：proxy.example.com:5060）
-    #[arg(long)]
-    outbound_proxy: Option<String>,
+    /// Outbound 代理服务器地址（可选）
+    /// 支持完整URI格式，例如: "sip:proxy.example.com:5060;transport=udp;lr"
+    /// Transport参数将自动从URI中提取
+    #[arg(long, value_parser = parse_sip_uri)]
+    outbound_proxy: Option<rsip::Uri>,
 
     /// SIP 用户 ID（例如：alice@example.com）
     #[arg(short, long, default_value = "1001")]
@@ -74,10 +93,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     utils::initialize_logging(&args.log_level);
 
     info!(
-        "SIP Caller 启动 - 服务器: {}, 协议: {}, 代理: {}, 用户: {}, 目标: {}, IPv6: {}, RTP端口: {}, User-Agent: {}",
+        "SIP Caller 启动 - 服务器: {}, 代理: {}, 用户: {}, 目标: {}, IPv6: {}, RTP端口: {}, User-Agent: {}",
         args.server,
-        args.protocol,
-        args.outbound_proxy.as_deref().unwrap_or("无"),
+        args.outbound_proxy.as_ref().map(|u| u.to_string()).unwrap_or_else(|| "无".to_string()),
         args.user,
         args.target,
         args.ipv6,
@@ -88,7 +106,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 创建客户端配置
     let config = SipClientConfig {
         server: args.server,
-        protocol: args.protocol,
         outbound_proxy: args.outbound_proxy,
         username: args.user,
         password: args.password,

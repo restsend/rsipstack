@@ -1,8 +1,50 @@
 /// SIP 工具函数模块
 ///
 /// 提供自定义的 SIP 相关辅助函数，用于覆盖 rsipstack 的默认行为
+use crate::config::Protocol;
 use std::net::IpAddr;
 
+/// 从 SIP URI 中提取 transport 协议
+///
+/// 按照以下优先级提取:
+/// 1. 显式的 transport 参数 (如 ;transport=tcp)
+/// 2. 根据 URI scheme 推断 (sips -> TCP, sip -> UDP)
+///
+/// # 参数
+/// - `uri`: SIP URI 对象引用
+///
+/// # 返回
+/// 提取到的 Protocol 类型
+///
+/// # 示例
+/// ```rust,no_run
+/// use rsip::Uri;
+/// use sip_caller::utils::extract_protocol_from_uri;
+///
+/// let uri: Uri = "sip:example.com:5060;transport=tcp".try_into().unwrap();
+/// let protocol = extract_protocol_from_uri(&uri);
+/// assert_eq!(protocol, Protocol::Tcp);
+///
+/// let uri2: Uri = "sips:example.com:5061".try_into().unwrap();
+/// let protocol2 = extract_protocol_from_uri(&uri2);
+/// assert_eq!(protocol2, Protocol::Tcp); // sips 默认 TLS over TCP
+/// ```
+pub fn extract_protocol_from_uri(uri: &rsip::Uri) -> Protocol {
+    // 1. 优先从 transport 参数提取
+    uri.params
+        .iter()
+        .find_map(|p| match p {
+            rsip::Param::Transport(t) => Some((*t).into()),
+            _ => None,
+        })
+        .unwrap_or_else(|| {
+            // 2. 根据 scheme 返回默认值
+            match uri.scheme.as_ref() {
+                Some(rsip::Scheme::Sips) => Protocol::Tcp, // sips默认TLS over TCP
+                Some(rsip::Scheme::Sip) | Some(rsip::Scheme::Other(_)) | None => Protocol::Udp,
+            }
+        })
+}
 
 /// 初始化日志系统
 ///

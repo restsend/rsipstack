@@ -2,7 +2,6 @@
 ///
 /// 提供高层次的SIP客户端功能封装
 use crate::{
-    config::Protocol,
     rtp::{self, MediaSessionOption},
     sip_dialog::process_dialog,
     sip_transport::{create_transport_connection, extract_peer_rtp_addr},
@@ -23,17 +22,14 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
-
 /// SIP 客户端配置
 pub struct SipClientConfig {
-    /// 服务器地址 (如 "xfc:5060" 或 "sip.example.com:5060")
-    pub server: String,
+    /// 服务器 URI (例如 "sip:example.com:5060" 或 "sip:server:5060;transport=tcp")
+    pub server: rsip::Uri,
 
-    /// 传输协议
-    pub protocol: Protocol,
-
-    /// Outbound 代理地址（可选）
-    pub outbound_proxy: Option<String>,
+    /// Outbound 代理 URI（可选）
+    /// 完整URI格式，如 "sip:proxy.example.com:5060;transport=udp;lr"
+    pub outbound_proxy: Option<rsip::Uri>,
 
     /// SIP 用户名
     pub username: String,
@@ -83,39 +79,69 @@ impl SipClient {
         // 创建传输层
         let transport_layer = TransportLayer::new(cancel_token.clone());
 
-        // 物理连接目标：如果配置了代理则使用代理，否则使用服务器地址
-        let connection_target = config.outbound_proxy.as_ref().unwrap_or(&config.server);
+        // 确定实际使用的 protocol、连接目标和 proxy_uri
+        let (actual_protocol, connection_target, proxy_uri_opt) =
+            if let Some(ref outbound_proxy) = config.outbound_proxy {
+                // 有outbound_proxy：从proxy URI中提取transport
+                let mut proxy_uri = outbound_proxy.clone();
 
-        // 创建传输连接
+                // 确保有lr参数
+                if !proxy_uri
+                    .params
+                    .iter()
+                    .any(|p| matches!(p, rsip::Param::Lr))
+                {
+                    proxy_uri.params.push(rsip::Param::Lr);
+                }
+
+                // 从 URI 提取 transport
+                let protocol = crate::utils::extract_protocol_from_uri(&proxy_uri);
+
+                // 从URI中提取host:port作为连接目标
+                let target = proxy_uri.host_with_port.to_string();
+
+                info!(
+                    "配置 Outbound 代理: {} (transport: {})",
+                    proxy_uri,
+                    protocol.as_str()
+                );
+
+                (protocol, target, Some(proxy_uri))
+            } else {
+                // 没有outbound_proxy：从server URI中提取transport
+                let protocol = crate::utils::extract_protocol_from_uri(&config.server);
+
+                info!(
+                    "直接连接服务器: {} (transport: {})",
+                    config.server,
+                    protocol.as_str()
+                );
+
+                (protocol, config.server.host_with_port.to_string(), None)
+            };
+
+        // 使用提取出的protocol创建传输连接
         let local_addr = format!("{}:{}", local_ip, config.local_port).parse()?;
         let connection = create_transport_connection(
-            config.protocol,
+            actual_protocol,
             local_addr,
-            connection_target,
+            &connection_target,
             cancel_token.clone(),
         )
         .await?;
 
         transport_layer.add_transport(connection);
 
-        // 创建端点，配置全局 route_set (Outbound Proxy)
+        // 创建端点
         let mut endpoint_builder = EndpointBuilder::new();
         endpoint_builder
             .with_cancel_token(cancel_token.clone())
             .with_transport_layer(transport_layer)
             .with_user_agent(&config.user_agent);
 
-        // 如果配置了 Outbound 代理，设置全局 route_set
-        if let Some(ref outbound_proxy) = config.outbound_proxy {
-            // 构造代理 URI，并添加 ;lr 参数以启用 Loose Routing
-            let proxy_uri_str = if outbound_proxy.contains(";lr") {
-                format!("sip:{}", outbound_proxy)
-            } else {
-                format!("sip:{};lr", outbound_proxy)
-            };
-            let proxy_uri: rsip::Uri = proxy_uri_str.as_str().try_into()?;
+        // 如果有proxy URI，设置route_set
+        if let Some(proxy_uri) = proxy_uri_opt {
             endpoint_builder.with_route_set(vec![proxy_uri]);
-            info!("配置全局 Outbound 代理（Loose Routing）: {}", proxy_uri_str);
         }
 
         let endpoint = endpoint_builder.build();
@@ -186,11 +212,15 @@ impl SipClient {
 
         info!("本地绑定的实际地址: {}", actual_local_addr);
 
-        // 构造注册URI（直接使用 config.server）
-        let register_uri_str = format!("sip:{}", self.config.server);
-        let server_uri_parsed: rsip::Uri = register_uri_str.as_str().try_into()?;
+        // 构造注册URI（从 config.server 复制并移除 transport 参数）
+        let mut register_uri = self.config.server.clone();
 
-        info!("Register URI: {}", register_uri_str);
+        // 移除 transport 参数（如果有）registrar 不需要 transport 参数
+        register_uri
+            .params
+            .retain(|p| !matches!(p, rsip::Param::Transport(_)));
+
+        info!("Register URI: {}", register_uri);
 
         // 创建认证凭证
         let credential = Credential {
@@ -200,13 +230,10 @@ impl SipClient {
         };
 
         // 创建 Registration 实例（全局 route_set 已在 Endpoint 层面配置）
-        let mut registration = Registration::new(
-            self.endpoint.inner.clone(),
-            Some(credential),
-        );
+        let mut registration = Registration::new(self.endpoint.inner.clone(), Some(credential));
 
         // 执行注册
-        let response = registration.register(server_uri_parsed, Some(3600)).await?;
+        let response = registration.register(register_uri, Some(3600)).await?;
 
         if response.status_code == rsip::StatusCode::OK {
             info!("✔ 注册成功,响应状态: {}", response.status_code);
@@ -231,12 +258,14 @@ impl SipClient {
 
         let contact_uri_str = format!("sip:{}@{}", self.config.username, actual_local_addr);
 
-        // 构造 From/To URI（使用相同的域名部分）
-        let from_uri = format!("sip:{}@{}", self.config.username, self.config.server);
+        // 构造 From/To URI（使用服务器URI的域名部分）
+        let server_domain = self.config.server.host_with_port.to_string();
+
+        let from_uri = format!("sip:{}@{}", self.config.username, server_domain);
         let to_uri = if target.contains('@') {
             format!("sip:{}", target)
         } else {
-            format!("sip:{}@{}", target, self.config.server)
+            format!("sip:{}@{}", target, server_domain)
         };
 
         info!("Call信息 源：{} -> 目标：{}", from_uri, to_uri);
