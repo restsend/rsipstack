@@ -417,7 +417,7 @@ impl Transaction {
 
                     connection.send(cancel, self.destination.as_ref()).await?;
                 }
-                self.transition(TransactionState::Completed).map(|_| ())
+                Ok(())
             }
             _ => Err(Error::TransactionError(
                 format!("invalid state for sending CANCEL {:?}", self.state),

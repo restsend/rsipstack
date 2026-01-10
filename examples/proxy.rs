@@ -474,7 +474,11 @@ async fn handle_invite(state: AppState, mut tx: Transaction) -> Result<()> {
                     match msg {
                         rsip::message::SipMessage::Request(req) => match req.method {
                             rsip::Method::Cancel => {
-                                inv_tx.send_cancel(req).await?;
+                                let mut cancel_req = req.clone();
+                                if let Ok(invite_via) = inv_tx.original.via_header() {
+                                    cancel_req.headers.push_front(invite_via.clone().into());
+                                }
+                                inv_tx.send_cancel(cancel_req).await?;
                             }
                             _ => {}
                         },
@@ -823,13 +827,14 @@ mod tests {
         };
 
         state
+            .inner
             .users
             .lock()
             .await
             .insert(user.username.clone(), user.clone());
 
         // Verify user is stored
-        let stored_user = state.users.lock().await.get("testuser").cloned();
+        let stored_user = state.inner.users.lock().await.get("testuser").cloned();
         assert!(stored_user.is_some());
         assert_eq!(stored_user.unwrap().username, "testuser");
     }
@@ -856,15 +861,13 @@ mod tests {
             to_tag: "remote-tag".to_string(),
         };
 
-        // Add session
-        state.sessions.lock().await.insert(dialog_id.clone());
+        state.inner.sessions.lock().await.insert(dialog_id.clone());
 
-        // Verify session is stored
-        assert!(state.sessions.lock().await.contains(&dialog_id));
+        assert!(state.inner.sessions.lock().await.contains(&dialog_id));
 
         // Remove session
-        assert!(state.sessions.lock().await.remove(&dialog_id));
-        assert!(!state.sessions.lock().await.contains(&dialog_id));
+        assert!(state.inner.sessions.lock().await.remove(&dialog_id));
+        assert!(!state.inner.sessions.lock().await.contains(&dialog_id));
     }
 
     #[tokio::test]
