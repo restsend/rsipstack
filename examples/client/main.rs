@@ -394,6 +394,12 @@ async fn process_dialog(
                     Dialog::ClientSubscription(_) => {
                         info!("Client subscription dialog {}", id);
                     }
+                    Dialog::ServerPublication(_) => {
+                        info!("Server publication dialog {}", id);
+                    }
+                    Dialog::ClientPublication(_) => {
+                        info!("Client publication dialog {}", id);
+                    }
                 }
             }
             DialogState::Early(id, resp) => {

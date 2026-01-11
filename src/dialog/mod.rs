@@ -9,6 +9,7 @@ pub mod client_dialog;
 pub mod dialog;
 pub mod dialog_layer;
 pub mod invitation;
+pub mod publication;
 pub mod registration;
 pub mod server_dialog;
 pub mod subscription;

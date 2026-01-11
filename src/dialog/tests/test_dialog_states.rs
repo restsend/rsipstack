@@ -14,7 +14,7 @@ use tokio::sync::mpsc::unbounded_channel;
 use tokio_util::sync::CancellationToken;
 
 /// Test helper to create a mock INVITE request
-pub(super) fn create_invite_request(from_tag: &str, to_tag: &str, call_id: &str) -> Request {
+pub fn create_invite_request(from_tag: &str, to_tag: &str, call_id: &str) -> Request {
     Request {
         method: rsip::Method::Invite,
         uri: rsip::Uri::try_from("sip:bob@example.com:5060").unwrap(),
@@ -58,7 +58,7 @@ fn create_response(status: StatusCode, from_tag: &str, to_tag: &str, call_id: &s
     }
 }
 
-pub(super) async fn create_test_endpoint() -> crate::Result<crate::transaction::endpoint::Endpoint>
+pub async fn create_test_endpoint() -> crate::Result<crate::transaction::endpoint::Endpoint>
 {
     let token = CancellationToken::new();
     let tl = TransportLayer::new(token.child_token());

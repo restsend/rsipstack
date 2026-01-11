@@ -1,6 +1,7 @@
 use super::{
     authenticate::{handle_client_authenticate, Credential},
     client_dialog::ClientInviteDialog,
+    publication::{ClientPublicationDialog, ServerPublicationDialog},
     server_dialog::ServerInviteDialog,
     subscription::{ClientSubscriptionDialog, ServerSubscriptionDialog},
     DialogId,
@@ -121,6 +122,7 @@ pub enum DialogState {
     WaitAck(DialogId, rsip::Response),
     Confirmed(DialogId, rsip::Response),
     Updated(DialogId, rsip::Request, TransactionHandle),
+    Publish(DialogId, rsip::Request, TransactionHandle),
     Notify(DialogId, rsip::Request, TransactionHandle),
     Refer(DialogId, rsip::Request, TransactionHandle),
     Message(DialogId, rsip::Request, TransactionHandle),
@@ -226,6 +228,12 @@ impl ReferStatus {
 ///     },
 ///     Dialog::ClientSubscription(client_dialog) => {
 ///         // Handle client subscription dialog
+///     },
+///     Dialog::ServerPublication(server_dialog) => {
+///         // Handle server publication dialog
+///     },
+///     Dialog::ClientPublication(client_dialog) => {
+///         // Handle client publication dialog
 ///     }
 /// }
 /// # }
@@ -236,6 +244,8 @@ pub enum Dialog {
     ClientInvite(ClientInviteDialog),
     ServerSubscription(ServerSubscriptionDialog),
     ClientSubscription(ClientSubscriptionDialog),
+    ServerPublication(ServerPublicationDialog),
+    ClientPublication(ClientPublicationDialog),
 }
 
 impl Dialog {
@@ -245,6 +255,8 @@ impl Dialog {
             Dialog::ClientInvite(d) => d.state(),
             Dialog::ServerSubscription(d) => d.state(),
             Dialog::ClientSubscription(d) => d.state(),
+            Dialog::ServerPublication(d) => d.state(),
+            Dialog::ClientPublication(d) => d.state(),
         }
     }
 
@@ -256,6 +268,7 @@ impl Dialog {
             Dialog::ClientInvite(d) => Some(Dialog::ClientSubscription(d.as_subscription())),
             Dialog::ServerSubscription(_) => Some(self.clone()),
             Dialog::ClientSubscription(_) => Some(self.clone()),
+            _ => None,
         }
     }
 }
@@ -340,6 +353,7 @@ impl DialogState {
             | DialogState::WaitAck(id, _)
             | DialogState::Confirmed(id, _)
             | DialogState::Updated(id, _, _)
+            | DialogState::Publish(id, _, _)
             | DialogState::Notify(id, _, _)
             | DialogState::Info(id, _, _)
             | DialogState::Options(id, _, _)
@@ -1031,6 +1045,7 @@ impl std::fmt::Display for DialogState {
             DialogState::WaitAck(id, _) => write!(f, "{}(WaitAck)", id),
             DialogState::Confirmed(id, _) => write!(f, "{}(Confirmed)", id),
             DialogState::Updated(id, _, _) => write!(f, "{}(Updated)", id),
+            DialogState::Publish(id, _, _) => write!(f, "{}(Publish)", id),
             DialogState::Notify(id, _, _) => write!(f, "{}(Notify)", id),
             DialogState::Info(id, _, _) => write!(f, "{}(Info)", id),
             DialogState::Options(id, _, _) => write!(f, "{}(Options)", id),
@@ -1048,6 +1063,8 @@ impl Dialog {
             Dialog::ClientInvite(d) => d.inner.id.lock().unwrap().clone(),
             Dialog::ServerSubscription(d) => d.inner.id.lock().unwrap().clone(),
             Dialog::ClientSubscription(d) => d.inner.id.lock().unwrap().clone(),
+            Dialog::ServerPublication(d) => d.inner.id.lock().unwrap().clone(),
+            Dialog::ClientPublication(d) => d.inner.id.lock().unwrap().clone(),
         }
     }
 
@@ -1057,6 +1074,8 @@ impl Dialog {
             Dialog::ClientInvite(d) => &d.inner.from,
             Dialog::ServerSubscription(d) => &d.inner.from,
             Dialog::ClientSubscription(d) => &d.inner.from,
+            Dialog::ServerPublication(d) => &d.inner.from,
+            Dialog::ClientPublication(d) => &d.inner.from,
         }
     }
 
@@ -1066,6 +1085,8 @@ impl Dialog {
             Dialog::ClientInvite(d) => d.inner.to.lock().unwrap().clone(),
             Dialog::ServerSubscription(d) => d.inner.to.lock().unwrap().clone(),
             Dialog::ClientSubscription(d) => d.inner.to.lock().unwrap().clone(),
+            Dialog::ServerPublication(d) => d.inner.to.lock().unwrap().clone(),
+            Dialog::ClientPublication(d) => d.inner.to.lock().unwrap().clone(),
         }
     }
 
@@ -1103,6 +1124,22 @@ impl Dialog {
                 .as_ref()
                 .map(|c| extract_uri_from_contact(c.value()).ok())
                 .flatten(),
+            Dialog::ServerPublication(d) => d
+                .inner
+                .remote_contact
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|c| extract_uri_from_contact(c.value()).ok())
+                .flatten(),
+            Dialog::ClientPublication(d) => d
+                .inner
+                .remote_contact
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|c| extract_uri_from_contact(c.value()).ok())
+                .flatten(),
         }
     }
 
@@ -1112,6 +1149,8 @@ impl Dialog {
             Dialog::ClientInvite(d) => d.handle(tx).await,
             Dialog::ServerSubscription(d) => d.handle(tx).await,
             Dialog::ClientSubscription(d) => d.handle(tx).await,
+            Dialog::ServerPublication(d) => d.handle(tx).await,
+            Dialog::ClientPublication(d) => d.handle(tx).await,
         }
     }
     pub fn on_remove(&self) {
@@ -1128,6 +1167,12 @@ impl Dialog {
             Dialog::ClientSubscription(d) => {
                 d.inner.cancel_token.cancel();
             }
+            Dialog::ServerPublication(d) => {
+                d.inner.cancel_token.cancel();
+            }
+            Dialog::ClientPublication(d) => {
+                d.inner.cancel_token.cancel();
+            }
         }
     }
 
@@ -1137,6 +1182,8 @@ impl Dialog {
             Dialog::ClientInvite(d) => d.hangup().await,
             Dialog::ServerSubscription(d) => d.unsubscribe().await,
             Dialog::ClientSubscription(d) => d.unsubscribe().await,
+            Dialog::ServerPublication(d) => d.close().await,
+            Dialog::ClientPublication(d) => d.close().await,
         }
     }
 
@@ -1146,6 +1193,8 @@ impl Dialog {
             Dialog::ClientInvite(d) => d.inner.can_cancel(),
             Dialog::ServerSubscription(d) => d.inner.can_cancel(),
             Dialog::ClientSubscription(d) => d.inner.can_cancel(),
+            Dialog::ServerPublication(d) => d.inner.can_cancel(),
+            Dialog::ClientPublication(d) => d.inner.can_cancel(),
         }
     }
 
@@ -1161,6 +1210,8 @@ impl Dialog {
             Dialog::ClientInvite(d) => d.inner.set_remote_target(uri, contact),
             Dialog::ServerSubscription(d) => d.inner.set_remote_target(uri, contact),
             Dialog::ClientSubscription(d) => d.inner.set_remote_target(uri, contact),
+            Dialog::ServerPublication(d) => d.inner.set_remote_target(uri, contact),
+            Dialog::ClientPublication(d) => d.inner.set_remote_target(uri, contact),
         }
     }
 
@@ -1175,6 +1226,8 @@ impl Dialog {
             Dialog::ClientInvite(d) => d.request(method, headers, body).await,
             Dialog::ServerSubscription(d) => d.request(method, headers, body).await,
             Dialog::ClientSubscription(d) => d.request(method, headers, body).await,
+            Dialog::ServerPublication(d) => d.request(method, headers, body).await,
+            Dialog::ClientPublication(d) => d.request(method, headers, body).await,
         }
     }
 
@@ -1189,6 +1242,8 @@ impl Dialog {
             Dialog::ClientInvite(d) => d.refer(refer_to, headers, body).await,
             Dialog::ServerSubscription(d) => d.refer(refer_to, headers, body).await,
             Dialog::ClientSubscription(d) => d.refer(refer_to, headers, body).await,
+            Dialog::ServerPublication(d) => d.refer(refer_to, headers, body).await,
+            Dialog::ClientPublication(d) => d.refer(refer_to, headers, body).await,
         }
     }
 
@@ -1202,6 +1257,8 @@ impl Dialog {
             Dialog::ClientInvite(d) => d.message(headers, body).await,
             Dialog::ServerSubscription(d) => d.message(headers, body).await,
             Dialog::ClientSubscription(d) => d.message(headers, body).await,
+            Dialog::ServerPublication(d) => d.message(headers, body).await,
+            Dialog::ClientPublication(d) => d.message(headers, body).await,
         }
     }
 }

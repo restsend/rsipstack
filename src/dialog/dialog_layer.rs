@@ -1,6 +1,7 @@
 use super::authenticate::Credential;
 use super::dialog::DialogStateSender;
-use super::subscription::ServerSubscriptionDialog;
+use super::publication::{ClientPublicationDialog, ServerPublicationDialog};
+use super::subscription::{ClientSubscriptionDialog, ServerSubscriptionDialog};
 use super::{dialog::Dialog, server_dialog::ServerInviteDialog, DialogId};
 use crate::dialog::client_dialog::ClientInviteDialog;
 use crate::dialog::dialog::{DialogInner, DialogStateReceiver};
@@ -266,6 +267,167 @@ impl DialogLayer {
             .unwrap()
             .insert(id.to_string(), Dialog::ServerSubscription(dialog.clone()));
         info!(%id, "server subscription dialog created");
+        Ok(dialog)
+    }
+
+    pub fn get_or_create_server_publication(
+        &self,
+        tx: &Transaction,
+        state_sender: DialogStateSender,
+        credential: Option<Credential>,
+        local_contact: Option<rsip::Uri>,
+    ) -> Result<ServerPublicationDialog> {
+        let mut id = DialogId::try_from(&tx.original)?;
+        if !id.to_tag.is_empty() {
+            let dlg = self
+                .inner
+                .dialogs
+                .read()
+                .unwrap()
+                .get(&id.to_string())
+                .cloned();
+            match dlg {
+                Some(Dialog::ServerPublication(dlg)) => return Ok(dlg),
+                _ => {
+                    return Err(crate::Error::DialogError(
+                        "the dialog not found".to_string(),
+                        id,
+                        rsip::StatusCode::CallTransactionDoesNotExist,
+                    ));
+                }
+            }
+        }
+        id.to_tag = make_tag().to_string(); // generate to tag
+
+        let mut local_contact = local_contact;
+        if local_contact.is_none() {
+            local_contact = self
+                .build_local_contact(credential.as_ref().map(|cred| cred.username.clone()), None)
+                .ok();
+        }
+
+        let dlg_inner = DialogInner::new(
+            TransactionRole::Server,
+            id.clone(),
+            tx.original.clone(),
+            self.endpoint.clone(),
+            state_sender,
+            credential,
+            local_contact,
+            tx.tu_sender.clone(),
+        )?;
+
+        *dlg_inner.remote_contact.lock().unwrap() = tx.original.contact_header().ok().cloned();
+
+        let dialog = ServerPublicationDialog::new(Arc::new(dlg_inner));
+        self.inner
+            .dialogs
+            .write()
+            .unwrap()
+            .insert(id.to_string(), Dialog::ServerPublication(dialog.clone()));
+        info!(%id, "server publication dialog created");
+        Ok(dialog)
+    }
+
+    pub fn get_or_create_client_publication(
+        &self,
+        call_id: String,
+        from_tag: String,
+        to_tag: String,
+        initial_request: rsip::Request,
+        state_sender: DialogStateSender,
+        credential: Option<Credential>,
+        local_contact: Option<rsip::Uri>,
+    ) -> Result<ClientPublicationDialog> {
+        let id = DialogId {
+            call_id,
+            from_tag,
+            to_tag,
+        };
+
+        if let Some(Dialog::ClientPublication(dlg)) = self.get_dialog(&id) {
+            return Ok(dlg);
+        }
+
+        let mut local_contact = local_contact;
+        if local_contact.is_none() {
+            local_contact = self
+                .build_local_contact(credential.as_ref().map(|cred| cred.username.clone()), None)
+                .ok();
+        }
+
+        let dlg_inner = DialogInner::new(
+            TransactionRole::Client,
+            id.clone(),
+            initial_request,
+            self.endpoint.clone(),
+            state_sender,
+            credential,
+            local_contact,
+            {
+                let (tx, _) = tokio::sync::mpsc::unbounded_channel();
+                tx
+            },
+        )?;
+
+        let dialog = ClientPublicationDialog::new(Arc::new(dlg_inner));
+        self.inner
+            .dialogs
+            .write()
+            .unwrap()
+            .insert(id.to_string(), Dialog::ClientPublication(dialog.clone()));
+        Ok(dialog)
+    }
+
+    pub fn get_or_create_client_subscription(
+        &self,
+        call_id: String,
+        from_tag: String,
+        to_tag: String,
+        initial_request: rsip::Request,
+        state_sender: DialogStateSender,
+        credential: Option<Credential>,
+        local_contact: Option<rsip::Uri>,
+    ) -> Result<ClientSubscriptionDialog> {
+        let id = DialogId {
+            call_id,
+            from_tag,
+            to_tag,
+        };
+
+        if let Some(Dialog::ClientSubscription(dlg)) = self.get_dialog(&id) {
+            return Ok(dlg);
+        }
+
+        let mut local_contact = local_contact;
+        if local_contact.is_none() {
+            local_contact = self
+                .build_local_contact(credential.as_ref().map(|cred| cred.username.clone()), None)
+                .ok();
+        }
+
+        let dlg_inner = DialogInner::new(
+            TransactionRole::Client,
+            id.clone(),
+            initial_request,
+            self.endpoint.clone(),
+            state_sender,
+            credential,
+            local_contact,
+            {
+                let (tx, _) = tokio::sync::mpsc::unbounded_channel();
+                tx
+            },
+        )?;
+
+        let dialog = ClientSubscriptionDialog {
+            inner: Arc::new(dlg_inner),
+        };
+        self.inner
+            .dialogs
+            .write()
+            .unwrap()
+            .insert(id.to_string(), Dialog::ClientSubscription(dialog.clone()));
         Ok(dialog)
     }
 
