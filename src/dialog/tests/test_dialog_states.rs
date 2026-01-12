@@ -58,8 +58,7 @@ fn create_response(status: StatusCode, from_tag: &str, to_tag: &str, call_id: &s
     }
 }
 
-pub async fn create_test_endpoint() -> crate::Result<crate::transaction::endpoint::Endpoint>
-{
+pub async fn create_test_endpoint() -> crate::Result<crate::transaction::endpoint::Endpoint> {
     let token = CancellationToken::new();
     let tl = TransportLayer::new(token.child_token());
     let endpoint = EndpointBuilder::new()
