@@ -623,7 +623,7 @@ impl ClientInviteDialog {
 
     pub async fn process_invite(
         &self,
-        mut tx: Transaction,
+        tx: &mut Transaction,
     ) -> Result<(DialogId, Option<Response>)> {
         self.inner.transition(DialogState::Calling(self.id()))?;
         let mut auth_sent = false;
@@ -662,7 +662,7 @@ impl ClientInviteDialog {
                         }
                         auth_sent = true;
                         if let Some(credential) = &self.inner.credential {
-                            tx = handle_client_authenticate(
+                            *tx = handle_client_authenticate(
                                 self.inner.increment_local_seq(),
                                 tx,
                                 resp,

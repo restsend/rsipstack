@@ -596,7 +596,7 @@ impl DialogInner {
                         auth_sent = true;
                         if let Some(cred) = &self.credential {
                             let new_seq = self.increment_local_seq();
-                            tx = handle_client_authenticate(new_seq, tx, resp, cred).await?;
+                            tx = handle_client_authenticate(new_seq, &tx, resp, cred).await?;
                             tx.send().await?;
                             continue;
                         } else {
@@ -921,7 +921,7 @@ impl DialogInner {
                                 rsip::Method::Cancel => self.get_local_seq(),
                                 _ => self.increment_local_seq(),
                             };
-                            tx = handle_client_authenticate(new_seq, tx, resp, cred).await?;
+                            tx = handle_client_authenticate(new_seq, &tx, resp, cred).await?;
                             tx.send().await?;
                             continue;
                         } else {

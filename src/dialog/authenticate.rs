@@ -124,7 +124,7 @@ pub struct Credential {
 /// // This is typically called automatically by dialog methods
 /// let new_tx = handle_client_authenticate(
 ///     new_seq,
-///     original_tx,
+///     &original_tx,
 ///     auth_challenge_response,
 ///     &credential
 /// ).await?;
@@ -159,7 +159,7 @@ pub struct Credential {
 ///                 StatusCode::Unauthorized | StatusCode::ProxyAuthenticationRequired => {
 ///                     // Handle authentication challenge
 ///                     let auth_tx = handle_client_authenticate(
-///                         new_seq, tx, resp, &credential
+///                         new_seq, &tx, resp, &credential
 ///                     ).await?;
 ///
 ///                     // Send authenticated request
@@ -186,7 +186,7 @@ pub struct Credential {
 /// This function handles SIP authentication challenges and creates authenticated requests.
 pub async fn handle_client_authenticate(
     new_seq: u32,
-    tx: Transaction,
+    tx: &Transaction,
     resp: Response,
     cred: &Credential,
 ) -> Result<Transaction> {

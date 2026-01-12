@@ -106,7 +106,7 @@ async fn test_authenticate_via_header_branch_update() -> crate::Result<()> {
     };
 
     // Call handle_client_authenticate
-    let new_tx = handle_client_authenticate(2, tx, resp, &cred).await?;
+    let new_tx = handle_client_authenticate(2, &tx, resp, &cred).await?;
 
     // Verify the new request has updated Via header
     let new_via = new_tx

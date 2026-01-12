@@ -448,7 +448,7 @@ impl Registration {
 
                             // Handle authentication with the existing transaction
                             // The contact will be updated in the next registration cycle if needed
-                            tx = handle_client_authenticate(self.last_seq, tx, resp, cred).await?;
+                            tx = handle_client_authenticate(self.last_seq, &tx, resp, cred).await?;
 
                             tx.send().await?;
                             auth_sent = true;
