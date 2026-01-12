@@ -522,9 +522,6 @@ impl Transaction {
                             self.on_received_response(resp, connection).await
                         }
                     } {
-                        if let Some(ref inspector) = self.endpoint_inner.message_inspector {
-                            return Some(inspector.after_received(msg));
-                        }
                         return Some(msg);
                     }
                 }

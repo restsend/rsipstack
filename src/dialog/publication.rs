@@ -2,8 +2,8 @@ use super::dialog::{DialogInnerRef, DialogState, TerminatedReason, TransactionHa
 use super::DialogId;
 use crate::Result;
 use rsip::{Header, Method, StatusCode, StatusCodeKind};
-use tokio_util::sync::CancellationToken;
 use std::sync::{Arc, Mutex};
+use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 pub struct ClientPublicationDialog {
@@ -109,7 +109,10 @@ impl ClientPublicationDialog {
         self.request(rsip::Method::Message, headers, body).await
     }
 
-    pub async fn handle(&mut self, tx: &mut crate::transaction::transaction::Transaction) -> Result<()> {
+    pub async fn handle(
+        &mut self,
+        tx: &mut crate::transaction::transaction::Transaction,
+    ) -> Result<()> {
         match tx.original.method {
             Method::Publish => {
                 let (handle, rx) = TransactionHandle::new();
@@ -155,19 +158,24 @@ impl ServerPublicationDialog {
         self.etag.lock().unwrap().clone()
     }
 
-    pub fn accept(&self, etag: String, headers: Option<Vec<Header>>, body: Option<Vec<u8>>) -> Result<()> {
+    pub fn accept(
+        &self,
+        etag: String,
+        headers: Option<Vec<Header>>,
+        body: Option<Vec<u8>>,
+    ) -> Result<()> {
         let mut headers = headers.unwrap_or_default();
         headers.push(Header::Other("SIP-ETag".into(), etag.clone().into()));
-        
+
         let resp = self.inner.make_response(
             &self.inner.initial_request.lock().unwrap(),
             StatusCode::OK,
             Some(headers),
             body,
         );
-        
+
         *self.etag.lock().unwrap() = Some(etag);
-        
+
         use crate::transaction::transaction::TransactionEvent;
         self.inner
             .tu_sender
@@ -224,7 +232,10 @@ impl ServerPublicationDialog {
         self.request(rsip::Method::Message, headers, body).await
     }
 
-    pub async fn handle(&mut self, tx: &mut crate::transaction::transaction::Transaction) -> Result<()> {
+    pub async fn handle(
+        &mut self,
+        tx: &mut crate::transaction::transaction::Transaction,
+    ) -> Result<()> {
         match tx.original.method {
             Method::Publish => {
                 let (handle, rx) = TransactionHandle::new();
