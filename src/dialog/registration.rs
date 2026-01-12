@@ -206,6 +206,7 @@ impl Registration {
     /// ```rust,no_run
     /// # use rsipstack::dialog::registration::Registration;
     /// # use rsipstack::transaction::endpoint::Endpoint;
+    /// # use rsip::headers::UntypedHeader;
     /// # fn example() {
     /// # let endpoint: Endpoint = todo!();
     /// let call_id = rsip::headers::CallId::new("my-custom-id@example.com");
@@ -219,6 +220,7 @@ impl Registration {
     /// ```rust,no_run
     /// # use rsipstack::dialog::registration::Registration;
     /// # use rsipstack::transaction::endpoint::Endpoint;
+    /// # use rsip::headers::UntypedHeader;
     /// # fn example() {
     /// # let endpoint: Endpoint = todo!();
     /// // First registration
