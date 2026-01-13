@@ -5,7 +5,11 @@ use super::{
     dialog_layer::DialogLayer,
 };
 use crate::{
-    dialog::{dialog::Dialog, dialog_layer::DialogLayerInnerRef, DialogId},
+    dialog::{
+        dialog::{Dialog, DialogState, TerminatedReason},
+        dialog_layer::DialogLayerInnerRef,
+        DialogId,
+    },
     transaction::{
         key::{TransactionKey, TransactionRole},
         make_tag,
@@ -17,7 +21,7 @@ use crate::{
 use futures::FutureExt;
 use rsip::{
     prelude::{HeadersExt, ToTypedHeader},
-    Request, Response,
+    Request, Response, SipMessage, StatusCodeKind,
 };
 use std::sync::Arc;
 use tracing::{debug, info, warn};
@@ -171,6 +175,7 @@ impl Drop for DialogGuard {
 pub(super) struct DialogGuardForUnconfirmed<'a> {
     pub dialog_layer_inner: &'a DialogLayerInnerRef,
     pub id: &'a DialogId,
+    invite_tx: Option<Transaction>,
 }
 
 impl<'a> Drop for DialogGuardForUnconfirmed<'a> {
@@ -180,7 +185,50 @@ impl<'a> Drop for DialogGuardForUnconfirmed<'a> {
             Ok(mut dialogs) => match dialogs.remove(&self.id.to_string()) {
                 Some(dlg) => {
                     info!(%self.id, "unconfirmed dialog dropped, cancelling it");
+                    let invite_tx = self.invite_tx.take();
                     let _ = tokio::spawn(async move {
+                        if let Dialog::ClientInvite(ref client_dialog) = dlg {
+                            if client_dialog.inner.can_cancel() {
+                                if let Err(e) = client_dialog.cancel().await {
+                                    warn!(id = %client_dialog.id(), "dialog cancel failed: {}", e);
+                                    return;
+                                }
+
+                                if let Some(mut invite_tx) = invite_tx {
+                                    let duration = tokio::time::Duration::from_secs(2);
+                                    let timeout = tokio::time::sleep(duration);
+                                    tokio::pin!(timeout);
+                                    loop {
+                                        tokio::select! {
+                                            _ = &mut timeout => break,
+                                            msg = invite_tx.receive() => {
+                                                if let Some(msg) = msg{
+                                                    if let SipMessage::Response(resp) = msg {
+                                                        if resp.status_code.kind() != StatusCodeKind::Provisional {
+                                                            debug!(
+                                                                id = %client_dialog.id(),
+                                                                status = %resp.status_code,
+                                                                "received final response"
+                                                            );
+                                                            break;
+                                                        }
+                                                    }
+                                                }else{
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                let _ = client_dialog.inner.transition(DialogState::Terminated(
+                                    client_dialog.id(),
+                                    TerminatedReason::UacCancel,
+                                ));
+                                tracing::info!(id = %client_dialog.id(), "dialog terminated");
+                                return;
+                            }
+                        }
+
                         if let Err(e) = dlg.hangup().await {
                             info!(id=%dlg.id(), "failed to hangup unconfirmed dialog: {}", e);
                         }
@@ -426,10 +474,16 @@ impl DialogLayer {
             .ok();
 
         info!(%id, "client invite dialog created");
-        let _guard = DialogGuardForUnconfirmed {
+        let mut guard = DialogGuardForUnconfirmed {
             dialog_layer_inner: &self.inner,
             id: &id,
+            invite_tx: Some(tx),
         };
+
+        let tx = guard
+            .invite_tx
+            .as_mut()
+            .expect("transcation should be avaible");
 
         let r = dialog.process_invite(tx).boxed().await;
         self.inner
