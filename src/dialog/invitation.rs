@@ -166,7 +166,7 @@ impl Drop for DialogGuard {
         };
         let _ = tokio::spawn(async move {
             if let Err(e) = dlg.hangup().await {
-                info!(id=%dlg.id(), "failed to hangup dialog: {}", e);
+                info!(id = %dlg.id(), error = %e, "failed to hangup dialog");
             }
         });
     }
@@ -184,13 +184,13 @@ impl<'a> Drop for DialogGuardForUnconfirmed<'a> {
         match self.dialog_layer_inner.dialogs.write() {
             Ok(mut dialogs) => match dialogs.remove(&self.id.to_string()) {
                 Some(dlg) => {
-                    info!(%self.id, "unconfirmed dialog dropped, cancelling it");
+                    debug!(%self.id, "unconfirmed dialog dropped, cancelling it");
                     let invite_tx = self.invite_tx.take();
                     let _ = tokio::spawn(async move {
                         if let Dialog::ClientInvite(ref client_dialog) = dlg {
                             if client_dialog.inner.can_cancel() {
                                 if let Err(e) = client_dialog.cancel().await {
-                                    warn!(id = %client_dialog.id(), "dialog cancel failed: {}", e);
+                                    warn!(id = %client_dialog.id(), error = %e, "dialog cancel failed");
                                     return;
                                 }
 
@@ -224,20 +224,20 @@ impl<'a> Drop for DialogGuardForUnconfirmed<'a> {
                                     client_dialog.id(),
                                     TerminatedReason::UacCancel,
                                 ));
-                                tracing::info!(id = %client_dialog.id(), "dialog terminated");
+                                debug!(id = %client_dialog.id(), "dialog terminated");
                                 return;
                             }
                         }
 
                         if let Err(e) = dlg.hangup().await {
-                            info!(id=%dlg.id(), "failed to hangup unconfirmed dialog: {}", e);
+                            info!(id = %dlg.id(), error = %e, "failed to hangup unconfirmed dialog");
                         }
                     });
                 }
                 None => {}
             },
             Err(e) => {
-                warn!(%self.id, "failed to acquire write lock on dialogs: {}", e);
+                warn!(id = %self.id, error = %e, "failed to acquire write lock on dialogs");
             }
         }
     }
@@ -473,7 +473,7 @@ impl DialogLayer {
             .map(|ds| ds.insert(id.to_string(), Dialog::ClientInvite(dialog.clone())))
             .ok();
 
-        info!(%id, "client invite dialog created");
+        debug!(%id, "client invite dialog created");
         let mut guard = DialogGuardForUnconfirmed {
             dialog_layer_inner: &self.inner,
             id: &id,

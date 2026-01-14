@@ -12,7 +12,7 @@ use tokio::{
     sync::Mutex,
 };
 use tokio_util::codec::{Decoder, Encoder};
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 pub(super) const MAX_SIP_MESSAGE_SIZE: usize = 65535;
 const CL_FULL_NAME: &[u8] = b"content-length";
@@ -186,7 +186,7 @@ where
         let mut read_half = match self.read_half.lock().await.take() {
             Some(read_half) => read_half,
             None => {
-                warn!("Connection closed");
+                warn!(local = %self.local_addr, "Connection already closed");
                 return Ok(());
             }
         };
@@ -201,7 +201,7 @@ where
             use tokio::io::AsyncReadExt;
             match read_half.read(&mut read_buf).await {
                 Ok(0) => {
-                    info!("Connection closed: {}", self.local_addr);
+                    debug!(local = %self.local_addr, remote = %remote_addr, "Connection closed");
                     break;
                 }
                 Ok(n) => {
@@ -211,7 +211,7 @@ where
                         match codec.decode(&mut buffer)? {
                             Some(msg) => match msg {
                                 SipCodecType::Message(sip_msg) => {
-                                    debug!("Received message from {}: {}", remote_addr, sip_msg);
+                                    debug!(src = %remote_addr, raw_message = %sip_msg, "received message");
                                     let remote_socket_addr = remote_addr.get_socketaddr()?;
                                     let sip_msg = SipConnection::update_msg_received(
                                         sip_msg,
@@ -224,7 +224,7 @@ where
                                         connection.clone(),
                                         remote_addr.clone(),
                                     )) {
-                                        warn!("Error sending incoming message: {:?}", e);
+                                        warn!(error = ?e, "Error sending incoming message");
                                         return Err(e.into());
                                     }
                                 }
@@ -241,7 +241,7 @@ where
                     }
                 }
                 Err(e) => {
-                    warn!("Error reading from stream: {}", e);
+                    warn!(error = %e, src = %remote_addr, "Error reading from stream");
                     break;
                 }
             }

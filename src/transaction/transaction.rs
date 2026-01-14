@@ -11,7 +11,7 @@ use rsip::message::HasHeaders;
 use rsip::prelude::HeadersExt;
 use rsip::{Header, Method, Request, Response, SipMessage, StatusCode, StatusCodeKind};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use tracing::{debug, info, trace};
+use tracing::{debug, trace};
 
 pub type TransactionEventReceiver = UnboundedReceiver<TransactionEvent>;
 pub type TransactionEventSender = UnboundedSender<TransactionEvent>;
@@ -355,7 +355,7 @@ impl Transaction {
         } else {
             response.to_owned().into()
         };
-        trace!(key = %self.key, "responding with {}", response);
+        trace!(key = %self.key, response = %response, "responding");
 
         match response.clone() {
             SipMessage::Response(resp) => self.last_response.replace(resp),
@@ -532,7 +532,7 @@ impl Transaction {
                     self.respond(response).await.ok();
                 }
                 TransactionEvent::Terminate(key) => {
-                    info!(%key, "received terminate event");
+                    debug!(%key, "received terminate event");
                     return None;
                 }
             }
@@ -838,7 +838,7 @@ impl Transaction {
                         );
                         self.timer_g.replace(timer_g);
                     }
-                    info!(key=%self.key, last = self.last_response.is_none(), "entered confirmed state, waiting for ACK");
+                    debug!(key=%self.key, last = self.last_response.is_none(), "entered confirmed state, waiting for ACK");
                     match self.last_response {
                         Some(ref resp) => {
                             let dialog_id = DialogId::try_from(resp)?;
@@ -882,7 +882,9 @@ impl Transaction {
         }
         debug!(
             key = %self.key,
-            "transition: {:?} -> {:?}", self.state, state
+            from = %self.state,
+            to = %state,
+            "transition"
         );
         self.state = state;
         Ok(self.state.clone())

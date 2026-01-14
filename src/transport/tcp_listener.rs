@@ -6,7 +6,7 @@ use crate::Result;
 use std::fmt;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::net::TcpListener;
-use tracing::{info, warn};
+use tracing::{debug, warn};
 pub struct TcpListenerConnectionInner {
     pub local_addr: SipAddr,
     pub external: Option<SipAddr>,
@@ -41,7 +41,7 @@ impl TcpListenerConnection {
                 let (stream, remote_addr) = match listener.accept().await {
                     Ok((stream, remote_addr)) => (stream, remote_addr),
                     Err(e) => {
-                        warn!("Failed to accept connection: {:?}", e);
+                        warn!(error = ?e, "Failed to accept connection");
                         continue;
                     }
                 };
@@ -56,13 +56,13 @@ impl TcpListenerConnection {
                 ) {
                     Ok(tcp_connection) => tcp_connection,
                     Err(e) => {
-                        warn!("Failed to create TCP connection: {:?}", e);
+                        warn!(error = ?e, %local_addr, "Failed to create TCP connection");
                         continue;
                     }
                 };
                 let sip_connection = SipConnection::Tcp(tcp_connection.clone());
                 transport_layer_inner.add_connection(sip_connection.clone());
-                info!(?local_addr, "new tcp connection");
+                debug!(?local_addr, "new tcp connection");
             }
         });
         Ok(())

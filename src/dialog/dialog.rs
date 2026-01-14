@@ -555,7 +555,7 @@ impl DialogInner {
 
         match tx.send().await {
             Ok(_) => {
-                info!(
+                debug!(
                     id = self.id.lock().unwrap().to_string(),
                     method = %method,
                     destination=tx.destination.as_ref().map(|d| d.to_string()).as_deref(),
@@ -583,7 +583,7 @@ impl DialogInner {
                     StatusCode::ProxyAuthenticationRequired | StatusCode::Unauthorized => {
                         let id = self.id.lock().unwrap().clone();
                         if auth_sent {
-                            info!(
+                            debug!(
                                 id = self.id.lock().unwrap().to_string(),
                                 "received {} response after auth sent", resp.status_code
                             );
@@ -600,7 +600,7 @@ impl DialogInner {
                             tx.send().await?;
                             continue;
                         } else {
-                            info!(
+                            debug!(
                                 id = self.id.lock().unwrap().to_string(),
                                 "received 407 response without auth option"
                             );
@@ -786,7 +786,7 @@ impl DialogInner {
                     let mut to = match to.clone().typed() {
                         Ok(to) => to,
                         Err(e) => {
-                            info!("error parsing to header {}", e);
+                            info!(error = %e, "error parsing to header");
                             continue;
                         }
                     };
@@ -863,7 +863,7 @@ impl DialogInner {
         }
         match tx.send().await {
             Ok(_) => {
-                info!(
+                debug!(
                     id = self.id.lock().unwrap().to_string(),
                     method = %method,
                     destination=tx.destination.as_ref().map(|d| d.to_string()).as_deref(),
@@ -905,7 +905,7 @@ impl DialogInner {
                     ) {
                         let id = self.id.lock().unwrap().clone();
                         if auth_sent {
-                            info!(
+                            debug!(
                                 id = self.id.lock().unwrap().to_string(),
                                 "received {} response after auth sent", status
                             );
@@ -925,7 +925,7 @@ impl DialogInner {
                             tx.send().await?;
                             continue;
                         } else {
-                            info!(
+                            debug!(
                                 id = self.id.lock().unwrap().to_string(),
                                 "received 407 response without auth option"
                             );
@@ -974,18 +974,19 @@ impl DialogInner {
         match (&*old_state, &state) {
             (DialogState::Terminated(id, _), _) => {
                 warn!(
-                    %id,
-                    "dialog already terminated, ignoring transition to {}", state
+                    id = %id,
+                    target = %state,
+                    "dialog already terminated, ignoring transition"
                 );
                 return Ok(());
             }
             (DialogState::Confirmed(_, _), DialogState::WaitAck(_, _)) => {
-                warn!("dialog already confirmed, ignoring transition to {}", state);
+                warn!(target = %state, "dialog already confirmed, ignoring transition");
                 return Ok(());
             }
             _ => {}
         }
-        debug!("transitioning state: {} -> {}", old_state, state);
+        debug!(from = %old_state, to = %state, "transitioning state");
         *old_state = state;
         Ok(())
     }

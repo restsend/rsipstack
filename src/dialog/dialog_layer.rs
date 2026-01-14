@@ -16,7 +16,7 @@ use std::{
     collections::HashMap,
     sync::{Arc, RwLock},
 };
-use tracing::info;
+use tracing::debug;
 
 /// Internal Dialog Layer State
 ///
@@ -205,7 +205,7 @@ impl DialogLayer {
             .write()
             .unwrap()
             .insert(id.to_string(), Dialog::ServerInvite(dialog.clone()));
-        info!(%id, "server invite dialog created");
+        debug!(%id, "server invite dialog created");
         Ok(dialog)
     }
 
@@ -266,7 +266,7 @@ impl DialogLayer {
             .write()
             .unwrap()
             .insert(id.to_string(), Dialog::ServerSubscription(dialog.clone()));
-        info!(%id, "server subscription dialog created");
+        debug!(%id, "server subscription dialog created");
         Ok(dialog)
     }
 
@@ -325,7 +325,7 @@ impl DialogLayer {
             .write()
             .unwrap()
             .insert(id.to_string(), Dialog::ServerPublication(dialog.clone()));
-        info!(%id, "server publication dialog created");
+        debug!(%id, "server publication dialog created");
         Ok(dialog)
     }
 
@@ -492,7 +492,7 @@ impl DialogLayer {
     }
 
     pub fn remove_dialog(&self, id: &DialogId) {
-        info!(%id, "remove dialog");
+        debug!(%id, "remove dialog");
         self.inner
             .dialogs
             .write()

@@ -17,7 +17,7 @@ use rsip::{
     prelude::{HeadersExt, ToTypedHeader},
     Response, SipMessage, StatusCode,
 };
-use tracing::{debug, info};
+use tracing::debug;
 
 /// SIP Registration Client
 ///
@@ -430,16 +430,17 @@ impl Registration {
                     StatusCode::ProxyAuthenticationRequired | StatusCode::Unauthorized => {
                         let received = resp.via_received();
                         if self.public_address != received {
-                            info!(
-                                "Updated public address from 401 response, will use in authenticated request: {:?} -> {:?}",
-                                self.public_address, received
+                            debug!(
+                                old = ?self.public_address,
+                                new = ?received,
+                                "updated public address from 401 response"
                             );
                             self.public_address = received;
                             self.contact = None;
                         }
 
                         if auth_sent {
-                            debug!("received {} response after auth sent", resp.status_code);
+                            debug!(status = %resp.status_code, "received auth response after auth sent");
                             return Ok(resp);
                         }
 
@@ -454,7 +455,7 @@ impl Registration {
                             auth_sent = true;
                             continue;
                         } else {
-                            debug!("received {} response without credential", resp.status_code);
+                            debug!(status = %resp.status_code, "received auth response without credential");
                             return Ok(resp);
                         }
                     }
@@ -470,21 +471,22 @@ impl Registration {
                             Err(_) => {}
                         };
                         if self.public_address != received {
-                            info!(
-                                "Discovered public IP, will use for future registrations and calls: {:?} -> {:?}",
-                                self.public_address, received
+                            debug!(
+                                old = ?self.public_address,
+                                new = ?received,
+                                "discovered public IP"
                             );
                             self.public_address = received;
                         }
-                        info!(
-                            "registration do_request done: {:?} {:?}",
-                            resp.status_code,
-                            self.contact.as_ref().map(|c| c.uri.to_string())
+                        debug!(
+                            status = %resp.status_code,
+                            contact = ?self.contact.as_ref().map(|c| c.uri.to_string()),
+                            "registration do_request done"
                         );
                         return Ok(resp);
                     }
                     _ => {
-                        info!("registration do_request done: {:?}", resp.status_code);
+                        debug!(status = %resp.status_code, "registration do_request done");
                         return Ok(resp);
                     }
                 },

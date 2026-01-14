@@ -31,7 +31,7 @@ pub async fn build_rtp_conn(
             conn = Some(c);
             break;
         } else {
-            info!("Failed to bind RTP socket on port: {}", port);
+            info!(port = %port, "Failed to bind RTP socket");
         }
     }
 
@@ -61,7 +61,7 @@ pub async fn build_rtp_conn(
         socketaddr.ip(),
         socketaddr.port(),
     );
-    info!("RTP socket: {:?} {}", conn.get_addr(), sdp);
+    info!(addr = ?conn.get_addr(), sdp = %sdp, "RTP socket");
     Ok((conn, sdp))
 }
 
@@ -76,14 +76,14 @@ pub async fn play_echo(conn: UdpConnection, token: CancellationToken) -> Result<
                 let (len, addr) = match conn.recv_raw(&mut mbuf).await {
                     Ok(r) => r,
                     Err(e) => {
-                        info!("Failed to receive RTP: {:?}", e);
+                        info!(error = ?e, "Failed to receive RTP");
                         break;
                     }
                 };
                 match conn.send_raw(&mbuf[..len], &addr).await {
                     Ok(_) => {},
                     Err(e) => {
-                        info!("Failed to send RTP: {:?}", e);
+                        info!(error = ?e, "Failed to send RTP");
                         break;
                     }
                 }
@@ -120,12 +120,12 @@ pub async fn play_audio_file(
                 8 => "pcma",
                 0 => "pcmu",
                 _ => {
-                    info!("Unsupported codec type: {}", payload_type);
+                    info!(payload_type = %payload_type, "Unsupported codec type");
                     return;
                 }
             };
             let file_name = format!("./assets/{filename}.{ext}");
-            info!("Playing {filename} file: {} payload_type:{} sample_size:{}", file_name, payload_type, sample_size);
+            info!(file = %file_name, payload_type = %payload_type, sample_size = %sample_size, "Playing file");
             let example_data = tokio::fs::read(file_name).await.expect("read file");
 
             for chunk in example_data.chunks(sample_size) {
@@ -138,7 +138,7 @@ pub async fn play_audio_file(
                 .build() {
                     Ok(r) => r,
                     Err(e) => {
-                        info!("Failed to build RTP packet: {:?}", e);
+                        info!(error = ?e, "Failed to build RTP packet");
                         break;
                     }
                 };
@@ -147,7 +147,7 @@ pub async fn play_audio_file(
                 match conn.send_raw(&result, &peer_addr).await {
                     Ok(_) => {},
                     Err(e) => {
-                        info!("Failed to send RTP: {:?}", e);
+                        info!(error = ?e, "Failed to send RTP");
                         break;
                     }
                 }

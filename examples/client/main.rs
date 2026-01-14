@@ -106,7 +106,7 @@ async fn handle_user_input(
                         break;
                     },
                     Err(e) => {
-                        info!("Error reading input: {:?}", e);
+                        info!(error = ?e, "Error reading input");
                         break;
                     }
                 }
@@ -142,7 +142,7 @@ async fn main() -> rsipstack::Result<()> {
         .ok();
 
     if let Err(e) = dotenv::dotenv() {
-        info!("Failed to load .env file: {}", e);
+        info!(error = %e, "Failed to load .env file");
     }
 
     let args = Args::parse();
@@ -235,13 +235,13 @@ async fn main() -> rsipstack::Result<()> {
             info!("user agent finished");
         }
         r = process_registration(endpoint.inner.clone(), sip_server, credential.clone(), token.clone()) => {
-            info!("register loop finished {:?}", r);
+            info!(result = ?r, "register loop finished");
         }
         r = process_incoming_request(dialog_layer.clone(), incoming, state_sender.clone(), contact.clone(), args.reject) => {
-            info!("serve loop finished {:?}", r);
+            info!(result = ?r, "serve loop finished");
         }
         r = process_dialog(dialog_layer.clone(), state_receiver, opt.clone()) => {
-            info!("dialog loop finished {:?}", r);
+            info!(result = ?r, "dialog loop finished");
         }
         r = async {
             if let Some(callee) = args.call.clone() {
@@ -255,7 +255,7 @@ async fn main() -> rsipstack::Result<()> {
 
                 match make_call(dialog_layer, invite_option, opt, state_sender).await {
                     Ok(_) => info!("Call finished"),
-                    Err(e) => info!("Failed to make call: {:?}", e),
+                    Err(e) => info!(error = ?e, "Failed to make call"),
                 }
             }
             select! {
@@ -264,7 +264,7 @@ async fn main() -> rsipstack::Result<()> {
                 }
             }
         } => {
-            info!("dialog loop finished {:?}", r);
+            info!(result = ?r, "dialog loop finished");
         }
     }
     Ok(())

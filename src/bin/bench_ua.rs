@@ -80,10 +80,7 @@ async fn run_server(
     answer_prob: u8,
     stats: Stats,
 ) -> Result<()> {
-    info!(
-        "Starting server mode with answer probability: {}%",
-        answer_prob
-    );
+    info!(answer_prob = %answer_prob, "Starting server mode");
 
     loop {
         while let Some(mut tx) = incoming.recv().await {
@@ -132,10 +129,7 @@ async fn run_client(
     state_sender: DialogStateSender,
     stats: Stats,
 ) -> Result<()> {
-    info!(
-        "Starting client mode with {} concurrent calls",
-        concurrent_calls
-    );
+    info!(concurrent_calls = %concurrent_calls, "Starting client mode");
 
     // Use a rate limiter to ensure stable call creation
     let max_calls_per_cycle = 100; // Increased to 20 (was 5)
@@ -155,10 +149,7 @@ async fn run_client(
 
         // Create new calls if needed
         if calls_to_create_now > 0 {
-            info!(
-                "Creating {} new calls to maintain {} concurrent calls",
-                calls_to_create_now, concurrent_calls
-            );
+            info!(creating = %calls_to_create_now, concurrent = %concurrent_calls, "Creating new calls to maintain concurrency");
 
             // Prepare call creation futures
             for _ in 0..calls_to_create_now {
@@ -284,10 +275,10 @@ async fn process_dialog_state(
             DialogState::Terminated(id, status) => {
                 match status {
                     TerminatedReason::UacOther(status) => {
-                        info!("dialog terminated with status: {}", status);
+                        info!(id = %id, status = %status, "dialog terminated");
                     }
                     TerminatedReason::UasOther(status) => {
-                        info!("dialog terminated with status: {}", status);
+                        info!(id = %id, status = %status, "dialog terminated");
                     }
                     _ => {}
                 }
@@ -296,7 +287,7 @@ async fn process_dialog_state(
                 stats.active_calls.lock().unwrap().remove(&id);
             }
             _ => {
-                debug!("Dialog state update: {}", state);
+                debug!(state = %state, "Dialog state update");
             }
         }
     }
@@ -413,10 +404,10 @@ async fn main() -> Result<()> {
             info!("Endpoint finished");
         }
         r = mode_handler => {
-            info!("Mode handler finished: {:?}", r);
+            info!(result = ?r, "Mode handler finished");
         }
         r = process_dialog_state(dialog_layer.clone(), state_receiver, stats.clone()) => {
-            info!("Dialog state handler finished: {:?}", r);
+            info!(result = ?r, "Dialog state handler finished");
         }
         _ = update_stats(dialog_layer.clone(),stats) => {
             info!("Stats updater finished");

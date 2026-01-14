@@ -10,7 +10,7 @@ use bytes::BytesMut;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::net::UdpSocket;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 pub struct UdpInner {
     pub conn: UdpSocket,
     pub addr: SipAddr,
@@ -59,7 +59,7 @@ impl UdpConnection {
             inner: Arc::new(UdpInner { addr, conn }),
             cancel_token,
         };
-        info!("created UDP connection: {} external: {:?}", t, external);
+        debug!(local = %t, ?external, "created UDP connection");
         Ok(t)
     }
 
@@ -77,7 +77,7 @@ impl UdpConnection {
                         std::future::pending::<()>().await;
                     }
                 } => {
-                    debug!("UDP serve_loop cancelled");
+                    debug!(local = %self.get_addr(), "UDP serve_loop cancelled");
                     return Ok(());
                 }
                 // Receive UDP packets
@@ -85,7 +85,7 @@ impl UdpConnection {
                     match result {
                         Ok((len, addr)) => (len, addr),
                         Err(e) => {
-                            warn!("error receiving UDP packet: {}", e);
+                            warn!(error = %e, "error receiving UDP packet");
                             continue;
                         }
                     }
@@ -109,10 +109,10 @@ impl UdpConnection {
                 Ok(s) => s,
                 Err(e) => {
                     debug!(
-                        "decoding text from: {} error: {} buf: {:?}",
-                        addr,
-                        e,
-                        &buf[..len]
+                        src = %addr,
+                        error = %e,
+                        buf = ?&buf[..len],
+                        "decoding text error"
                     );
                     continue;
                 }
@@ -121,9 +121,11 @@ impl UdpConnection {
             let msg = match rsip::SipMessage::try_from(undecoded) {
                 Ok(msg) => msg,
                 Err(e) => {
-                    info!(
-                        "error parsing SIP message from: {} error: {} buf: {}",
-                        addr, e, undecoded
+                    debug!(
+                        src = %addr,
+                        error = %e,
+                        raw_message = %undecoded,
+                        "error parsing SIP message"
                     );
                     continue;
                 }
@@ -136,18 +138,17 @@ impl UdpConnection {
             ) {
                 Ok(msg) => msg,
                 Err(e) => {
-                    info!(
-                        "error updating SIP via from: {} error: {:?} buf: {}",
-                        addr, e, undecoded
+                    debug!(
+                        src = %addr,
+                        error = ?e,
+                        raw_message = %undecoded,
+                        "error updating SIP via"
                     );
                     continue;
                 }
             };
 
-            debug!(
-                len, src=%addr,dest=%self.get_addr(), message=undecoded,
-                "udp received"
-            );
+            debug!(len, src=%addr, dest=%self.get_addr(), raw_message=undecoded, "udp received");
 
             sender.send(TransportEvent::Incoming(
                 msg,
@@ -171,9 +172,7 @@ impl UdpConnection {
         }?;
         let buf = msg.to_string();
 
-        debug!(len=buf.len(), src=%self.get_addr(),
-        dest=%destination, message=%buf,
-        "udp send");
+        debug!(len=buf.len(), dest=%destination, src=%self.get_addr(), raw_message=buf, "udp send");
 
         self.inner
             .conn
@@ -186,7 +185,6 @@ impl UdpConnection {
     }
 
     pub async fn send_raw(&self, buf: &[u8], destination: &SipAddr) -> Result<()> {
-        //trace!("send_raw {} -> {}", buf.len(), target);
         self.inner
             .conn
             .send_to(buf, destination.get_socketaddr()?)
@@ -199,7 +197,6 @@ impl UdpConnection {
 
     pub async fn recv_raw(&self, buf: &mut [u8]) -> Result<(usize, SipAddr)> {
         let (len, addr) = self.inner.conn.recv_from(buf).await?;
-        // trace!("received {} -> {}", len, addr);
         Ok((
             len,
             SipAddr {
@@ -238,6 +235,6 @@ impl std::fmt::Debug for UdpConnection {
 
 impl Drop for UdpInner {
     fn drop(&mut self) {
-        info!("dropping UDP transport: {}", self.addr);
+        debug!(addr = %self.addr, "dropping UDP transport");
     }
 }

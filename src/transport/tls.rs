@@ -14,7 +14,7 @@ use tokio_rustls::{
     TlsAcceptor, TlsConnector,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{debug, warn};
 
 // TLS configuration
 #[derive(Clone, Debug, Default)]
@@ -74,7 +74,7 @@ impl TlsListenerConnection {
                 let (stream, remote_addr) = match listener.accept().await {
                     Ok((stream, remote_addr)) => (stream, remote_addr),
                     Err(e) => {
-                        warn!("Failed to accept TLS connection: {:?}", e);
+                        warn!(error = ?e, "Failed to accept TLS connection");
                         continue;
                     }
                 };
@@ -87,7 +87,7 @@ impl TlsListenerConnection {
                     let tls_stream = match acceptor_clone.accept(stream).await {
                         Ok(stream) => stream,
                         Err(e) => {
-                            warn!("TLS handshake failed: {}", e);
+                            warn!(error = %e, "TLS handshake failed");
                             return;
                         }
                     };
@@ -107,14 +107,14 @@ impl TlsListenerConnection {
                     {
                         Ok(conn) => conn,
                         Err(e) => {
-                            warn!("Failed to create TLS connection: {:?}", e);
+                            warn!(error = ?e, %remote_sip_addr, "Failed to create TLS connection");
                             return;
                         }
                     };
 
                     let sip_connection = SipConnection::Tls(tls_connection.clone());
                     transport_layer_inner_ref.add_connection(sip_connection.clone());
-                    info!(?remote_sip_addr, "new tls connection");
+                    debug!(?remote_sip_addr, "new tls connection");
                 });
             }
         });
@@ -290,7 +290,7 @@ impl TlsConnection {
             ))),
             cancel_token,
         };
-        info!(
+        debug!(
             "Created TLS client connection: {} -> {}",
             local_addr, remote_addr
         );
@@ -323,7 +323,7 @@ impl TlsConnection {
             cancel_token,
         };
 
-        info!(
+        debug!(
             "Created TLS client connection: {} <- {}",
             connection.get_addr(),
             remote_addr
@@ -357,7 +357,7 @@ impl TlsConnection {
             cancel_token,
         };
 
-        info!(
+        debug!(
             "Created TLS server connection: {} <- {}",
             connection.get_addr(),
             remote_addr

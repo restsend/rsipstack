@@ -11,7 +11,7 @@ use rsip::SipMessage;
 use std::{fmt, sync::Arc};
 use tokio::net::TcpStream;
 use tokio_util::sync::CancellationToken;
-use tracing::info;
+use tracing::debug;
 
 type TcpInner =
     StreamConnectionInner<tokio::io::ReadHalf<TcpStream>, tokio::io::WriteHalf<TcpStream>>;
@@ -47,9 +47,10 @@ impl TcpConnection {
             cancel_token,
         };
 
-        info!(
-            "Created TCP client connection: {} -> {}",
-            local_addr, remote
+        debug!(
+            local = %local_addr,
+            remote = %remote,
+            "Created TCP client connection"
         );
 
         Ok(connection)
@@ -78,9 +79,10 @@ impl TcpConnection {
             cancel_token,
         };
 
-        info!(
-            "Created TCP server connection: {} <- {}",
-            connection.inner.local_addr, remote_addr
+        debug!(
+            local = %connection.inner.local_addr,
+            remote = %remote_addr,
+            "Created TCP server connection"
         );
 
         Ok(connection)

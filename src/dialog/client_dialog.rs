@@ -158,7 +158,7 @@ impl ClientInviteDialog {
         match self.inner.do_request(request).await {
             Ok(_) => {}
             Err(e) => {
-                info!("bye error: {}", e);
+                info!(error = %e, "bye error");
             }
         };
         self.inner
@@ -192,7 +192,7 @@ impl ClientInviteDialog {
         if self.inner.is_confirmed() {
             return Ok(());
         }
-        info!(id=%self.id(),"sending cancel request");
+        debug!(id = %self.id(), "sending cancel request");
         let mut cancel_request = self
             .inner
             .initial_request
@@ -250,7 +250,7 @@ impl ClientInviteDialog {
         if !self.inner.is_confirmed() {
             return Ok(None);
         }
-        info!(id=%self.id(),"sending re-invite request, body:\n{:?}", body);
+        debug!(id = %self.id(), ?body, "sending re-invite request");
         let request =
             self.inner
                 .make_request(rsip::Method::Invite, None, None, None, headers, body)?;
@@ -304,7 +304,7 @@ impl ClientInviteDialog {
         if !self.inner.is_confirmed() {
             return Ok(None);
         }
-        info!(id=%self.id(),"sending update request, body:\n{:?}", body);
+        debug!(id = %self.id(), ?body, "sending update request");
         let request =
             self.inner
                 .make_request(rsip::Method::Update, None, None, None, headers, body)?;
@@ -351,7 +351,7 @@ impl ClientInviteDialog {
         if !self.inner.is_confirmed() {
             return Ok(None);
         }
-        info!(id=%self.id(),"sending info request, body:\n{:?}", body);
+        debug!(id = %self.id(), ?body, "sending info request");
         let request =
             self.inner
                 .make_request(rsip::Method::Info, None, None, None, headers, body)?;
@@ -366,7 +366,7 @@ impl ClientInviteDialog {
         if !self.inner.is_confirmed() {
             return Ok(None);
         }
-        info!(id=%self.id(),"sending option request, body:\n{:?}", body);
+        debug!(id = %self.id(), ?body, "sending option request");
         let request =
             self.inner
                 .make_request(rsip::Method::Options, None, None, None, headers, body)?;
@@ -386,7 +386,7 @@ impl ClientInviteDialog {
         if !self.inner.is_confirmed() {
             return Ok(None);
         }
-        info!(id=%self.id(),"sending {} request", method);
+        debug!(id = %self.id(), %method, "sending request");
         let request = self
             .inner
             .make_request(method, None, None, None, headers, body)?;
@@ -494,16 +494,21 @@ impl ClientInviteDialog {
     /// * `INVITE` - Handles re-INVITE (when confirmed)
     pub async fn handle(&mut self, tx: &mut Transaction) -> Result<()> {
         trace!(
-            id=%self.id(),
-            "handle request: {:?} state:{}",
-            tx.original,
-            self.inner.state.lock().unwrap()
+            id = %self.id(),
+            method = %tx.original.method,
+            state = %self.inner.state.lock().unwrap(),
+            "handle request"
         );
 
         let cseq = tx.original.cseq_header()?.seq()?;
         let remote_seq = self.inner.remote_seq.load(Ordering::Relaxed);
         if remote_seq > 0 && cseq < remote_seq {
-            info!(id=%self.id(),"received old request remote_seq: {} > {}", remote_seq, cseq);
+            debug!(
+                id = %self.id(),
+                remote_seq = %remote_seq,
+                cseq = %cseq,
+                "received old request"
+            );
             tx.reply(rsip::StatusCode::ServerInternalError).await?;
             return Ok(());
         }
@@ -524,7 +529,7 @@ impl ClientInviteDialog {
                 rsip::Method::Message => return self.handle_message(tx).await,
                 rsip::Method::Notify => return self.handle_notify(tx).await,
                 _ => {
-                    info!(id=%self.id(), "invalid request method: {:?}", tx.original.method);
+                    debug!(id = %self.id(), method = ?tx.original.method, "invalid request method");
                     tx.reply(rsip::StatusCode::MethodNotAllowed).await?;
                     return Err(crate::Error::DialogError(
                         "invalid request".to_string(),
@@ -534,16 +539,17 @@ impl ClientInviteDialog {
                 }
             }
         } else {
-            info!(id=%self.id(),
-                "received request not confirmed: {:?}",
-                tx.original.method
+            debug!(
+                id = %self.id(),
+                method = ?tx.original.method,
+                "received request not confirmed"
             );
         }
         Ok(())
     }
 
     async fn handle_bye(&mut self, tx: &mut Transaction) -> Result<()> {
-        info!(id=%self.id(), "received bye {}", tx.original.uri);
+        debug!(id = %self.id(), uri = %tx.original.uri, "received bye");
         self.inner
             .transition(DialogState::Terminated(self.id(), TerminatedReason::UasBye))?;
         tx.reply(rsip::StatusCode::OK).await?;
@@ -551,7 +557,7 @@ impl ClientInviteDialog {
     }
 
     async fn handle_info(&mut self, tx: &mut Transaction) -> Result<()> {
-        debug!(id=%self.id(),"received info {}", tx.original.uri);
+        debug!(id = %self.id(), uri = %tx.original.uri, "received info");
         let (handle, rx) = TransactionHandle::new();
         self.inner
             .transition(DialogState::Info(self.id(), tx.original.clone(), handle))?;
@@ -559,7 +565,7 @@ impl ClientInviteDialog {
     }
 
     async fn handle_options(&mut self, tx: &mut Transaction) -> Result<()> {
-        debug!(id=%self.id(),"received options {}", tx.original.uri);
+        debug!(id = %self.id(), uri = %tx.original.uri, "received options");
         let (handle, rx) = TransactionHandle::new();
         self.inner
             .transition(DialogState::Options(self.id(), tx.original.clone(), handle))?;
@@ -567,7 +573,7 @@ impl ClientInviteDialog {
     }
 
     async fn handle_update(&mut self, tx: &mut Transaction) -> Result<()> {
-        debug!(id=%self.id(),"received update {}", tx.original.uri);
+        debug!(id = %self.id(), uri = %tx.original.uri, "received update");
         let (handle, rx) = TransactionHandle::new();
         self.inner
             .transition(DialogState::Updated(self.id(), tx.original.clone(), handle))?;
@@ -575,7 +581,7 @@ impl ClientInviteDialog {
     }
 
     async fn handle_reinvite(&mut self, tx: &mut Transaction) -> Result<()> {
-        debug!(id=%self.id(),"received reinvite {}", tx.original.uri);
+        debug!(id = %self.id(), uri = %tx.original.uri, "received reinvite");
         let (handle, rx) = TransactionHandle::new();
         self.inner
             .transition(DialogState::Updated(self.id(), tx.original.clone(), handle))?;
@@ -586,7 +592,7 @@ impl ClientInviteDialog {
         while let Some(msg) = tx.receive().await {
             match msg {
                 SipMessage::Request(req) if req.method == rsip::Method::Ack => {
-                    info!(id=%self.id(),"received ACK for re-INVITE");
+                    debug!(id = %self.id(), "received ACK for re-INVITE");
                     break;
                 }
                 _ => {}
@@ -596,7 +602,7 @@ impl ClientInviteDialog {
     }
 
     async fn handle_refer(&mut self, tx: &mut Transaction) -> Result<()> {
-        debug!(id=%self.id(),"received refer {}", tx.original.uri);
+        debug!(id = %self.id(), uri = %tx.original.uri, "received refer");
         let (handle, rx) = TransactionHandle::new();
         self.inner
             .transition(DialogState::Refer(self.id(), tx.original.clone(), handle))?;
@@ -605,7 +611,7 @@ impl ClientInviteDialog {
     }
 
     async fn handle_message(&mut self, tx: &mut Transaction) -> Result<()> {
-        debug!(id=%self.id(),"received message {}", tx.original.uri);
+        debug!(id = %self.id(), uri = %tx.original.uri, "received message");
         let (handle, rx) = TransactionHandle::new();
         self.inner
             .transition(DialogState::Message(self.id(), tx.original.clone(), handle))?;
@@ -614,7 +620,7 @@ impl ClientInviteDialog {
     }
 
     async fn handle_notify(&mut self, tx: &mut Transaction) -> Result<()> {
-        debug!(id=%self.id(),"received notify {}", tx.original.uri);
+        debug!(id = %self.id(), uri = %tx.original.uri, "received notify");
         let (handle, rx) = TransactionHandle::new();
         self.inner
             .transition(DialogState::Notify(self.id(), tx.original.clone(), handle))?;
@@ -653,7 +659,7 @@ impl ClientInviteDialog {
                     ) {
                         if auth_sent {
                             final_response = Some(resp.clone());
-                            info!(id=%self.id(),"received {:?} response after auth sent", status);
+                            debug!(id = %self.id(), ?status, "received auth response after auth sent");
                             self.inner.transition(DialogState::Terminated(
                                 self.id(),
                                 TerminatedReason::ProxyAuthRequired,
@@ -682,7 +688,7 @@ impl ClientInviteDialog {
                             }
                             continue;
                         } else {
-                            info!(id=%self.id(),"received 407 response without auth option");
+                            debug!(id=%self.id(),"received 407 response without auth option");
                             self.inner.transition(DialogState::Terminated(
                                 self.id(),
                                 TerminatedReason::ProxyAuthRequired,

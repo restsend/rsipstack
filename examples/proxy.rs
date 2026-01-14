@@ -97,7 +97,7 @@ async fn main() -> Result<()> {
         .try_init()
         .ok();
     if let Err(e) = dotenv::dotenv() {
-        info!("Failed to load .env file: {}", e);
+        info!(error = %e, "Failed to load .env file");
     }
     let args = Args::parse();
 
@@ -132,7 +132,7 @@ async fn main() -> Result<()> {
     )
     .await?;
     transport_layer.add_transport(connection.into());
-    info!("Added UDP transport on {}:{}", addr, args.port);
+    info!(addr = %addr, port = args.port, "Added UDP transport");
 
     if let Some(tcp_port) = args.tcp_port {
         let local_addr = SipAddr {
@@ -148,7 +148,7 @@ async fn main() -> Result<()> {
         };
         let tcp_listener = TcpListenerConnection::new(local_addr.clone(), external_addr).await?;
         transport_layer.add_transport(tcp_listener.into());
-        info!("Added TCP transport on {}", local_addr.addr);
+        info!(addr = %local_addr.addr, "Added TCP transport");
     }
 
     let endpoint = EndpointBuilder::new()
@@ -167,7 +167,7 @@ async fn main() -> Result<()> {
     let http_server_handle = if let Some(http_port) = args.http_port {
         let app = create_http_app(app_state.clone());
         let http_addr = format!("0.0.0.0:{}", http_port).parse::<SocketAddr>()?;
-        info!("Starting HTTP server on {}", http_addr);
+        info!(addr = %http_addr, "Starting HTTP server");
         let listener = tokio::net::TcpListener::bind(http_addr).await?;
         Some(tokio::spawn(async move {
             axum::serve(
@@ -203,7 +203,7 @@ async fn main() -> Result<()> {
                 .transport_layer
                 .add_transport(ws_listener.into());
 
-            info!("Added WebSocket transport on {}", local_addr.addr);
+            info!(addr = %local_addr.addr, "Added WebSocket transport");
         }
         #[cfg(not(feature = "websocket"))]
         {
@@ -217,7 +217,7 @@ async fn main() -> Result<()> {
             info!("proxy endpoint finished");
         }
         r = process_incoming_request(app_state, incoming) => {
-            info!("serve loop finished {:?}", r);
+            info!(result = ?r, "serve loop finished");
         }
         _ = async {
             if let Some(handle) = http_server_handle {
@@ -237,7 +237,7 @@ async fn process_incoming_request(
     mut incoming: TransactionReceiver,
 ) -> Result<()> {
     while let Some(mut tx) = incoming.recv().await {
-        info!("Received transaction: {:?}", tx.key);
+        info!(key = ?tx.key, "Received transaction");
         let state_ref = state.clone();
         match tx.original.method {
             rsip::Method::Invite => {
@@ -256,7 +256,7 @@ async fn process_incoming_request(
                 handle_register(state_ref, tx).await?;
             }
             rsip::Method::Ack => {
-                info!("received out of transaction ack: {:?}", tx.original.method);
+                info!(method = ?tx.original.method, "received out of transaction ack");
                 let dialog_id = DialogId::try_from(&tx.original)?;
                 if !state_ref.inner.sessions.lock().await.contains(&dialog_id) {
                     tx.reply(rsip::StatusCode::NotAcceptable).await?;
@@ -274,7 +274,7 @@ async fn process_incoming_request(
                 let target = match target {
                     Some(u) => u,
                     None => {
-                        info!("ack user not found: {}", callee);
+                        info!(user = %callee, "ack user not found");
                         tx.reply(rsip::StatusCode::NotAcceptable).await?;
                         continue;
                     }
@@ -292,8 +292,8 @@ async fn process_incoming_request(
             }
             rsip::Method::Options => {
                 info!(
-                    "ignoring out of dialog OPTIONS request: {:?}",
-                    tx.original.method
+                    method = ?tx.original.method,
+                    "ignoring out of dialog OPTIONS request"
                 );
                 // do nothing for OPTIONS, may be a attack from scanner
                 // tx.reply(rsip::StatusCode::NotAcceptable).await?;
@@ -354,7 +354,7 @@ async fn handle_register(state: AppState, mut tx: Transaction) -> Result<()> {
     let user = match User::try_from(&tx.original) {
         Ok(u) => u,
         Err(e) => {
-            info!("failed to parse contact: {:?}", e);
+            info!(error = ?e, "failed to parse contact");
             return tx.reply(rsip::StatusCode::BadRequest).await;
         }
     };
@@ -370,7 +370,7 @@ async fn handle_register(state: AppState, mut tx: Transaction) -> Result<()> {
             Ok(v) => {
                 if v == 0 {
                     // remove user
-                    info!("unregistered user: {} -> {}", user.username, contact);
+                    info!(user = %user.username, contact = %contact, "unregistered user");
                     state.inner.users.lock().await.remove(&user.username);
                     return tx.reply(rsip::StatusCode::OK).await;
                 }
@@ -380,7 +380,7 @@ async fn handle_register(state: AppState, mut tx: Transaction) -> Result<()> {
         None => {}
     }
 
-    info!("Registered user: {} -> {}", user.username, user.destination);
+    info!(user = %user.username, dest = %user.destination, "Registered user");
     state
         .inner
         .users
@@ -408,7 +408,7 @@ async fn handle_invite(state: AppState, mut tx: Transaction) -> Result<()> {
     let target = match target {
         Some(u) => u,
         None => {
-            info!("user not found: {}", callee);
+            info!(user = %callee, "user not found");
             tx.reply_with(rsip::StatusCode::NotFound, vec![record_route.into()], None)
                 .await
                 .ok();
@@ -436,7 +436,7 @@ async fn handle_invite(state: AppState, mut tx: Transaction) -> Result<()> {
     let key = TransactionKey::from_request(&inv_req, TransactionRole::Client)
         .expect("client_transaction");
 
-    info!("Forwarding INVITE to: {} -> {}", caller, target.destination);
+    info!(caller = %caller, dest = %target.destination, "Forwarding INVITE");
 
     let mut inv_tx = Transaction::new_client(key, inv_req, tx.endpoint_inner.clone(), None);
     inv_tx.destination = Some(target.destination);
@@ -450,7 +450,7 @@ async fn handle_invite(state: AppState, mut tx: Transaction) -> Result<()> {
         }
         select! {
             msg = inv_tx.receive() => {
-                info!("UAC Received message: {}", msg.as_ref().map(|m| m.to_string()).unwrap_or_default());
+                info!(raw_message = %msg.as_ref().map(|m| m.to_string()).unwrap_or_default(), "UAC Received message");
                 if let Some(msg) = msg {
                     match msg {
                         rsip::message::SipMessage::Response(mut resp) => {
@@ -459,7 +459,7 @@ async fn handle_invite(state: AppState, mut tx: Transaction) -> Result<()> {
                             resp.headers.push_front(record_route.clone().into());
                             if resp.status_code.kind() == rsip::StatusCodeKind::Successful {
                                 let dialog_id = DialogId::try_from(&resp)?;
-                                info!("add session: {}", dialog_id);
+                                info!(id = %dialog_id, "add session");
                                 state.inner.sessions.lock().await.insert(dialog_id);
                             }
                             tx.respond(resp).await?;
@@ -469,7 +469,7 @@ async fn handle_invite(state: AppState, mut tx: Transaction) -> Result<()> {
                 }
             }
             msg = tx.receive() => {
-                info!("UAS Received message: {}", msg.as_ref().map(|m| m.to_string()).unwrap_or_default());
+                info!(raw_message = %msg.as_ref().map(|m| m.to_string()).unwrap_or_default(), "UAS Received message");
                 if let Some(msg) = msg {
                     match msg {
                         rsip::message::SipMessage::Request(req) => match req.method {
@@ -504,7 +504,7 @@ async fn handle_bye(state: AppState, mut tx: Transaction) -> Result<()> {
     let peer = match target {
         Some(u) => u,
         None => {
-            info!("bye user not found: {}", callee);
+            info!(user = %callee, "bye user not found");
             return tx.reply(rsip::StatusCode::NotFound).await;
         }
     };
@@ -516,7 +516,7 @@ async fn handle_bye(state: AppState, mut tx: Transaction) -> Result<()> {
     let key = TransactionKey::from_request(&inv_req, TransactionRole::Client)
         .expect("client_transaction");
 
-    info!("Forwarding BYE to: {} -> {}", caller, peer.destination);
+    info!(caller = %caller, dest = %peer.destination, "Forwarding BYE");
 
     let mut bye_tx = Transaction::new_client(key, inv_req, tx.endpoint_inner.clone(), None);
     bye_tx.destination = Some(peer.destination);
@@ -525,7 +525,7 @@ async fn handle_bye(state: AppState, mut tx: Transaction) -> Result<()> {
 
     let dialog_id = DialogId::try_from(&bye_tx.original)?;
     if state.inner.sessions.lock().await.remove(&dialog_id) {
-        info!("removed session: {}", dialog_id);
+        info!(id = %dialog_id, "removed session");
     }
 
     while let Some(msg) = bye_tx.receive().await {
@@ -533,11 +533,11 @@ async fn handle_bye(state: AppState, mut tx: Transaction) -> Result<()> {
             rsip::message::SipMessage::Response(mut resp) => {
                 // pop first Via
                 header_pop!(resp.headers, rsip::Header::Via);
-                info!("UAC/BYE Forwarding response: {}", resp.to_string());
+                info!(raw_message = %resp.to_string(), "UAC/BYE Forwarding response");
                 tx.respond(resp).await?;
             }
             _ => {
-                warn!("UAC/BYE Received request: {}", msg.to_string());
+                warn!(raw_message = %msg.to_string(), "UAC/BYE Received request");
             }
         }
     }
@@ -644,7 +644,7 @@ async fn handle_websocket(client_addr: ClientAddr, socket: WebSocket, _state: Ap
     };
 
     let sip_connection = SipConnection::Channel(connection.clone());
-    info!("Created WebSocket channel connection: {}", local_addr);
+    info!(addr = %local_addr, "Created WebSocket channel connection");
     _state
         .inner
         .endpoint_ref
@@ -660,8 +660,8 @@ async fn handle_websocket(client_addr: ClientAddr, socket: WebSocket, _state: Ap
                     Some(Ok(Message::Text(text))) => match SipMessage::try_from(text.as_str()) {
                         Ok(sip_msg) => {
                             info!(
-                                "WebSocket received SIP message: {}",
-                                sip_msg.to_string().lines().next().unwrap_or("")
+                                raw_message = %sip_msg.to_string().lines().next().unwrap_or(""),
+                                "WebSocket received SIP message"
                             );
                             let msg = match SipConnection::update_msg_received(
                                 sip_msg,
@@ -670,7 +670,7 @@ async fn handle_websocket(client_addr: ClientAddr, socket: WebSocket, _state: Ap
                             ) {
                                 Ok(msg) => msg,
                                 Err(e) => {
-                                    warn!("Error updating SIP via: {:?}", e);
+                                    warn!(error = ?e, "Error updating SIP via");
                                     continue;
                                 }
                             };
@@ -679,31 +679,31 @@ async fn handle_websocket(client_addr: ClientAddr, socket: WebSocket, _state: Ap
                                 sip_connection.clone(),
                                 local_addr.clone(),
                             )) {
-                                warn!("Error forwarding message to transport: {:?}", e);
+                                warn!(error = ?e, "Error forwarding message to transport");
                                 break;
                             }
                         }
                         Err(e) => {
-                            warn!("Error parsing SIP message from WebSocket: {}", e);
+                            warn!(error = %e, "Error parsing SIP message from WebSocket");
                         }
                     },
                     Some(Ok(Message::Binary(bin))) => match SipMessage::try_from(bin) {
                         Ok(sip_msg) => {
                             info!(
-                                "WebSocket received binary SIP message: {}",
-                                sip_msg.to_string().lines().next().unwrap_or("")
+                                raw_message = %sip_msg.to_string().lines().next().unwrap_or(""),
+                                "WebSocket received binary SIP message"
                             );
                             if let Err(e) = from_ws_tx.send(TransportEvent::Incoming(
                                 sip_msg,
                                 sip_connection.clone(),
                                 local_addr.clone(),
                             )) {
-                                warn!("Error forwarding binary message to transport: {:?}", e);
+                                warn!(error = ?e, "Error forwarding binary message to transport");
                                 break;
                             }
                         }
                         Err(e) => {
-                            warn!("Error parsing binary SIP message from WebSocket: {}", e);
+                            warn!(error = %e, "Error parsing binary SIP message from WebSocket");
                         }
                     },
                     Some(Ok(Message::Close(_))) => {
@@ -713,7 +713,7 @@ async fn handle_websocket(client_addr: ClientAddr, socket: WebSocket, _state: Ap
                     Some(Ok(Message::Ping(data))) => {
                         let mut sink = ws_sink.lock().await;
                         if let Err(e) = sink.send(Message::Pong(data)).await {
-                            warn!("Error sending pong response: {}", e);
+                            warn!(error = %e, "Error sending pong response");
                             break;
                         }
                     }
@@ -721,7 +721,7 @@ async fn handle_websocket(client_addr: ClientAddr, socket: WebSocket, _state: Ap
                         // Just acknowledge the pong
                     }
                     Some(Err(e)) => {
-                        warn!("WebSocket error: {}", e);
+                        warn!(error = %e, "WebSocket error");
                         break;
                     }
                     None => {
@@ -737,12 +737,12 @@ async fn handle_websocket(client_addr: ClientAddr, socket: WebSocket, _state: Ap
                     Some(TransportEvent::Incoming(sip_msg, _, _)) => {
                         let message_text = sip_msg.to_string();
                         info!(
-                            "Forwarding message to WebSocket: {}",
-                            message_text.lines().next().unwrap_or("")
+                            raw_message = %message_text.lines().next().unwrap_or(""),
+                            "Forwarding message to WebSocket"
                         );
                         let mut sink = ws_sink.lock().await;
                         if let Err(e) = sink.send(Message::Text(message_text.into())).await {
-                            warn!("Error sending message to WebSocket: {}", e);
+                            warn!(error = %e, "Error sending message to WebSocket");
                             break;
                         }
                     }

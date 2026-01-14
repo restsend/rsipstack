@@ -29,7 +29,7 @@ pub async fn external_by_stun(
     stun_server: &str,
     expires: Duration,
 ) -> Result<SocketAddr> {
-    info!("getting external IP by STUN server: {}", stun_server);
+    info!(stun_server = %stun_server, "getting external IP by STUN server");
     let msg = StunMessageBuilder::new(BINDING, MessageClass::Request).build();
 
     let encoder = MessageEncoderBuilder::default().build();
@@ -55,7 +55,7 @@ pub async fn external_by_stun(
     let mut buf = [0u8; 2048];
     let (len, _) = select! {
         _ = sleep(expires) => {
-            info!("stun timeout {}", stun_server);
+            info!(stun_server = %stun_server, "stun timeout");
             return Err(Error::Error("STUN server timeout".to_string()));
         }
         r = conn.recv_raw(&mut buf) => {
@@ -76,7 +76,7 @@ pub async fn external_by_stun(
         .as_xor_mapped_address()
         .map_err(|e| crate::Error::Error(e.to_string()))?;
     let socket: &SocketAddr = xor_addr.socket_address();
-    info!("external IP: {}", socket);
+    info!(external_ip = %socket, "external IP");
     conn.external = Some(SipAddr {
         r#type: Some(rsip::transport::Transport::Udp),
         addr: socket.to_owned().into(),
@@ -88,11 +88,11 @@ pub async fn external_by_stun(
 async fn test_external_with_stun() -> Result<()> {
     let addrs = tokio::net::lookup_host("restsend.com:3478").await?;
     for addr in addrs {
-        info!("stun server: {}", addr);
+        info!(stun_server = %addr, "stun server");
     }
     let mut peer_bob = UdpConnection::create_connection("0.0.0.0:0".parse()?, None).await?;
     let expires = Duration::from_secs(5);
     external_by_stun(&mut peer_bob, "restsend.com:3478", expires).await?;
-    info!("external IP: {:?}", peer_bob.get_addr());
+    info!(external_ip = ?peer_bob.get_addr(), "external IP");
     Ok(())
 }

@@ -280,15 +280,15 @@ impl EndpointInner {
                     match self.on_received_message(msg, connection, &from).await {
                         Ok(()) => {}
                         Err(e) => {
-                            warn!(addr=%from,"on_received_message error: {}", e);
+                            warn!(addr = %from, error = %e, "on_received_message error");
                         }
                     }
                 }
                 TransportEvent::New(t) => {
-                    info!(addr=%t.get_addr(), "new connection");
+                    debug!(addr=%t.get_addr(), "new connection");
                 }
                 TransportEvent::Closed(t) => {
-                    info!(addr=%t.get_addr(), "closed connection");
+                    debug!(addr=%t.get_addr(), "closed connection");
                 }
             }
         }
@@ -442,7 +442,7 @@ impl EndpointInner {
             SipMessage::Request(req) => req,
             SipMessage::Response(resp) => {
                 if resp.cseq_header()?.method()? != rsip::Method::Cancel {
-                    debug!(%key, "the transaction is not exist {}", resp);
+                    debug!(%key, response = %resp, "the transaction does not exist");
                 }
                 return Ok(());
             }
@@ -680,7 +680,7 @@ impl Endpoint {
                 info!("endpoint shutdown");
             }
             Err(e) => {
-                warn!("endpoint serve error: {:?}", e);
+                warn!(error = ?e, "endpoint serve error");
             }
         }
     }

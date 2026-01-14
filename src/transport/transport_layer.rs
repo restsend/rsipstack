@@ -180,7 +180,7 @@ impl TransportLayer {
             match TransportLayerInner::serve_listener(self.inner.clone(), transport).await {
                 Ok(()) => {}
                 Err(e) => {
-                    warn!(?addr, "Failed to serve listener: {:?}", e);
+                    warn!(error = ?e, %addr, "Failed to serve listener");
                 }
             }
         }
@@ -191,7 +191,7 @@ impl TransportLayer {
         match self.inner.listens.read() {
             Ok(listens) => listens.iter().map(|t| t.get_addr().to_owned()).collect(),
             Err(e) => {
-                warn!("Failed to read listens: {:?}", e);
+                warn!(error = ?e, "Failed to read listens");
                 Vec::new()
             }
         }
@@ -205,7 +205,7 @@ impl TransportLayerInner {
                 listens.push(connection);
             }
             Err(e) => {
-                warn!("Failed to write listens: {:?}", e);
+                warn!(error = ?e, "Failed to write listens");
             }
         }
     }
@@ -216,7 +216,7 @@ impl TransportLayerInner {
                 listens.retain(|t| t.get_addr() != addr);
             }
             Err(e) => {
-                warn!("Failed to write listens: {} {:?}", addr, e);
+                warn!(error = ?e, %addr, "Failed to write listens");
             }
         }
     }
@@ -228,7 +228,7 @@ impl TransportLayerInner {
                 self.serve_connection(connection);
             }
             Err(e) => {
-                warn!("Failed to write connections: {:?}", e);
+                warn!(error = ?e, "Failed to write connections");
             }
         }
     }
@@ -239,7 +239,7 @@ impl TransportLayerInner {
                 connections.remove(addr);
             }
             Err(e) => {
-                warn!("Failed to write connections: {} {:?}", addr, e);
+                warn!(error = ?e, %addr, "Failed to write connections");
             }
         }
     }
@@ -257,7 +257,7 @@ impl TransportLayerInner {
             target
         };
 
-        debug!(?key, "lookup target: {} -> {}", destination, target);
+        debug!(?key, src = %destination, %target, "lookup target");
         match self.connections.read() {
             Ok(connections) => {
                 if let Some(transport) = connections.get(&target) {
@@ -265,7 +265,7 @@ impl TransportLayerInner {
                 }
             }
             Err(e) => {
-                warn!("Failed to read connections: {:?}", e);
+                warn!(error = ?e, "Failed to read connections");
                 return Err(crate::Error::Error(format!(
                     "Failed to read connections: {:?}",
                     e
@@ -319,6 +319,7 @@ impl TransportLayerInner {
         let listens = match self.listens.read() {
             Ok(listens) => listens,
             Err(e) => {
+                warn!(error = ?e, "Failed to read listens");
                 return Err(crate::Error::Error(format!(
                     "Failed to read listens: {:?}",
                     e
@@ -376,7 +377,7 @@ impl TransportLayerInner {
             match sender_clone.send(TransportEvent::New(transport.clone())) {
                 Ok(()) => {}
                 Err(e) => {
-                    warn!(addr=%transport.get_addr(), "Error sending new connection event: {:?}", e);
+                    warn!(addr=%transport.get_addr(), error = ?e, "Error sending new connection event");
                     return;
                 }
             }
