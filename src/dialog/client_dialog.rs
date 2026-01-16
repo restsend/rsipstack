@@ -1,13 +1,16 @@
 use super::dialog::DialogInnerRef;
 use super::DialogId;
-use crate::dialog::{
-    authenticate::handle_client_authenticate,
-    dialog::{DialogState, TerminatedReason, TransactionHandle},
-    subscription::ClientSubscriptionDialog,
-};
 use crate::rsip_ext::RsipResponseExt;
 use crate::transaction::transaction::Transaction;
 use crate::Result;
+use crate::{
+    dialog::{
+        authenticate::handle_client_authenticate,
+        dialog::{DialogState, TerminatedReason, TransactionHandle},
+        subscription::ClientSubscriptionDialog,
+    },
+    transaction::key::TransactionRole,
+};
 use rsip::prelude::HasHeaders;
 use rsip::{prelude::HeadersExt, Header};
 use rsip::{Response, SipMessage, StatusCode};
@@ -768,7 +771,7 @@ impl ClientInviteDialog {
                         None => {}
                     }
 
-                    if let Ok(id) = DialogId::try_from(&resp) {
+                    if let Ok(id) = DialogId::try_from((&resp, TransactionRole::Client)) {
                         dialog_id = id;
                     }
                     match resp.status_code {

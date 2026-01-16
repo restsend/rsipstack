@@ -351,18 +351,20 @@ impl EndpointInner {
         match &msg {
             SipMessage::Request(req) => {
                 match req.method() {
-                    rsip::Method::Ack => match DialogId::try_from(req) {
-                        Ok(dialog_id) => {
-                            let tx_key = self
-                                .waiting_ack
-                                .read()
-                                .map(|wa| wa.get(&dialog_id).cloned());
-                            if let Ok(Some(tx_key)) = tx_key {
-                                key = tx_key;
+                    rsip::Method::Ack => {
+                        match DialogId::try_from((req, super::key::TransactionRole::Server)) {
+                            Ok(dialog_id) => {
+                                let tx_key = self
+                                    .waiting_ack
+                                    .read()
+                                    .map(|wa| wa.get(&dialog_id).cloned());
+                                if let Ok(Some(tx_key)) = tx_key {
+                                    key = tx_key;
+                                }
                             }
+                            Err(_) => {}
                         }
-                        Err(_) => {}
-                    },
+                    }
                     _ => {}
                 }
                 // check is the termination of an existing transaction
