@@ -7,6 +7,7 @@ use rsipstack::dialog::dialog_layer::DialogLayer;
 use rsipstack::dialog::invitation::InviteOption;
 use rsipstack::dialog::server_dialog::ServerInviteDialog;
 use rsipstack::transaction::endpoint::EndpointInnerRef;
+use rsipstack::transaction::key::TransactionRole;
 use rsipstack::Result;
 use rsipstack::{
     dialog::{authenticate::Credential, registration::Registration},
@@ -306,7 +307,7 @@ async fn process_incoming_request(
         info!("Received transaction: {:?}", tx.key);
 
         match tx.original.to_header()?.tag()?.as_ref() {
-            Some(_) => match dialog_layer.match_dialog(&tx.original) {
+            Some(_) => match dialog_layer.match_dialog(&tx) {
                 Some(mut d) => {
                     tokio::spawn(async move {
                         d.handle(&mut tx).await?;

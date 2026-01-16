@@ -403,7 +403,14 @@ impl DialogInner {
         let from = initial_request.from_header()?.typed()?;
         let mut to = initial_request.to_header()?.typed()?;
         if !to.params.iter().any(|p| matches!(p, Param::Tag(_))) {
-            to.params.push(rsip::Param::Tag(id.to_tag.clone().into()));
+            match role {
+                TransactionRole::Client => to
+                    .params
+                    .push(rsip::Param::Tag(id.remote_tag.clone().into())),
+                TransactionRole::Server => to
+                    .params
+                    .push(rsip::Param::Tag(id.local_tag.clone().into())),
+            }
         }
 
         let mut route_set = vec![];
@@ -461,7 +468,7 @@ impl DialogInner {
     }
 
     pub fn update_remote_tag(&self, tag: &str) -> Result<()> {
-        self.id.lock().unwrap().to_tag = tag.to_string();
+        self.id.lock().unwrap().remote_tag = tag.to_string();
         let mut to = self.to.lock().unwrap();
         *to = to.clone().with_tag(tag.into());
         Ok(())
@@ -795,7 +802,7 @@ impl DialogInner {
                         && !to.params.iter().any(|p| matches!(p, Param::Tag(_)))
                     {
                         to.params.push(rsip::Param::Tag(
-                            self.id.lock().unwrap().to_tag.clone().into(),
+                            self.id.lock().unwrap().local_tag.clone().into(),
                         ));
                     }
                     resp_headers.push(Header::To(to.into()));

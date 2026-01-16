@@ -10,7 +10,7 @@ use rsip::{Request, Response};
 use std::fmt::Write;
 use std::hash::Hash;
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, Copy)]
 pub enum TransactionRole {
     Client,
     Server,
