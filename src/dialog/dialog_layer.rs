@@ -11,7 +11,6 @@ use crate::transaction::transaction::transaction_event_sender_noop;
 use crate::transaction::{endpoint::EndpointInnerRef, transaction::Transaction};
 use crate::Result;
 use rsip::prelude::HeadersExt;
-use rsip::Request;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::{
     collections::HashMap,
@@ -156,8 +155,8 @@ impl DialogLayer {
         credential: Option<Credential>,
         local_contact: Option<rsip::Uri>,
     ) -> Result<ServerInviteDialog> {
-        let mut id = DialogId::try_from(&tx.original)?;
-        if !id.to_tag.is_empty() {
+        let mut id = DialogId::try_from(tx)?;
+        if !id.local_tag.is_empty() {
             let dlg = self
                 .inner
                 .dialogs
@@ -176,7 +175,7 @@ impl DialogLayer {
                 }
             }
         }
-        id.to_tag = make_tag().to_string(); // generate to tag
+        id.local_tag = make_tag().to_string(); // generate to tag
 
         let mut local_contact = local_contact;
         if local_contact.is_none() {
@@ -217,8 +216,8 @@ impl DialogLayer {
         credential: Option<Credential>,
         local_contact: Option<rsip::Uri>,
     ) -> Result<ServerSubscriptionDialog> {
-        let mut id = DialogId::try_from(&tx.original)?;
-        if !id.to_tag.is_empty() {
+        let mut id = DialogId::try_from(tx)?;
+        if !id.local_tag.is_empty() {
             let dlg = self
                 .inner
                 .dialogs
@@ -237,7 +236,7 @@ impl DialogLayer {
                 }
             }
         }
-        id.to_tag = make_tag().to_string(); // generate to tag
+        id.local_tag = make_tag().to_string(); // generate to tag
 
         let mut local_contact = local_contact;
         if local_contact.is_none() {
@@ -278,8 +277,8 @@ impl DialogLayer {
         credential: Option<Credential>,
         local_contact: Option<rsip::Uri>,
     ) -> Result<ServerPublicationDialog> {
-        let mut id = DialogId::try_from(&tx.original)?;
-        if !id.to_tag.is_empty() {
+        let mut id = DialogId::try_from(tx)?;
+        if !id.local_tag.is_empty() {
             let dlg = self
                 .inner
                 .dialogs
@@ -298,7 +297,7 @@ impl DialogLayer {
                 }
             }
         }
-        id.to_tag = make_tag().to_string(); // generate to tag
+        id.local_tag = make_tag().to_string(); // generate to tag
 
         let mut local_contact = local_contact;
         if local_contact.is_none() {
@@ -342,8 +341,8 @@ impl DialogLayer {
     ) -> Result<ClientPublicationDialog> {
         let id = DialogId {
             call_id,
-            from_tag,
-            to_tag,
+            local_tag: from_tag,
+            remote_tag: to_tag,
         };
 
         if let Some(Dialog::ClientPublication(dlg)) = self.get_dialog(&id) {
@@ -392,8 +391,8 @@ impl DialogLayer {
     ) -> Result<ClientSubscriptionDialog> {
         let id = DialogId {
             call_id,
-            from_tag,
-            to_tag,
+            local_tag: from_tag,
+            remote_tag: to_tag,
         };
 
         if let Some(Dialog::ClientSubscription(dlg)) = self.get_dialog(&id) {
@@ -543,8 +542,8 @@ impl DialogLayer {
             .map(|d| d.on_remove());
     }
 
-    pub fn match_dialog(&self, req: &Request) -> Option<Dialog> {
-        let id = DialogId::try_from(req).ok()?;
+    pub fn match_dialog(&self, tx: &Transaction) -> Option<Dialog> {
+        let id = DialogId::try_from(tx).ok()?;
         self.get_dialog(&id)
     }
 

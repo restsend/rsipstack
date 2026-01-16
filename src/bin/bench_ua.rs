@@ -107,7 +107,7 @@ async fn run_server(
                     });
                 }
                 rsip::Method::Bye => {
-                    if let Ok(dialog_id) = DialogId::try_from(&tx.original) {
+                    if let Ok(dialog_id) = DialogId::try_from(&tx) {
                         stats.active_calls.lock().unwrap().remove(&dialog_id);
                         tx.reply(rsip::StatusCode::OK).await.ok();
                         dialog_layer.remove_dialog(&dialog_id);

@@ -197,7 +197,7 @@ pub async fn handle_client_authenticate(
             let proxy_header = rsip::header_opt!(resp.headers().iter(), Header::ProxyAuthenticate);
             let proxy_header = proxy_header.ok_or(crate::Error::DialogError(
                 "missing proxy/www authenticate".to_string(),
-                DialogId::try_from(&tx.original)?,
+                DialogId::try_from(tx)?,
                 code,
             ))?;
             Header::ProxyAuthenticate(proxy_header.clone())
