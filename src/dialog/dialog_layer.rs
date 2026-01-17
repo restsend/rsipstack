@@ -156,8 +156,8 @@ impl DialogLayer {
         credential: Option<Credential>,
         local_contact: Option<rsip::Uri>,
     ) -> Result<ServerInviteDialog> {
-        let mut id = DialogId::from_uas_request(&tx.original)?;
-        if !id.local_tag.is_empty() {
+        let mut id = DialogId::try_from(&tx.original)?;
+        if !id.to_tag.is_empty() {
             let dlg = self
                 .inner
                 .dialogs
@@ -176,7 +176,7 @@ impl DialogLayer {
                 }
             }
         }
-        id.local_tag = make_tag().to_string(); // generate local tag
+        id.to_tag = make_tag().to_string(); // generate to tag
 
         let mut local_contact = local_contact;
         if local_contact.is_none() {
@@ -217,8 +217,8 @@ impl DialogLayer {
         credential: Option<Credential>,
         local_contact: Option<rsip::Uri>,
     ) -> Result<ServerSubscriptionDialog> {
-        let mut id = DialogId::from_uas_request(&tx.original)?;
-        if !id.local_tag.is_empty() {
+        let mut id = DialogId::try_from(&tx.original)?;
+        if !id.to_tag.is_empty() {
             let dlg = self
                 .inner
                 .dialogs
@@ -237,7 +237,7 @@ impl DialogLayer {
                 }
             }
         }
-        id.local_tag = make_tag().to_string(); // generate local tag
+        id.to_tag = make_tag().to_string(); // generate to tag
 
         let mut local_contact = local_contact;
         if local_contact.is_none() {
@@ -278,8 +278,8 @@ impl DialogLayer {
         credential: Option<Credential>,
         local_contact: Option<rsip::Uri>,
     ) -> Result<ServerPublicationDialog> {
-        let mut id = DialogId::from_uas_request(&tx.original)?;
-        if !id.local_tag.is_empty() {
+        let mut id = DialogId::try_from(&tx.original)?;
+        if !id.to_tag.is_empty() {
             let dlg = self
                 .inner
                 .dialogs
@@ -298,7 +298,7 @@ impl DialogLayer {
                 }
             }
         }
-        id.local_tag = make_tag().to_string(); // generate local tag
+        id.to_tag = make_tag().to_string(); // generate to tag
 
         let mut local_contact = local_contact;
         if local_contact.is_none() {
@@ -333,8 +333,8 @@ impl DialogLayer {
     pub fn get_or_create_client_publication(
         &self,
         call_id: String,
-        local_tag: String,
-        remote_tag: String,
+        from_tag: String,
+        to_tag: String,
         initial_request: rsip::Request,
         state_sender: DialogStateSender,
         credential: Option<Credential>,
@@ -342,8 +342,8 @@ impl DialogLayer {
     ) -> Result<ClientPublicationDialog> {
         let id = DialogId {
             call_id,
-            local_tag: local_tag,
-            remote_tag: remote_tag,
+            from_tag,
+            to_tag,
         };
 
         if let Some(Dialog::ClientPublication(dlg)) = self.get_dialog(&id) {
@@ -383,8 +383,8 @@ impl DialogLayer {
     pub fn get_or_create_client_subscription(
         &self,
         call_id: String,
-        local_tag: String,
-        remote_tag: String,
+        from_tag: String,
+        to_tag: String,
         initial_request: rsip::Request,
         state_sender: DialogStateSender,
         credential: Option<Credential>,
@@ -392,8 +392,8 @@ impl DialogLayer {
     ) -> Result<ClientSubscriptionDialog> {
         let id = DialogId {
             call_id,
-            local_tag: local_tag,
-            remote_tag: remote_tag,
+            from_tag,
+            to_tag,
         };
 
         if let Some(Dialog::ClientSubscription(dlg)) = self.get_dialog(&id) {

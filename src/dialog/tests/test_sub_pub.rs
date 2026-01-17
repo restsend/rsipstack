@@ -23,8 +23,8 @@ async fn test_server_subscription_creation() -> crate::Result<()> {
         dialog_layer.get_or_create_server_subscription(&transaction, state_sender, None, None)?;
 
     assert_eq!(server_sub.id().call_id, "sub-call-id");
-    assert_eq!(server_sub.id().remote_tag, "alice-tag");
-    assert!(!server_sub.id().local_tag.is_empty());
+    assert_eq!(server_sub.id().from_tag, "alice-tag");
+    assert!(!server_sub.id().to_tag.is_empty());
 
     Ok(())
 }
@@ -46,8 +46,8 @@ async fn test_server_publication_creation() -> crate::Result<()> {
         dialog_layer.get_or_create_server_publication(&transaction, state_sender, None, None)?;
 
     assert_eq!(server_pub.id().call_id, "pub-call-id");
-    assert_eq!(server_pub.id().remote_tag, "alice-tag");
-    assert!(!server_pub.id().local_tag.is_empty());
+    assert_eq!(server_pub.id().from_tag, "alice-tag");
+    assert!(!server_pub.id().to_tag.is_empty());
 
     Ok(())
 }
@@ -60,8 +60,8 @@ async fn test_client_publication_etag_handling() -> crate::Result<()> {
 
     let dialog_id = DialogId {
         call_id: "pub-call-id".to_string(),
-        local_tag: "alice-tag".to_string(),
-        remote_tag: "bob-tag".to_string(),
+        from_tag: "alice-tag".to_string(),
+        to_tag: "bob-tag".to_string(),
     };
 
     let mut publish_req = create_invite_request("alice-tag", "bob-tag", "pub-call-id");

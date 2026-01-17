@@ -495,7 +495,7 @@ impl Registration {
         }
         return Err(crate::Error::DialogError(
             "registration transaction is already terminated".to_string(),
-            DialogId::from_uac_request(&tx.original)?,
+            DialogId::try_from(&tx.original)?,
             StatusCode::BadRequest,
         ));
     }

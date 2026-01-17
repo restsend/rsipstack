@@ -768,7 +768,7 @@ impl ClientInviteDialog {
                         None => {}
                     }
 
-                    if let Ok(id) = DialogId::from_uac_response(&resp) {
+                    if let Ok(id) = DialogId::try_from(&resp) {
                         dialog_id = id;
                     }
                     match resp.status_code {

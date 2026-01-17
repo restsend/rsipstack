@@ -351,7 +351,7 @@ impl EndpointInner {
         match &msg {
             SipMessage::Request(req) => {
                 match req.method() {
-                    rsip::Method::Ack => match DialogId::from_uas_request(req) {
+                    rsip::Method::Ack => match DialogId::try_from(req) {
                         Ok(dialog_id) => {
                             let tx_key = self
                                 .waiting_ack
