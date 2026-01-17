@@ -548,7 +548,7 @@ impl DialogLayer {
             }
         }
 
-        let id = DialogId::try_from(&request)?;
+        let id = DialogId::from_uac_request(&request)?;
         let dlg_inner = DialogInner::new(
             TransactionRole::Client,
             id.clone(),

@@ -22,11 +22,11 @@ async fn server_dialog_handles_prack_request() -> crate::Result<()> {
 
     let dialog_id = DialogId {
         call_id: "test-call-prack".to_string(),
-        from_tag: "alice-tag".to_string(),
-        to_tag: "bob-tag".to_string(),
+        local_tag: "alice-tag".to_string(),
+        remote_tag: "bob-tag".to_string(),
     };
 
-    let invite_req = create_invite_request(&dialog_id.from_tag, "", &dialog_id.call_id);
+    let invite_req = create_invite_request(&dialog_id.local_tag, "", &dialog_id.call_id);
 
     let dialog_inner = DialogInner::new(
         TransactionRole::Server,
@@ -52,12 +52,12 @@ async fn server_dialog_handles_prack_request() -> crate::Result<()> {
             CSeq::new("2 PRACK").into(),
             From::new(&format!(
                 "Alice <sip:alice@example.com>;tag={}",
-                dialog_id.from_tag
+                dialog_id.local_tag
             ))
             .into(),
             To::new(&format!(
                 "Bob <sip:bob@example.com>;tag={}",
-                dialog_id.to_tag
+                dialog_id.remote_tag
             ))
             .into(),
             CallId::new(&dialog_id.call_id).into(),

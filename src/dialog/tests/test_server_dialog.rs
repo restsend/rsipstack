@@ -19,8 +19,8 @@ async fn test_dialog_make_request() -> crate::Result<()> {
     // Create dialog ID
     let dialog_id = DialogId {
         call_id: "test-call-id-123".to_string(),
-        from_tag: "alice-tag-456".to_string(),
-        to_tag: "bob-tag-789".to_string(),
+        local_tag: "alice-tag-456".to_string(),
+        remote_tag: "bob-tag-789".to_string(),
     };
 
     let endpoint = create_test_endpoint().await?;
@@ -77,8 +77,8 @@ async fn test_accept_with_public_contact_preserves_contact_header() -> crate::Re
     // Create dialog ID
     let dialog_id = DialogId {
         call_id: "test-call-id-contact".to_string(),
-        from_tag: "alice-tag-456".to_string(),
-        to_tag: "bob-tag-789".to_string(),
+        local_tag: "alice-tag-456".to_string(),
+        remote_tag: "bob-tag-789".to_string(),
     };
 
     let endpoint = create_test_endpoint().await?;

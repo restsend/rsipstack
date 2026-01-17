@@ -857,8 +857,8 @@ mod tests {
         // Create a test dialog ID
         let dialog_id = DialogId {
             call_id: "test-call-id".to_string(),
-            from_tag: "local-tag".to_string(),
-            to_tag: "remote-tag".to_string(),
+            local_tag: "local-tag".to_string(),
+            remote_tag: "remote-tag".to_string(),
         };
 
         state.inner.sessions.lock().await.insert(dialog_id.clone());

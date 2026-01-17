@@ -43,26 +43,26 @@ impl TransactionKey {
             method = Method::Invite;
         }
 
-        let from_tag = req
+        let local_tag = req
             .from_header()?
             .tag()?
             .ok_or(Error::Error("from tags missing".to_string()))?;
         let call_id = req.call_id_header()?.value();
         let cseq = req.cseq_header()?.seq()?;
-        Self::build_key(role, via, method, cseq, from_tag, call_id)
+        Self::build_key(role, via, method, cseq, local_tag, call_id)
     }
 
     pub fn from_response(resp: &Response, role: TransactionRole) -> Result<Self> {
         let via = resp.via_header()?.typed()?;
         let cseq = resp.cseq_header()?;
         let method = cseq.method()?;
-        let from_tag = resp
+        let local_tag = resp
             .from_header()?
             .tag()?
             .ok_or(Error::Error("from tags missing".to_string()))?;
         let call_id = resp.call_id_header()?.value();
 
-        Self::build_key(role, via, method, cseq.seq()?, from_tag, call_id)
+        Self::build_key(role, via, method, cseq.seq()?, local_tag, call_id)
     }
 
     pub(super) fn build_key(
@@ -70,7 +70,7 @@ impl TransactionKey {
         via: Via,
         method: Method,
         cseq: u32,
-        from_tag: Tag,
+        local_tag: Tag,
         call_id: &str,
     ) -> Result<Self> {
         let mut key = String::new();
@@ -79,14 +79,14 @@ impl TransactionKey {
                 write!(
                     &mut key,
                     "{}.{}_{}_{}_{}_{}",
-                    role, method, cseq, call_id, from_tag, branch
+                    role, method, cseq, call_id, local_tag, branch
                 )
             }
             None => {
                 write!(
                     &mut key,
                     "{}.{}_{}_{}_{}_{}.2543",
-                    role, method, cseq, call_id, from_tag, via.uri.host_with_port
+                    role, method, cseq, call_id, local_tag, via.uri.host_with_port
                 )
             }
         }

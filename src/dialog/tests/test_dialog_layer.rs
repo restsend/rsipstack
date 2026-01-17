@@ -25,7 +25,7 @@ async fn create_test_endpoint() -> crate::Result<crate::transaction::endpoint::E
 }
 
 /// Test helper to create mock INVITE request
-fn create_invite_request(from_tag: &str, to_tag: &str, call_id: &str, branch: &str) -> Request {
+fn create_invite_request(local_tag: &str, remote_tag: &str, call_id: &str, branch: &str) -> Request {
     Request {
         method: rsip::Method::Invite,
         uri: rsip::Uri::try_from("sip:bob@example.com:5060").unwrap(),
@@ -36,8 +36,8 @@ fn create_invite_request(from_tag: &str, to_tag: &str, call_id: &str, branch: &s
             ))
             .into(),
             CSeq::new("1 INVITE").into(),
-            From::new(&format!("Alice <sip:alice@example.com>;tag={}", from_tag)).into(),
-            To::new(&format!("Bob <sip:bob@example.com>;tag={}", to_tag)).into(),
+            From::new(&format!("Alice <sip:alice@example.com>;tag={}", local_tag)).into(),
+            To::new(&format!("Bob <sip:bob@example.com>;tag={}", remote_tag)).into(),
             CallId::new(call_id).into(),
             Contact::new("<sip:alice@alice.example.com:5060>").into(),
             MaxForwards::new("70").into(),
@@ -100,11 +100,11 @@ async fn test_server_invite_dialog_creation() -> crate::Result<()> {
     // Dialog should be created and stored
     assert_eq!(dialog_layer.len(), 1);
 
-    // Dialog ID should have generated to-tag
+    // Dialog ID should have generated local-tag (To-tag for UAS)
     let dialog_id = dialog.id();
     assert_eq!(dialog_id.call_id, "call-id-456");
-    assert_eq!(dialog_id.from_tag, "alice-tag-123");
-    assert!(!dialog_id.to_tag.is_empty());
+    assert_eq!(dialog_id.remote_tag, "alice-tag-123");
+    assert!(!dialog_id.local_tag.is_empty());
 
     Ok(())
 }
@@ -139,7 +139,7 @@ async fn test_existing_server_invite_dialog_retrieval() -> crate::Result<()> {
     // Second request with same dialog identifiers should retrieve existing dialog
     let invite_req2 = create_invite_request(
         "alice-tag-123",
-        &dialog_id.to_tag,
+        &dialog_id.local_tag,
         "call-id-456",
         "z9hG4bKnashds2",
     );
@@ -199,12 +199,12 @@ async fn test_dialog_retrieval_and_matching() -> crate::Result<()> {
             CSeq::new("2 BYE").into(),
             From::new(&format!(
                 "Alice <sip:alice@example.com>;tag={}",
-                dialog_id.from_tag
+                dialog_id.remote_tag
             ))
             .into(),
             To::new(&format!(
                 "Bob <sip:bob@example.com>;tag={}",
-                dialog_id.to_tag
+                dialog_id.local_tag
             ))
             .into(),
             CallId::new(&dialog_id.call_id).into(),
@@ -281,13 +281,13 @@ async fn test_dialog_layer_with_swapped_tags() -> crate::Result<()> {
     // Create a swapped dialog ID (as if from the other perspective)
     let swapped_id = DialogId {
         call_id: dialog_id.call_id.clone(),
-        from_tag: dialog_id.to_tag.clone(),
-        to_tag: dialog_id.from_tag.clone(),
+        local_tag: dialog_id.remote_tag.clone(),
+        remote_tag: dialog_id.local_tag.clone(),
     };
 
-    // Should be able to find dialog with swapped tags
+    // Should NOT be able to find dialog with swapped tags
     let found_dialog = dialog_layer.get_dialog(&swapped_id);
-    assert!(found_dialog.is_some());
+    assert!(found_dialog.is_none());
 
     Ok(())
 }
@@ -303,10 +303,10 @@ async fn test_multiple_dialogs_management() -> crate::Result<()> {
     // Create multiple dialogs
     for i in 0..5 {
         let call_id = format!("call-id-{}", i);
-        let from_tag = format!("alice-tag-{}", i);
+        let local_tag = format!("alice-tag-{}", i);
         let branch = format!("z9hG4bKnashds{}", i);
 
-        let invite_req = create_invite_request(&from_tag, "", &call_id, &branch);
+        let invite_req = create_invite_request(&local_tag, "", &call_id, &branch);
         let key = TransactionKey::from_request(&invite_req, TransactionRole::Server)?;
         let tx = Transaction::new_server(
             key,
@@ -329,23 +329,23 @@ async fn test_multiple_dialogs_management() -> crate::Result<()> {
     // Remove one dialog
     let _test_id = DialogId {
         call_id: "test-call-2".to_string(),
-        from_tag: "alice-tag-2".to_string(),
-        to_tag: "".to_string(), // We need to find the actual dialog first
+        local_tag: "alice-tag-2".to_string(),
+        remote_tag: "".to_string(), // We need to find the actual dialog first
     };
 
     // Find all dialogs to get the actual IDs
     let mut dialog_ids = vec![];
     for i in 0..5 {
         let call_id = format!("call-id-{}", i);
-        let from_tag = format!("alice-tag-{}", i);
+        let local_tag = format!("alice-tag-{}", i);
         let _partial_id = DialogId {
             call_id: call_id.clone(),
-            from_tag: from_tag.clone(),
-            to_tag: "".to_string(),
+            local_tag: local_tag.clone(),
+            remote_tag: "".to_string(),
         };
 
         // Try to find dialog by creating a request and matching
-        let test_req = create_invite_request(&from_tag, "", &call_id, "test-branch");
+        let test_req = create_invite_request(&local_tag, "", &call_id, "test-branch");
         if let Some(dialog) = dialog_layer.match_dialog(&test_req) {
             dialog_ids.push(dialog.id());
         }

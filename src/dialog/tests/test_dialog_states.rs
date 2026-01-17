@@ -14,7 +14,7 @@ use tokio::sync::mpsc::unbounded_channel;
 use tokio_util::sync::CancellationToken;
 
 /// Test helper to create a mock INVITE request
-pub fn create_invite_request(from_tag: &str, to_tag: &str, call_id: &str) -> Request {
+pub fn create_invite_request(local_tag: &str, remote_tag: &str, call_id: &str) -> Request {
     Request {
         method: rsip::Method::Invite,
         uri: rsip::Uri::try_from("sip:bob@example.com:5060").unwrap(),
@@ -22,8 +22,8 @@ pub fn create_invite_request(from_tag: &str, to_tag: &str, call_id: &str) -> Req
             Via::new("SIP/2.0/UDP alice.example.com:5060;branch=z9hG4bKnashds;received=172.0.0.1")
                 .into(),
             CSeq::new("1 INVITE").into(),
-            From::new(&format!("Alice <sip:alice@example.com>;tag={}", from_tag)).into(),
-            To::new(&format!("Bob <sip:bob@example.com>;tag={}", to_tag)).into(),
+            From::new(&format!("Alice <sip:alice@example.com>;tag={}", local_tag)).into(),
+            To::new(&format!("Bob <sip:bob@example.com>;tag={}", remote_tag)).into(),
             CallId::new(call_id).into(),
             Contact::new("<sip:alice@alice.example.com:5060>").into(),
             MaxForwards::new("70").into(),
@@ -35,7 +35,7 @@ pub fn create_invite_request(from_tag: &str, to_tag: &str, call_id: &str) -> Req
 }
 
 /// Test helper to create a mock response
-fn create_response(status: StatusCode, from_tag: &str, to_tag: &str, call_id: &str) -> Response {
+fn create_response(status: StatusCode, local_tag: &str, remote_tag: &str, call_id: &str) -> Response {
     let body = if status == StatusCode::OK {
         b"v=0\r\no=bob 2890844527 2890844528 IN IP4 host.biloxi.com\r\n".to_vec()
     } else {
@@ -48,8 +48,8 @@ fn create_response(status: StatusCode, from_tag: &str, to_tag: &str, call_id: &s
         headers: vec![
             Via::new("SIP/2.0/UDP alice.example.com:5060;branch=z9hG4bKnashds").into(),
             CSeq::new("1 INVITE").into(),
-            From::new(&format!("Alice <sip:alice@example.com>;tag={}", from_tag)).into(),
-            To::new(&format!("Bob <sip:bob@example.com>;tag={}", to_tag)).into(),
+            From::new(&format!("Alice <sip:alice@example.com>;tag={}", local_tag)).into(),
+            To::new(&format!("Bob <sip:bob@example.com>;tag={}", remote_tag)).into(),
             CallId::new(call_id).into(),
             Contact::new("<sip:bob@bob.example.com:5060>").into(),
         ]
@@ -72,30 +72,29 @@ pub async fn create_test_endpoint() -> crate::Result<crate::transaction::endpoin
 fn test_dialog_id_eq() {
     let dialog_id_1 = DialogId {
         call_id: "test-call-id-123".to_string(),
-        from_tag: "456".to_string(),
-        to_tag: "789".to_string(),
+        local_tag: "456".to_string(),
+        remote_tag: "789".to_string(),
     };
-    assert!("456" < "789");
-    assert_eq!(dialog_id_1.to_string(), "test-call-id-123-789-456");
+    assert_eq!(dialog_id_1.to_string(), "test-call-id-123-456-789");
     let dialog_id_2 = DialogId {
         call_id: "test-call-id-123".to_string(),
-        from_tag: "789".to_string(),
-        to_tag: "456".to_string(),
+        local_tag: "789".to_string(),
+        remote_tag: "456".to_string(),
     };
     assert_eq!(dialog_id_2.to_string(), "test-call-id-123-789-456");
-    assert_eq!(dialog_id_1, dialog_id_2);
+    assert_ne!(dialog_id_1, dialog_id_2);
 
     let dialog_id_3 = DialogId {
         call_id: "mock".to_string(),
-        from_tag: "M3wnsBf".to_string(),
-        to_tag: "1NyRqPt1".to_string(),
+        local_tag: "M3wnsBf".to_string(),
+        remote_tag: "1NyRqPt1".to_string(),
     };
     let dialog_id_4 = DialogId {
         call_id: "mock".to_string(),
-        from_tag: "1NyRqPt1".to_string(),
-        to_tag: "M3wnsBf".to_string(),
+        local_tag: "1NyRqPt1".to_string(),
+        remote_tag: "M3wnsBf".to_string(),
     };
-    assert_eq!(dialog_id_3, dialog_id_4);
+    assert_ne!(dialog_id_3, dialog_id_4);
 }
 #[tokio::test]
 async fn test_dialog_state_transitions() -> crate::Result<()> {
@@ -105,8 +104,8 @@ async fn test_dialog_state_transitions() -> crate::Result<()> {
     // Create dialog ID
     let dialog_id = DialogId {
         call_id: "test-call-id-123".to_string(),
-        from_tag: "alice-tag-456".to_string(),
-        to_tag: "bob-tag-789".to_string(),
+        local_tag: "alice-tag-456".to_string(),
+        remote_tag: "bob-tag-789".to_string(),
     };
 
     // Create INVITE request
@@ -173,8 +172,8 @@ async fn test_server_dialog_state_transitions() -> crate::Result<()> {
     // Create dialog ID
     let dialog_id = DialogId {
         call_id: "test-call-id-server-123".to_string(),
-        from_tag: "alice-tag-456".to_string(),
-        to_tag: "bob-tag-789".to_string(),
+        local_tag: "alice-tag-456".to_string(),
+        remote_tag: "bob-tag-789".to_string(),
     };
 
     // Create INVITE request
@@ -230,8 +229,8 @@ async fn test_dialog_in_dialog_requests() -> crate::Result<()> {
     // Create dialog ID
     let dialog_id = DialogId {
         call_id: "test-call-id-in-dialog-123".to_string(),
-        from_tag: "alice-tag-456".to_string(),
-        to_tag: "bob-tag-789".to_string(),
+        local_tag: "alice-tag-456".to_string(),
+        remote_tag: "bob-tag-789".to_string(),
     };
 
     // Create initial INVITE request
@@ -329,8 +328,8 @@ async fn test_dialog_termination_scenarios() -> crate::Result<()> {
     // Test 1: Termination with error status code
     let dialog_id_1 = DialogId {
         call_id: "test-call-id-term-1".to_string(),
-        from_tag: "alice-tag-456".to_string(),
-        to_tag: "bob-tag-789".to_string(),
+        local_tag: "alice-tag-456".to_string(),
+        remote_tag: "bob-tag-789".to_string(),
     };
 
     let invite_req_1 = create_invite_request("alice-tag-456", "", "test-call-id-term-1");
@@ -361,8 +360,8 @@ async fn test_dialog_termination_scenarios() -> crate::Result<()> {
     // Test 2: Normal termination (BYE)
     let dialog_id_2 = DialogId {
         call_id: "test-call-id-term-2".to_string(),
-        from_tag: "alice-tag-456".to_string(),
-        to_tag: "bob-tag-789".to_string(),
+        local_tag: "alice-tag-456".to_string(),
+        remote_tag: "bob-tag-789".to_string(),
     };
 
     let invite_req_2 = create_invite_request("alice-tag-456", "bob-tag-789", "test-call-id-term-2");
@@ -404,8 +403,8 @@ async fn test_dialog_sequence_numbers() -> crate::Result<()> {
 
     let dialog_id = DialogId {
         call_id: "test-call-id-seq-123".to_string(),
-        from_tag: "alice-tag-456".to_string(),
-        to_tag: "bob-tag-789".to_string(),
+        local_tag: "alice-tag-456".to_string(),
+        remote_tag: "bob-tag-789".to_string(),
     };
 
     let invite_req = create_invite_request("alice-tag-456", "bob-tag-789", "test-call-id-seq-123");
@@ -438,8 +437,8 @@ async fn test_dialog_sequence_numbers() -> crate::Result<()> {
 async fn test_dialog_state_display() -> crate::Result<()> {
     let dialog_id = DialogId {
         call_id: "test-call-id-display".to_string(),
-        from_tag: "alice-tag".to_string(),
-        to_tag: "bob-tag".to_string(),
+        local_tag: "alice-tag".to_string(),
+        remote_tag: "bob-tag".to_string(),
     };
 
     // Test all state display formats
@@ -462,24 +461,34 @@ async fn test_dialog_state_display() -> crate::Result<()> {
 
 #[tokio::test]
 async fn test_dialog_id_creation() -> crate::Result<()> {
-    // Test from Request
+    // Test from Request (UAS perspective)
     let request = create_invite_request("alice-tag-123", "", "call-id-456");
-    let dialog_id = DialogId::try_from(&request)?;
+    let dialog_id = DialogId::from_uas_request(&request)?;
     assert_eq!(dialog_id.call_id, "call-id-456");
-    assert_eq!(dialog_id.from_tag, "alice-tag-123");
-    assert_eq!(dialog_id.to_tag, "");
+    assert_eq!(dialog_id.local_tag, "");
+    assert_eq!(dialog_id.remote_tag, "alice-tag-123");
 
-    // Test from Response
+    // Test from Request (UAC perspective)
+    let dialog_id_uac = DialogId::from_uac_request(&request)?;
+    assert_eq!(dialog_id_uac.local_tag, "alice-tag-123");
+    assert_eq!(dialog_id_uac.remote_tag, "");
+
+    // Test from Response (UAC perspective)
     let response = create_response(
         StatusCode::OK,
         "alice-tag-123",
         "bob-tag-789",
         "call-id-456",
     );
-    let dialog_id_resp = DialogId::try_from(&response)?;
+    let dialog_id_resp = DialogId::from_uac_response(&response)?;
     assert_eq!(dialog_id_resp.call_id, "call-id-456");
-    assert_eq!(dialog_id_resp.from_tag, "alice-tag-123");
-    assert_eq!(dialog_id_resp.to_tag, "bob-tag-789");
+    assert_eq!(dialog_id_resp.local_tag, "alice-tag-123");
+    assert_eq!(dialog_id_resp.remote_tag, "bob-tag-789");
+
+    // Test from Response (UAS perspective)
+    let dialog_id_resp_uas = DialogId::from_uas_response(&response)?;
+    assert_eq!(dialog_id_resp_uas.local_tag, "bob-tag-789");
+    assert_eq!(dialog_id_resp_uas.remote_tag, "alice-tag-123");
 
     // Test display
     let display_str = dialog_id_resp.to_string();
