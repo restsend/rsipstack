@@ -874,7 +874,7 @@ impl Transaction {
                     debug!(key=%self.key, last = self.last_response.is_none(), "entered confirmed state, waiting for ACK");
                     match self.last_response {
                         Some(ref resp) => {
-                            let dialog_id = DialogId::from_uas_response(resp)?;
+                            let dialog_id = DialogId::try_from(resp)?;
                             self.endpoint_inner
                                 .waiting_ack
                                 .write()
@@ -952,7 +952,7 @@ impl Transaction {
         self.cleanup_timer();
 
         match self.last_response {
-            Some(ref resp) => match DialogId::from_uas_response(resp) {
+            Some(ref resp) => match DialogId::try_from(resp) {
                 Ok(dialog_id) => self
                     .endpoint_inner
                     .waiting_ack

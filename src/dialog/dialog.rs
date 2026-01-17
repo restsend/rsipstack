@@ -105,8 +105,8 @@ impl TransactionHandle {
 /// # fn example() {
 /// # let dialog_id = DialogId {
 /// #     call_id: "test@example.com".to_string(),
-/// #     local_tag: "from-tag".to_string(),
-/// #     remote_tag: "to-tag".to_string(),
+/// #     from_tag: "from-tag".to_string(),
+/// #     to_tag: "to-tag".to_string(),
 /// # };
 /// let state = DialogState::Confirmed(dialog_id, rsip::Response::default());
 /// if state.is_confirmed() {
@@ -432,13 +432,7 @@ impl DialogInner {
         let from = initial_request.from_header()?.typed()?;
         let mut to = initial_request.to_header()?.typed()?;
         if !to.params.iter().any(|p| matches!(p, Param::Tag(_))) {
-            let tag = match role {
-                TransactionRole::Client => &id.remote_tag,
-                TransactionRole::Server => &id.local_tag,
-            };
-            if !tag.is_empty() {
-                to.params.push(rsip::Param::Tag(tag.clone().into()));
-            }
+            to.params.push(rsip::Param::Tag(id.to_tag.clone().into()));
         }
 
         let mut route_set = vec![];
@@ -848,7 +842,7 @@ impl DialogInner {
                         && !to.params.iter().any(|p| matches!(p, Param::Tag(_)))
                     {
                         to.params.push(rsip::Param::Tag(
-                            self.id.lock().unwrap().local_tag.clone().into(),
+                            self.id.lock().unwrap().to_tag.clone().into(),
                         ));
                     }
                     resp_headers.push(Header::To(to.into()));
