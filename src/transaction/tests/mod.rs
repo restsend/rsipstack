@@ -7,6 +7,7 @@ use tokio_util::sync::CancellationToken;
 
 mod test_client;
 mod test_endpoint;
+mod test_provisional_responses;
 mod test_server;
 mod test_transaction_states;
 

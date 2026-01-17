@@ -374,6 +374,7 @@ impl Transaction {
             | (&TransactionState::Nothing, &TransactionState::Trying)
             | (&TransactionState::Nothing, &TransactionState::Proceeding)
             | (&TransactionState::Nothing, &TransactionState::Terminated)
+            | (&TransactionState::Calling, &TransactionState::Calling)
             | (&TransactionState::Calling, &TransactionState::Trying)
             | (&TransactionState::Calling, &TransactionState::Proceeding)
             | (&TransactionState::Calling, &TransactionState::Completed)
@@ -383,6 +384,7 @@ impl Transaction {
             | (&TransactionState::Trying, &TransactionState::Completed)
             | (&TransactionState::Trying, &TransactionState::Confirmed)
             | (&TransactionState::Trying, &TransactionState::Terminated)
+            | (&TransactionState::Proceeding, &TransactionState::Proceeding)
             | (&TransactionState::Proceeding, &TransactionState::Completed)
             | (&TransactionState::Proceeding, &TransactionState::Confirmed)
             | (&TransactionState::Proceeding, &TransactionState::Terminated)
@@ -663,13 +665,24 @@ impl Transaction {
 
         self.can_transition(&new_state).ok()?;
         if self.state == new_state {
-            // ignore duplicate response
-            return None;
+            if let Some(last) = self.last_response.as_ref() {
+                if last.status_code == resp.status_code && last.body == resp.body {
+                    // ignore duplicate response
+                    return None;
+                }
+            }
         }
 
         self.last_response.replace(resp.clone());
+        let is_completed_client_invite = self.transaction_type == TransactionType::ClientInvite
+            && new_state == TransactionState::Completed;
+
         self.transition(new_state).ok();
-        self.send_ack(connection).await.ok(); // send ACK for client invite
+
+        if is_completed_client_invite {
+            self.send_ack(connection).await.ok();
+        }
+
         Some(SipMessage::Response(resp))
     }
 
