@@ -25,8 +25,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, trace, warn};
 
 pub trait MessageInspector: Send + Sync {
-    fn before_send(&self, msg: SipMessage) -> SipMessage;
-    fn after_received(&self, msg: SipMessage) -> SipMessage;
+    fn before_send(&self, msg: SipMessage, dest: Option<&SipAddr>) -> SipMessage;
+    fn after_received(&self, msg: SipMessage, from: &SipAddr) -> SipMessage;
 }
 
 #[async_trait]
@@ -427,7 +427,7 @@ impl EndpointInner {
         };
 
         let msg = if let Some(inspector) = &self.message_inspector {
-            inspector.after_received(msg)
+            inspector.after_received(msg, from)
         } else {
             msg
         };
@@ -456,7 +456,7 @@ impl EndpointInner {
                     None,
                 );
                 let resp = if let Some(ref inspector) = self.message_inspector {
-                    inspector.before_send(resp.into())
+                    inspector.before_send(resp.into(), None)
                 } else {
                     resp.into()
                 };

@@ -284,7 +284,7 @@ impl Transaction {
             .unique_push(content_length_header);
 
         let message = if let Some(ref inspector) = self.endpoint_inner.message_inspector {
-            inspector.before_send(self.original.to_owned().into())
+            inspector.before_send(self.original.to_owned().into(), self.destination.as_ref())
         } else {
             self.original.to_owned().into()
         };
@@ -351,7 +351,10 @@ impl Transaction {
         ))?;
 
         let response = if let Some(ref inspector) = self.endpoint_inner.message_inspector {
-            inspector.before_send(response.clone().to_owned().into())
+            inspector.before_send(
+                response.clone().to_owned().into(),
+                self.destination.as_ref(),
+            )
         } else {
             response.to_owned().into()
         };
@@ -410,7 +413,7 @@ impl Transaction {
                 if let Some(connection) = &self.connection {
                     let cancel = if let Some(ref inspector) = self.endpoint_inner.message_inspector
                     {
-                        inspector.before_send(cancel.to_owned().into())
+                        inspector.before_send(cancel.to_owned().into(), self.destination.as_ref())
                     } else {
                         cancel.to_owned().into()
                     };
@@ -461,45 +464,43 @@ impl Transaction {
             },
         };
 
-        let ack = if let Some(ref inspector) = self.endpoint_inner.message_inspector {
-            inspector.before_send(ack.to_owned().into())
-        } else {
-            ack.to_owned().into()
-        };
-
         let mut connection = connection;
-        if let SipMessage::Request(ref req) = ack {
-            if let Some(resp) = self.last_response.as_ref() {
-                if resp.status_code.kind() == StatusCodeKind::Successful {
-                    // 2xx response, set destination from request
-                    let target = match destination_from_request(&req) {
-                        Some(target) => {
-                            if let Some(locator) = self.endpoint_inner.locator.as_ref() {
-                                Some(locator.locate(&target).await?)
-                            } else {
-                                target.try_into().ok()
-                            }
+        if let Some(resp) = self.last_response.as_ref() {
+            if resp.status_code.kind() == StatusCodeKind::Successful {
+                // 2xx response, set destination from request
+                let target = match destination_from_request(&ack) {
+                    Some(target) => {
+                        if let Some(locator) = self.endpoint_inner.locator.as_ref() {
+                            Some(locator.locate(&target).await?)
+                        } else {
+                            target.try_into().ok()
                         }
-                        None => None,
-                    };
-                    match target {
-                        Some(addr) => {
-                            let (via_connection, resolved_addr) = self
-                                .endpoint_inner
-                                .transport_layer
-                                .lookup(&addr, Some(&self.key))
-                                .await?;
-                            // For UDP, we need to store the resolved destination address
-                            if !via_connection.is_reliable() {
-                                self.destination.replace(resolved_addr);
-                            }
-                            connection = Some(via_connection);
-                        }
-                        None => {}
                     }
+                    None => None,
+                };
+                match target {
+                    Some(addr) => {
+                        let (via_connection, resolved_addr) = self
+                            .endpoint_inner
+                            .transport_layer
+                            .lookup(&addr, Some(&self.key))
+                            .await?;
+                        // For UDP, we need to store the resolved destination address
+                        if !via_connection.is_reliable() {
+                            self.destination.replace(resolved_addr);
+                        }
+                        connection = Some(via_connection);
+                    }
+                    None => {}
                 }
             }
         }
+
+        let ack = if let Some(ref inspector) = self.endpoint_inner.message_inspector {
+            inspector.before_send(ack.to_owned().into(), self.destination.as_ref())
+        } else {
+            ack.to_owned().into()
+        };
 
         match ack.clone() {
             SipMessage::Request(ack) => self.last_ack.replace(ack),
@@ -587,7 +588,7 @@ impl Transaction {
 
                         let resp =
                             if let Some(ref inspector) = self.endpoint_inner.message_inspector {
-                                inspector.before_send(resp.into())
+                                inspector.before_send(resp.into(), self.destination.as_ref())
                             } else {
                                 resp.into()
                             };
@@ -605,7 +606,7 @@ impl Transaction {
                         );
                         let resp =
                             if let Some(ref inspector) = self.endpoint_inner.message_inspector {
-                                inspector.before_send(resp.into())
+                                inspector.before_send(resp.into(), self.destination.as_ref())
                             } else {
                                 resp.into()
                             };
@@ -685,7 +686,10 @@ impl Transaction {
                             let retry_message = if let Some(ref inspector) =
                                 self.endpoint_inner.message_inspector
                             {
-                                inspector.before_send(self.original.to_owned().into())
+                                inspector.before_send(
+                                    self.original.to_owned().into(),
+                                    self.destination.as_ref(),
+                                )
                             } else {
                                 self.original.to_owned().into()
                             };
@@ -729,7 +733,10 @@ impl Transaction {
                             let last_response = if let Some(ref inspector) =
                                 self.endpoint_inner.message_inspector
                             {
-                                inspector.before_send(last_response.to_owned().into())
+                                inspector.before_send(
+                                    last_response.to_owned().into(),
+                                    self.destination.as_ref(),
+                                )
                             } else {
                                 last_response.to_owned().into()
                             };
