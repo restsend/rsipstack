@@ -257,7 +257,7 @@ async fn process_incoming_request(
             }
             rsip::Method::Ack => {
                 info!(method = ?tx.original.method, "received out of transaction ack");
-                let dialog_id = DialogId::try_from(&tx.original)?;
+                let dialog_id = DialogId::try_from(&tx)?;
                 if !state_ref.inner.sessions.lock().await.contains(&dialog_id) {
                     tx.reply(rsip::StatusCode::NotAcceptable).await?;
                     continue;
@@ -458,7 +458,7 @@ async fn handle_invite(state: AppState, mut tx: Transaction) -> Result<()> {
                             header_pop!(resp.headers, rsip::Header::Via);
                             resp.headers.push_front(record_route.clone().into());
                             if resp.status_code.kind() == rsip::StatusCodeKind::Successful {
-                                let dialog_id = DialogId::try_from(&resp)?;
+                                let dialog_id = DialogId::try_from((&resp, TransactionRole::Client))?;
                                 info!(id = %dialog_id, "add session");
                                 state.inner.sessions.lock().await.insert(dialog_id);
                             }
@@ -523,7 +523,7 @@ async fn handle_bye(state: AppState, mut tx: Transaction) -> Result<()> {
 
     bye_tx.send().await?;
 
-    let dialog_id = DialogId::try_from(&bye_tx.original)?;
+    let dialog_id = DialogId::try_from(&bye_tx)?;
     if state.inner.sessions.lock().await.remove(&dialog_id) {
         info!(id = %dialog_id, "removed session");
     }

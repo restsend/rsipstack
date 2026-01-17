@@ -3,6 +3,7 @@ use super::key::TransactionKey;
 use super::{SipConnection, TransactionState, TransactionTimer, TransactionType};
 use crate::dialog::DialogId;
 use crate::rsip_ext::{destination_from_request, RsipResponseExt};
+use crate::transaction::key::TransactionRole;
 use crate::transaction::make_tag;
 use crate::transport::SipAddr;
 use crate::{Error, Result};
@@ -861,7 +862,7 @@ impl Transaction {
                     debug!(key=%self.key, last = self.last_response.is_none(), "entered confirmed state, waiting for ACK");
                     match self.last_response {
                         Some(ref resp) => {
-                            let dialog_id = DialogId::from_uas_response(resp)?;
+                            let dialog_id = DialogId::try_from((resp, TransactionRole::Server))?;
                             self.endpoint_inner
                                 .waiting_ack
                                 .write()
@@ -931,6 +932,15 @@ impl Transaction {
             .map(|id| self.endpoint_inner.timers.cancel(id));
     }
 
+    pub fn role(&self) -> TransactionRole {
+        match self.transaction_type {
+            crate::transaction::TransactionType::ClientInvite
+            | crate::transaction::TransactionType::ClientNonInvite => TransactionRole::Client,
+            crate::transaction::TransactionType::ServerInvite
+            | crate::transaction::TransactionType::ServerNonInvite => TransactionRole::Server,
+        }
+    }
+
     fn cleanup(&mut self) {
         if self.is_cleaned_up {
             return;
@@ -939,7 +949,7 @@ impl Transaction {
         self.cleanup_timer();
 
         match self.last_response {
-            Some(ref resp) => match DialogId::from_uas_response(resp) {
+            Some(ref resp) => match DialogId::try_from((resp, self.role())) {
                 Ok(dialog_id) => self
                     .endpoint_inner
                     .waiting_ack
