@@ -25,7 +25,12 @@ async fn create_test_endpoint() -> crate::Result<crate::transaction::endpoint::E
 }
 
 /// Test helper to create mock INVITE request
-fn create_invite_request(local_tag: &str, remote_tag: &str, call_id: &str, branch: &str) -> Request {
+fn create_invite_request(
+    local_tag: &str,
+    remote_tag: &str,
+    call_id: &str,
+    branch: &str,
+) -> Request {
     Request {
         method: rsip::Method::Invite,
         uri: rsip::Uri::try_from("sip:bob@example.com:5060").unwrap(),

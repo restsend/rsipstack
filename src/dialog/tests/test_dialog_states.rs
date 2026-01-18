@@ -35,7 +35,12 @@ pub fn create_invite_request(local_tag: &str, remote_tag: &str, call_id: &str) -
 }
 
 /// Test helper to create a mock response
-fn create_response(status: StatusCode, local_tag: &str, remote_tag: &str, call_id: &str) -> Response {
+fn create_response(
+    status: StatusCode,
+    local_tag: &str,
+    remote_tag: &str,
+    call_id: &str,
+) -> Response {
     let body = if status == StatusCode::OK {
         b"v=0\r\no=bob 2890844527 2890844528 IN IP4 host.biloxi.com\r\n".to_vec()
     } else {
