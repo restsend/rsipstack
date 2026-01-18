@@ -243,6 +243,8 @@ impl<'a> Drop for DialogGuardForUnconfirmed<'a> {
     }
 }
 
+pub type InviteAsyncResult = Result<(DialogId, Option<Response>)>;
+
 impl DialogLayer {
     /// Create an INVITE request from options
     ///
@@ -521,6 +523,80 @@ impl DialogLayer {
                 return Err(e);
             }
         }
+    }
+
+    // Asynchronously executes an INVITE transaction in the background.
+    ///
+    /// Registers the dialog under an early dialog ID while the INVITE is in progress.
+    /// Once completed, the early entry is removed and, on 2xx response,
+    /// the dialog is re-registered under the confirmed dialog ID.
+    /// Returns a JoinHandle resolving to the final dialog ID and response.
+
+    pub fn do_invite_async(
+        self: &Arc<Self>,
+        opt: InviteOption,
+        state_sender: DialogStateSender,
+    ) -> Result<(
+        ClientInviteDialog,
+        tokio::task::JoinHandle<InviteAsyncResult>,
+    )> {
+        let (dialog, mut tx) = self.create_client_invite_dialog(opt, state_sender)?;
+        let id0 = dialog.id();
+
+        // 1) register early key (so in-dialog requests can be matched)
+        self.inner
+            .dialogs
+            .write()
+            .as_mut()
+            .map(|ds| ds.insert(id0.to_string(), Dialog::ClientInvite(dialog.clone())))
+            .ok();
+
+        debug!(%id0, "client invite dialog created (async)");
+
+        let inner = self.inner.clone();
+        let dialog_clone = dialog.clone();
+
+        // 2) run invite in background, keep registry updated like do_invite()
+        let handle = tokio::spawn(async move {
+            let r = dialog_clone.process_invite(&mut tx).boxed().await;
+
+            // remove early key
+            inner
+                .dialogs
+                .write()
+                .as_mut()
+                .map(|ds| ds.remove(&id0.to_string()))
+                .ok();
+
+            match &r {
+                Ok((new_id, resp_opt)) => {
+                    let is_2xx = resp_opt
+                        .as_ref()
+                        .map(|resp| resp.status_code.kind() == rsip::StatusCodeKind::Successful)
+                        .unwrap_or(false);
+
+                    if is_2xx {
+                        debug!("client invite dialog confirmed: {} => {}", id0, new_id);
+                        inner
+                            .dialogs
+                            .write()
+                            .as_mut()
+                            .map(|ds| {
+                                ds.insert(
+                                    new_id.to_string(),
+                                    Dialog::ClientInvite(dialog_clone.clone()),
+                                )
+                            })
+                            .ok();
+                    }
+                }
+                Err(e) => debug!(%id0, error = %e, "async invite failed"),
+            }
+
+            r
+        });
+
+        Ok((dialog, handle))
     }
 
     pub fn create_client_invite_dialog(
