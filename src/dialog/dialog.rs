@@ -468,8 +468,11 @@ impl DialogInner {
 
     pub fn update_remote_tag(&self, tag: &str) -> Result<()> {
         self.id.lock().unwrap().remote_tag = tag.to_string();
-        let mut to = self.to.lock().unwrap();
-        *to = to.clone().with_tag(tag.into());
+
+        if self.role == TransactionRole::Client {
+            let mut to = self.to.lock().unwrap();
+            *to = to.clone().with_tag(tag.into());
+        }
         Ok(())
     }
 
