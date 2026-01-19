@@ -728,16 +728,20 @@ impl DialogInner {
         headers: Option<Vec<rsip::Header>>,
         body: Option<Vec<u8>>,
     ) -> Result<rsip::Request> {
-        let mut headers = headers.unwrap_or_default();
+        let mut out: Vec<Header> = Vec::new();
+
+        // --- system headers first ---
+
         let cseq_header = CSeq {
             seq: cseq.unwrap_or_else(|| self.increment_local_seq()),
             method,
         };
 
         for via in vias {
-            headers.push(Header::Via(via.into()));
+            out.push(Header::Via(via.into()));
         }
-        headers.push(Header::CallId(
+
+        out.push(Header::CallId(
             self.id.lock().unwrap().call_id.clone().into(),
         ));
 
@@ -751,43 +755,54 @@ impl DialogInner {
             .to_string();
 
         let from = self.from.clone().untyped().value().to_string();
+
         match self.role {
             TransactionRole::Client => {
-                headers.push(Header::From(from.into()));
-                headers.push(Header::To(to.into()));
+                out.push(Header::From(from.into()));
+                out.push(Header::To(to.into()));
             }
             TransactionRole::Server => {
-                headers.push(Header::From(to.into()));
-                headers.push(Header::To(from.into()));
+                out.push(Header::From(to.into()));
+                out.push(Header::To(from.into()));
             }
         }
-        headers.push(Header::CSeq(cseq_header.into()));
-        headers.push(Header::UserAgent(
+
+        out.push(Header::CSeq(cseq_header.into()));
+        out.push(Header::UserAgent(
             self.endpoint_inner.user_agent.clone().into(),
         ));
 
-        self.local_contact
-            .as_ref()
-            .map(|c| headers.push(Contact::from(c.clone()).into()));
+        if let Some(uri) = self.local_contact.as_ref() {
+            out.push(Contact::from(uri.clone()).into());
+        }
 
         {
             let route_set = self.route_set.lock().unwrap();
-            headers.extend(route_set.iter().cloned().map(Header::Route));
+            out.extend(route_set.iter().cloned().map(Header::Route));
         }
-        headers.push(Header::MaxForwards(70.into()));
 
-        headers.push(Header::ContentLength(
+        out.push(Header::MaxForwards(70.into()));
+
+        out.push(Header::ContentLength(
             body.as_ref().map_or(0u32, |b| b.len() as u32).into(),
         ));
 
-        let req = rsip::Request {
+        // --- custom headers LAST (filtered) ---
+        if let Some(extra) = headers {
+            for h in extra {
+                if !is_system_header(&h) {
+                    out.push(h);
+                }
+            }
+        }
+
+        Ok(rsip::Request {
             method,
             uri: self.remote_uri.lock().unwrap().clone(),
-            headers: headers.into(),
+            headers: out.into(),
             body: body.unwrap_or_default(),
             version: rsip::Version::V2,
-        };
-        Ok(req)
+        })
     }
 
     pub(super) fn make_request(
@@ -1479,4 +1494,19 @@ impl Dialog {
             Dialog::ClientPublication(d) => d.message(headers, body).await,
         }
     }
+}
+
+fn is_system_header(h: &rsip::Header) -> bool {
+    use rsip::Header::*;
+    matches!(
+        h,
+        Via(_)
+            | CallId(_)
+            | From(_)
+            | To(_)
+            | CSeq(_)
+            | MaxForwards(_)
+            | ContentLength(_)
+            | Route(_)
+    )
 }
