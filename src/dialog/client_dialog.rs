@@ -121,30 +121,10 @@ impl ClientInviteDialog {
     pub fn cancel_token(&self) -> &CancellationToken {
         &self.inner.cancel_token
     }
-    /// Hang up the call
-    ///
-    /// If the dialog is confirmed, send a BYE request to terminate the call.
-    /// If the dialog is not confirmed, send a CANCEL request to cancel the call.
-    pub async fn hangup(&self) -> Result<()> {
-        if self.inner.can_cancel() {
-            self.cancel().await
-        } else {
-            self.bye().await
-        }
-    }
 
-    /// Send a BYE request to terminate the dialog
+    /// Send a BYE request to terminate the dialog.
     ///
-    /// Sends a BYE request to gracefully terminate an established dialog.
-    /// This should only be called for confirmed dialogs. If the dialog
-    /// is not confirmed, this method returns immediately without error.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - BYE was sent successfully or dialog not confirmed
-    /// * `Err(Error)` - Failed to send BYE request
-    ///
-    /// # Examples
+    /// Thin wrapper over `bye_with_headers(None)`.
     ///
     /// ```rust,no_run
     /// # use rsipstack::dialog::client_dialog::ClientInviteDialog;
@@ -156,22 +136,100 @@ impl ClientInviteDialog {
     /// # }
     /// ```
     pub async fn bye(&self) -> Result<()> {
+        self.bye_with_headers(None).await
+    }
+
+    /// Send a BYE request with custom headers to terminate the dialog.
+    ///
+    /// This is the low-level variant used to add SIP headers (e.g. `Reason`)
+    /// to the outgoing BYE request.
+    ///
+    /// The dialog must be in `Confirmed` state for BYE to be sent; otherwise
+    /// this method is a no-op.
+    ///
+    /// # Parameters
+    /// * `headers` - Optional extra SIP headers to include in the BYE request.
+    ///
+    /// # Returns
+    /// * `Ok(())` - BYE was sent successfully or dialog is not confirmed.
+    /// * `Err(Error)` - Failed to build/send BYE request.
+    pub async fn bye_with_headers(&self, headers: Option<Vec<rsip::Header>>) -> Result<()> {
         if !self.inner.is_confirmed() {
             return Ok(());
         }
-        let request = self
-            .inner
-            .make_request(rsip::Method::Bye, None, None, None, None, None)?;
 
-        match self.inner.do_request(request).await {
-            Ok(_) => {}
-            Err(e) => {
-                info!(error = %e, "bye error");
-            }
-        };
+        let request =
+            self.inner
+                .make_request(rsip::Method::Bye, None, None, None, headers, None)?;
+
+        if let Err(e) = self.inner.do_request(request).await {
+            info!(error = %e, "bye error");
+        }
+
         self.inner
             .transition(DialogState::Terminated(self.id(), TerminatedReason::UacBye))?;
         Ok(())
+    }
+
+    /// Send a BYE request with a SIP `Reason` header.
+    ///
+    /// Convenience wrapper over `bye_with_headers()` that adds:
+    /// `Reason: <reason>`.
+    ///
+    /// Typical values:
+    /// * `SIP;cause=804;text="MEDIA_TIMEOUT"`
+    /// * `Q.850;cause=16;text="Normal call clearing"`
+    ///
+    /// # Parameters
+    /// * `reason` - Value of the `Reason` header (without the `Reason:` name).
+    pub async fn bye_with_reason(&self, reason: String) -> Result<()> {
+        self.bye_with_headers(Some(vec![rsip::Header::Other(
+            "Reason".into(),
+            reason.into(),
+        )]))
+        .await
+    }
+
+    /// Hang up the call
+    ///
+    /// If the dialog is confirmed, send a BYE request to terminate the call.
+    /// If the dialog is not confirmed, send a CANCEL request to cancel the call.
+    ///
+    /// Thin wrapper over `hangup_with_headers(None)`.
+    pub async fn hangup(&self) -> Result<()> {
+        self.hangup_with_headers(None).await
+    }
+
+    /// Hang up the call with custom headers.
+    ///
+    /// If the dialog is still in early phase and can be canceled, this sends `CANCEL`.
+    /// Headers are not attached to the CANCEL request by default.
+    ///
+    /// If the dialog is confirmed, this sends `BYE` and attaches the provided headers.
+    ///
+    /// # Parameters
+    /// * `headers` - Optional extra SIP headers to include when BYE is used.
+    pub async fn hangup_with_headers(&self, headers: Option<Vec<rsip::Header>>) -> Result<()> {
+        if self.inner.can_cancel() {
+            self.cancel().await
+        } else {
+            self.bye_with_headers(headers).await
+        }
+    }
+
+    /// Hang up the call and attach a SIP `Reason` header when BYE is used.
+    ///
+    /// Convenience wrapper over `hangup_with_headers()` that adds:
+    /// `Reason: <reason>`.
+    ///
+    /// # Parameters
+    /// * `reason` - Value of the `Reason` header used for BYE.
+    pub async fn hangup_with_reason(&self, reason: String) -> Result<()> {
+        self.hangup_with_headers(Some(vec![rsip::Header::Other(
+            "Reason".into(),
+            reason.into(),
+        )]))
+        .await
     }
 
     /// Send a CANCEL request to cancel an ongoing INVITE

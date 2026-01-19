@@ -315,16 +315,12 @@ impl ServerInviteDialog {
         ))
     }
 
-    /// Send a BYE request to terminate the dialog
+    /// Send a BYE request to terminate the dialog.
     ///
-    /// Sends a BYE request to gracefully terminate an established dialog.
-    /// This should only be called for confirmed dialogs. If the dialog
-    /// is not confirmed, this method returns immediately without error.
+    /// Thin wrapper over `bye_with_headers(None)`.
     ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - BYE was sent successfully or dialog not confirmed
-    /// * `Err(Error)` - Failed to send BYE request
+    /// The dialog must be in `Confirmed` state (or `WaitAck`) for BYE to be sent;
+    /// otherwise this method is a no-op.
     ///
     /// # Examples
     ///
@@ -332,38 +328,70 @@ impl ServerInviteDialog {
     /// # use rsipstack::dialog::server_dialog::ServerInviteDialog;
     /// # async fn example() -> rsipstack::Result<()> {
     /// # let dialog: ServerInviteDialog = todo!();
-    /// // End an established call
     /// dialog.bye().await?;
     /// # Ok(())
     /// # }
     /// ```
     pub async fn bye(&self) -> Result<()> {
+        self.bye_with_headers(None).await
+    }
+
+    /// Send a BYE request with custom headers to terminate the dialog.
+    ///
+    /// This is the low-level variant used to add SIP headers (e.g. `Reason`)
+    /// to the outgoing BYE request.
+    ///
+    /// The dialog must be in `Confirmed` state (or `WaitAck`) for BYE to be sent;
+    /// otherwise this method is a no-op.
+    ///
+    /// # Parameters
+    /// * `headers` - Optional extra SIP headers to include in the BYE request.
+    ///
+    /// # Returns
+    /// * `Ok(())` - BYE was sent successfully or dialog is not in a state where BYE applies.
+    /// * `Err(Error)` - Failed to build/send BYE request.
+    pub async fn bye_with_headers(&self, headers: Option<Vec<rsip::Header>>) -> Result<()> {
         if !self.inner.is_confirmed() && !self.inner.waiting_ack() {
             return Ok(());
         }
-        debug!(id = %self.id(), "sending bye request");
 
         let request = self.inner.make_request_with_vias(
             rsip::Method::Bye,
             None,
             self.inner.build_vias_from_request()?,
-            None,
+            headers,
             None,
         )?;
 
-        match self.inner.do_request(request).await {
-            Ok(_) => {}
-            Err(e) => {
-                debug!(id = %self.id(), error = %e, "bye error");
-            }
-        };
+        if let Err(e) = self.inner.do_request(request).await {
+            debug!(id = %self.id(), error = %e, "bye error");
+        }
+
         self.inner
             .transition(DialogState::Terminated(self.id(), TerminatedReason::UasBye))?;
         Ok(())
     }
 
-    /// Send a re-INVITE request to modify the session
+    /// Send a BYE request with a SIP `Reason` header.
     ///
+    /// Convenience wrapper over `bye_with_headers()` that adds:
+    /// `Reason: <reason>`.
+    ///
+    /// Typical values:
+    /// * `SIP;cause=804;text="MEDIA_TIMEOUT"`
+    /// * `Q.850;cause=16;text="Normal call clearing"`
+    ///
+    /// # Parameters
+    /// * `reason` - Value of the `Reason` header (without the `Reason:` name).
+    pub async fn bye_with_reason(&self, reason: String) -> Result<()> {
+        self.bye_with_headers(Some(vec![rsip::Header::Other(
+            "Reason".into(),
+            reason.into(),
+        )]))
+        .await
+    }
+
+    /// Send a re-INVITE request to modify the session
     /// Sends a re-INVITE request within an established dialog to modify
     /// the session parameters (e.g., change media, add/remove streams).
     /// This can only be called for confirmed dialogs.
