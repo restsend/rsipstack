@@ -103,8 +103,8 @@ async fn test_server_invite_dialog_creation() -> crate::Result<()> {
     // Dialog ID should have generated to-tag
     let dialog_id = dialog.id();
     assert_eq!(dialog_id.call_id, "call-id-456");
-    assert_eq!(dialog_id.from_tag, "alice-tag-123");
-    assert!(!dialog_id.to_tag.is_empty());
+    assert_eq!(dialog_id.remote_tag, "alice-tag-123");
+    assert!(!dialog_id.local_tag.is_empty());
 
     Ok(())
 }
@@ -139,7 +139,7 @@ async fn test_existing_server_invite_dialog_retrieval() -> crate::Result<()> {
     // Second request with same dialog identifiers should retrieve existing dialog
     let invite_req2 = create_invite_request(
         "alice-tag-123",
-        &dialog_id.to_tag,
+        &dialog_id.local_tag,
         "call-id-456",
         "z9hG4bKnashds2",
     );
@@ -173,7 +173,7 @@ async fn test_dialog_retrieval_and_matching() -> crate::Result<()> {
         key,
         invite_req.clone(),
         endpoint.inner.clone(),
-        Some(mock_conn),
+        Some(mock_conn.clone()),
     );
 
     let (state_sender, _) = unbounded_channel();
@@ -196,15 +196,16 @@ async fn test_dialog_retrieval_and_matching() -> crate::Result<()> {
         method: rsip::Method::Bye,
         uri: rsip::Uri::try_from("sip:bob@example.com:5060")?,
         headers: vec![
+            Via::new("SIP/2.0/UDP alice.example.com:5060;branch=z9hG4bKbye").into(),
             CSeq::new("2 BYE").into(),
             From::new(&format!(
                 "Alice <sip:alice@example.com>;tag={}",
-                dialog_id.from_tag
+                dialog_id.remote_tag
             ))
             .into(),
             To::new(&format!(
                 "Bob <sip:bob@example.com>;tag={}",
-                dialog_id.to_tag
+                dialog_id.local_tag
             ))
             .into(),
             CallId::new(&dialog_id.call_id).into(),
@@ -214,7 +215,9 @@ async fn test_dialog_retrieval_and_matching() -> crate::Result<()> {
         body: vec![],
     };
 
-    let matched_dialog = dialog_layer.match_dialog(&bye_req);
+    let bye_key = TransactionKey::from_request(&bye_req, TransactionRole::Server)?;
+    let bye_tx = Transaction::new_server(bye_key, bye_req, endpoint.inner.clone(), Some(mock_conn));
+    let matched_dialog = dialog_layer.match_dialog(&bye_tx);
     assert!(matched_dialog.is_some());
 
     Ok(())
@@ -281,13 +284,13 @@ async fn test_dialog_layer_with_swapped_tags() -> crate::Result<()> {
     // Create a swapped dialog ID (as if from the other perspective)
     let swapped_id = DialogId {
         call_id: dialog_id.call_id.clone(),
-        from_tag: dialog_id.to_tag.clone(),
-        to_tag: dialog_id.from_tag.clone(),
+        local_tag: dialog_id.remote_tag.clone(),
+        remote_tag: dialog_id.local_tag.clone(),
     };
 
-    // Should be able to find dialog with swapped tags
+    // Swapped tags should NOT match the server-side dialog ID
     let found_dialog = dialog_layer.get_dialog(&swapped_id);
-    assert!(found_dialog.is_some());
+    assert!(found_dialog.is_none());
 
     Ok(())
 }
@@ -329,8 +332,8 @@ async fn test_multiple_dialogs_management() -> crate::Result<()> {
     // Remove one dialog
     let _test_id = DialogId {
         call_id: "test-call-2".to_string(),
-        from_tag: "alice-tag-2".to_string(),
-        to_tag: "".to_string(), // We need to find the actual dialog first
+        local_tag: "".to_string(),
+        remote_tag: "alice-tag-2".to_string(), // We need to find the actual dialog first
     };
 
     // Find all dialogs to get the actual IDs
@@ -340,13 +343,20 @@ async fn test_multiple_dialogs_management() -> crate::Result<()> {
         let from_tag = format!("alice-tag-{}", i);
         let _partial_id = DialogId {
             call_id: call_id.clone(),
-            from_tag: from_tag.clone(),
-            to_tag: "".to_string(),
+            local_tag: "".to_string(),
+            remote_tag: from_tag.clone(),
         };
 
         // Try to find dialog by creating a request and matching
         let test_req = create_invite_request(&from_tag, "", &call_id, "test-branch");
-        if let Some(dialog) = dialog_layer.match_dialog(&test_req) {
+        let test_key = TransactionKey::from_request(&test_req, TransactionRole::Server)?;
+        let test_tx = Transaction::new_server(
+            test_key,
+            test_req,
+            endpoint.inner.clone(),
+            Some(mock_conn.clone()),
+        );
+        if let Some(dialog) = dialog_layer.match_dialog(&test_tx) {
             dialog_ids.push(dialog.id());
         }
     }

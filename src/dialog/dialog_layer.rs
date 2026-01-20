@@ -93,11 +93,11 @@ pub type DialogLayerInnerRef = Arc<DialogLayerInner>;
 /// # async fn example() -> rsipstack::Result<()> {
 /// # let dialog_layer: DialogLayer = todo!();
 /// # let request = todo!();
-/// # let transaction = todo!();
+/// # let mut transaction = todo!();
 /// // Find existing dialog for incoming request
-/// if let Some(mut dialog) = dialog_layer.match_dialog(&request) {
+/// if let Some(mut dialog) = dialog_layer.match_dialog(&transaction) {
 ///     // Route to existing dialog
-///     dialog.handle(transaction).await?;
+///     dialog.handle(&mut transaction).await?;
 /// } else {
 ///     // Create new dialog or reject
 /// }

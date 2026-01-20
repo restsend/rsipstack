@@ -72,30 +72,22 @@ pub async fn create_test_endpoint() -> crate::Result<crate::transaction::endpoin
 fn test_dialog_id_eq() {
     let dialog_id_1 = DialogId {
         call_id: "test-call-id-123".to_string(),
-        from_tag: "456".to_string(),
-        to_tag: "789".to_string(),
+        local_tag: "456".to_string(),
+        remote_tag: "789".to_string(),
     };
-    assert!("456" < "789");
-    assert_eq!(dialog_id_1.to_string(), "test-call-id-123-789-456");
-    let dialog_id_2 = DialogId {
-        call_id: "test-call-id-123".to_string(),
-        from_tag: "789".to_string(),
-        to_tag: "456".to_string(),
-    };
-    assert_eq!(dialog_id_2.to_string(), "test-call-id-123-789-456");
-    assert_eq!(dialog_id_1, dialog_id_2);
+    assert_eq!(dialog_id_1.to_string(), "test-call-id-123-456-789");
 
-    let dialog_id_3 = DialogId {
-        call_id: "mock".to_string(),
-        from_tag: "M3wnsBf".to_string(),
-        to_tag: "1NyRqPt1".to_string(),
-    };
     let dialog_id_4 = DialogId {
         call_id: "mock".to_string(),
-        from_tag: "1NyRqPt1".to_string(),
-        to_tag: "M3wnsBf".to_string(),
+        local_tag: "M3wnsBf".to_string(),
+        remote_tag: "1NyRqPt1".to_string(),
     };
-    assert_eq!(dialog_id_3, dialog_id_4);
+    let dialog_id_5 = DialogId {
+        call_id: "mock".to_string(),
+        local_tag: "1NyRqPt1".to_string(),
+        remote_tag: "M3wnsBf".to_string(),
+    };
+    assert_ne!(dialog_id_4, dialog_id_5);
 }
 #[tokio::test]
 async fn test_dialog_state_transitions() -> crate::Result<()> {
@@ -105,8 +97,8 @@ async fn test_dialog_state_transitions() -> crate::Result<()> {
     // Create dialog ID
     let dialog_id = DialogId {
         call_id: "test-call-id-123".to_string(),
-        from_tag: "alice-tag-456".to_string(),
-        to_tag: "bob-tag-789".to_string(),
+        local_tag: "alice-tag-456".to_string(),
+        remote_tag: "bob-tag-789".to_string(),
     };
 
     // Create INVITE request
@@ -173,8 +165,8 @@ async fn test_server_dialog_state_transitions() -> crate::Result<()> {
     // Create dialog ID
     let dialog_id = DialogId {
         call_id: "test-call-id-server-123".to_string(),
-        from_tag: "alice-tag-456".to_string(),
-        to_tag: "bob-tag-789".to_string(),
+        local_tag: "bob-tag-789".to_string(),
+        remote_tag: "alice-tag-456".to_string(),
     };
 
     // Create INVITE request
@@ -230,8 +222,8 @@ async fn test_dialog_in_dialog_requests() -> crate::Result<()> {
     // Create dialog ID
     let dialog_id = DialogId {
         call_id: "test-call-id-in-dialog-123".to_string(),
-        from_tag: "alice-tag-456".to_string(),
-        to_tag: "bob-tag-789".to_string(),
+        local_tag: "alice-tag-456".to_string(),
+        remote_tag: "bob-tag-789".to_string(),
     };
 
     // Create initial INVITE request
@@ -329,8 +321,8 @@ async fn test_dialog_termination_scenarios() -> crate::Result<()> {
     // Test 1: Termination with error status code
     let dialog_id_1 = DialogId {
         call_id: "test-call-id-term-1".to_string(),
-        from_tag: "alice-tag-456".to_string(),
-        to_tag: "bob-tag-789".to_string(),
+        local_tag: "alice-tag-456".to_string(),
+        remote_tag: "bob-tag-789".to_string(),
     };
 
     let invite_req_1 = create_invite_request("alice-tag-456", "", "test-call-id-term-1");
@@ -361,8 +353,8 @@ async fn test_dialog_termination_scenarios() -> crate::Result<()> {
     // Test 2: Normal termination (BYE)
     let dialog_id_2 = DialogId {
         call_id: "test-call-id-term-2".to_string(),
-        from_tag: "alice-tag-456".to_string(),
-        to_tag: "bob-tag-789".to_string(),
+        local_tag: "alice-tag-456".to_string(),
+        remote_tag: "bob-tag-789".to_string(),
     };
 
     let invite_req_2 = create_invite_request("alice-tag-456", "bob-tag-789", "test-call-id-term-2");
@@ -404,8 +396,8 @@ async fn test_dialog_sequence_numbers() -> crate::Result<()> {
 
     let dialog_id = DialogId {
         call_id: "test-call-id-seq-123".to_string(),
-        from_tag: "alice-tag-456".to_string(),
-        to_tag: "bob-tag-789".to_string(),
+        local_tag: "alice-tag-456".to_string(),
+        remote_tag: "bob-tag-789".to_string(),
     };
 
     let invite_req = create_invite_request("alice-tag-456", "bob-tag-789", "test-call-id-seq-123");
@@ -438,8 +430,8 @@ async fn test_dialog_sequence_numbers() -> crate::Result<()> {
 async fn test_dialog_state_display() -> crate::Result<()> {
     let dialog_id = DialogId {
         call_id: "test-call-id-display".to_string(),
-        from_tag: "alice-tag".to_string(),
-        to_tag: "bob-tag".to_string(),
+        local_tag: "alice-tag".to_string(),
+        remote_tag: "bob-tag".to_string(),
     };
 
     // Test all state display formats
@@ -464,10 +456,10 @@ async fn test_dialog_state_display() -> crate::Result<()> {
 async fn test_dialog_id_creation() -> crate::Result<()> {
     // Test from Request
     let request = create_invite_request("alice-tag-123", "", "call-id-456");
-    let dialog_id = DialogId::try_from(&request)?;
+    let dialog_id = DialogId::try_from((&request, TransactionRole::Client))?;
     assert_eq!(dialog_id.call_id, "call-id-456");
-    assert_eq!(dialog_id.from_tag, "alice-tag-123");
-    assert_eq!(dialog_id.to_tag, "");
+    assert_eq!(dialog_id.local_tag, "alice-tag-123");
+    assert_eq!(dialog_id.remote_tag, "");
 
     // Test from Response
     let response = create_response(
@@ -476,10 +468,10 @@ async fn test_dialog_id_creation() -> crate::Result<()> {
         "bob-tag-789",
         "call-id-456",
     );
-    let dialog_id_resp = DialogId::try_from(&response)?;
+    let dialog_id_resp = DialogId::try_from((&response, TransactionRole::Client))?;
     assert_eq!(dialog_id_resp.call_id, "call-id-456");
-    assert_eq!(dialog_id_resp.from_tag, "alice-tag-123");
-    assert_eq!(dialog_id_resp.to_tag, "bob-tag-789");
+    assert_eq!(dialog_id_resp.local_tag, "alice-tag-123");
+    assert_eq!(dialog_id_resp.remote_tag, "bob-tag-789");
 
     // Test display
     let display_str = dialog_id_resp.to_string();

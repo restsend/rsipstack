@@ -7,7 +7,6 @@ use rsipstack::dialog::dialog_layer::DialogLayer;
 use rsipstack::dialog::invitation::InviteOption;
 use rsipstack::dialog::server_dialog::ServerInviteDialog;
 use rsipstack::transaction::endpoint::EndpointInnerRef;
-use rsipstack::transaction::key::TransactionRole;
 use rsipstack::Result;
 use rsipstack::{
     dialog::{authenticate::Credential, registration::Registration},

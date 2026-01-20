@@ -55,8 +55,8 @@ async fn test_client_dialog_creation() -> crate::Result<()> {
 
     let dialog_id = DialogId {
         call_id: "test-call-id".to_string(),
-        from_tag: "alice-tag".to_string(),
-        to_tag: "bob-tag".to_string(),
+        local_tag: "alice-tag".to_string(),
+        remote_tag: "bob-tag".to_string(),
     };
 
     let invite_req = create_invite_request("alice-tag", "", "test-call-id");
@@ -90,8 +90,8 @@ async fn test_client_dialog_sequence_handling() -> crate::Result<()> {
 
     let dialog_id = DialogId {
         call_id: "test-call-seq".to_string(),
-        from_tag: "alice-tag".to_string(),
-        to_tag: "bob-tag".to_string(),
+        local_tag: "alice-tag".to_string(),
+        remote_tag: "bob-tag".to_string(),
     };
 
     let invite_req = create_invite_request("alice-tag", "bob-tag", "test-call-seq");
@@ -130,8 +130,8 @@ async fn test_client_dialog_state_transitions() -> crate::Result<()> {
 
     let dialog_id = DialogId {
         call_id: "test-call-flow".to_string(),
-        from_tag: "alice-tag".to_string(),
-        to_tag: "".to_string(),
+        local_tag: "alice-tag".to_string(),
+        remote_tag: "".to_string(),
     };
 
     let invite_req = create_invite_request("alice-tag", "", "test-call-flow");
@@ -208,8 +208,8 @@ async fn test_client_dialog_termination_scenarios() -> crate::Result<()> {
     // Test 1: Early termination (before confirmed)
     let dialog_id_1 = DialogId {
         call_id: "test-call-term-early".to_string(),
-        from_tag: "alice-tag".to_string(),
-        to_tag: "".to_string(),
+        local_tag: "alice-tag".to_string(),
+        remote_tag: "".to_string(),
     };
 
     let invite_req_1 = create_invite_request("alice-tag", "", "test-call-term-early");
@@ -245,8 +245,8 @@ async fn test_client_dialog_termination_scenarios() -> crate::Result<()> {
     // Test 2: Normal termination after confirmed
     let dialog_id_2 = DialogId {
         call_id: "test-call-term-normal".to_string(),
-        from_tag: "alice-tag".to_string(),
-        to_tag: "bob-tag".to_string(),
+        local_tag: "alice-tag".to_string(),
+        remote_tag: "bob-tag".to_string(),
     };
 
     let invite_req_2 = create_invite_request("alice-tag", "bob-tag", "test-call-term-normal");
@@ -294,8 +294,8 @@ async fn test_make_request_preserves_remote_target_and_route_order() -> crate::R
 
     let dialog_id = DialogId {
         call_id: "route-order-call".to_string(),
-        from_tag: "from-tag".to_string(),
-        to_tag: "to-tag".to_string(),
+        local_tag: "from-tag".to_string(),
+        remote_tag: "to-tag".to_string(),
     };
 
     let invite_req = create_invite_request("from-tag", "to-tag", "route-order-call");
@@ -378,8 +378,8 @@ async fn test_route_set_updates_from_200_ok_response() -> crate::Result<()> {
 
     let dialog_id = DialogId {
         call_id: "route-update-call".to_string(),
-        from_tag: "from-tag".to_string(),
-        to_tag: "".to_string(),
+        local_tag: "from-tag".to_string(),
+        remote_tag: "".to_string(),
     };
 
     let invite_req = create_invite_request("from-tag", "", "route-update-call");
