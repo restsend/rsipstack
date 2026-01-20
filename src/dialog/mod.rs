@@ -28,8 +28,8 @@ mod tests;
 /// # Fields
 ///
 /// * `call_id` - The Call-ID header field value from SIP messages, identifying a call session
-/// * `from_tag` - The tag parameter from the From header field, identifying the dialog initiator
-/// * `to_tag` - The tag parameter from the To header field, identifying the dialog recipient
+/// * `local_tag` - The local tag for this endpoint (From tag for client role, To tag for server role)
+/// * `remote_tag` - The remote tag for the peer (To tag for client role, From tag for server role)
 ///
 /// # Examples
 ///
@@ -38,8 +38,8 @@ mod tests;
 ///
 /// let dialog_id = DialogId {
 ///     call_id: "1234567890@example.com".to_string(),
-///     from_tag: "alice-tag-123".to_string(),
-///     to_tag: "bob-tag-456".to_string(),
+///     local_tag: "alice-tag-123".to_string(),
+///     remote_tag: "bob-tag-456".to_string(),
 /// };
 ///
 /// println!("Dialog ID: {}", dialog_id);
@@ -47,7 +47,7 @@ mod tests;
 ///
 /// # Notes
 ///
-/// - During early dialog establishment, `to_tag` may be an empty string
+/// - During early dialog establishment, `remote_tag` may be an empty string
 /// - Dialog ID remains constant throughout the dialog lifetime
 /// - Used for managing and routing SIP messages at the dialog layer
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]

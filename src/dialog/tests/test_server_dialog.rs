@@ -19,8 +19,8 @@ async fn test_dialog_make_request() -> crate::Result<()> {
     // Create dialog ID
     let dialog_id = DialogId {
         call_id: "test-call-id-123".to_string(),
-        from_tag: "alice-tag-456".to_string(),
-        to_tag: "bob-tag-789".to_string(),
+        local_tag: "alice-tag-456".to_string(),
+        remote_tag: "bob-tag-789".to_string(),
     };
 
     let endpoint = create_test_endpoint().await?;
@@ -77,8 +77,8 @@ async fn test_accept_with_public_contact_preserves_contact_header() -> crate::Re
     // Create dialog ID
     let dialog_id = DialogId {
         call_id: "test-call-id-contact".to_string(),
-        from_tag: "alice-tag-456".to_string(),
-        to_tag: "bob-tag-789".to_string(),
+        local_tag: "bob-tag-789".to_string(),
+        remote_tag: "alice-tag-456".to_string(),
     };
 
     let endpoint = create_test_endpoint().await?;
@@ -86,7 +86,7 @@ async fn test_accept_with_public_contact_preserves_contact_header() -> crate::Re
     let (state_sender, _state_receiver) = unbounded_channel();
 
     // Create INVITE request
-    let invite_req = create_invite_request("alice-tag-456", "", "test-call-id-contact");
+    let invite_req = create_invite_request(&dialog_id.remote_tag, "", "test-call-id-contact");
 
     // Create server dialog inner
     let dialog_inner = DialogInner::new(

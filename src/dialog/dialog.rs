@@ -105,8 +105,8 @@ impl TransactionHandle {
 /// # fn example() {
 /// # let dialog_id = DialogId {
 /// #     call_id: "test@example.com".to_string(),
-/// #     from_tag: "from-tag".to_string(),
-/// #     to_tag: "to-tag".to_string(),
+/// #     local_tag: "from-tag".to_string(),
+/// #     remote_tag: "to-tag".to_string(),
 /// # };
 /// let state = DialogState::Confirmed(dialog_id, rsip::Response::default());
 /// if state.is_confirmed() {
