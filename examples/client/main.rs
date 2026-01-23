@@ -14,7 +14,7 @@ use rsipstack::{
     transport::{udp::UdpConnection, TransportLayer},
     EndpointBuilder, Error,
 };
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::{env, sync::Arc, time::Duration};
 use tokio::time::timeout;
 use tokio::{select, time::sleep};
@@ -28,7 +28,7 @@ struct MediaSessionOption {
     pub random_reject: u32,
     pub auto_answer: bool,
     pub cancel_token: CancellationToken,
-    pub external_ip: Option<String>,
+    pub external_ip: Option<IpAddr>,
     pub rtp_start_port: u16,
     pub echo: bool,
 }
@@ -50,7 +50,7 @@ struct Args {
 
     /// External IP address
     #[arg(long)]
-    external_ip: Option<String>,
+    external_ip: Option<IpAddr>,
 
     /// SIP server address
     #[arg(long)]
@@ -179,13 +179,9 @@ async fn main() -> rsipstack::Result<()> {
 
     let external_ip = args
         .external_ip
-        .unwrap_or(env::var("EXTERNAL_IP").unwrap_or_default());
+        .or_else(|| env::var("EXTERNAL_IP").ok().and_then(|s| s.parse().ok()));
 
-    let external = if external_ip.is_empty() {
-        None
-    } else {
-        Some(format!("{}:{}", external_ip, args.port).parse()?)
-    };
+    let external = external_ip.map(|ip| SocketAddr::new(ip, args.port));
 
     let addr = get_first_non_loopback_interface().expect("get first non loopback interface");
     let connection = UdpConnection::create_connection(

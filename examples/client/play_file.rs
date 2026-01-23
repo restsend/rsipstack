@@ -19,14 +19,10 @@ pub async fn build_rtp_conn(
 
     for p in 0..100 {
         let port = opt.rtp_start_port + p * 2;
-        if let Ok(c) = UdpConnection::create_connection(
-            format!("{:?}:{}", addr, port).parse()?,
-            opt.external_ip
-                .as_ref()
-                .map(|ip| ip.parse::<SocketAddr>().expect("Invalid external IP")),
-            Some(opt.cancel_token.clone()),
-        )
-        .await
+        let local = SocketAddr::new(addr, port);
+        let external = opt.external_ip.map(|ip| SocketAddr::new(ip, port));
+        if let Ok(c) =
+            UdpConnection::create_connection(local, external, Some(opt.cancel_token.clone())).await
         {
             conn = Some(c);
             break;
