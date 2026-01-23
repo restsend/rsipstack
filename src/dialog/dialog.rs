@@ -873,7 +873,19 @@ impl DialogInner {
 
         if let Some(headers) = headers {
             for header in headers {
-                resp_headers.unique_push(header);
+                match &header {
+                    rsip::Header::Other(name, _) => {
+                        let lname = name.to_ascii_lowercase();
+                        resp_headers.retain(|h| {
+                            !matches!(
+                                h,
+                                rsip::Header::Other(n, _) if n.to_ascii_lowercase() == lname
+                            )
+                        });
+                        resp_headers.push(header);
+                    }
+                    _ => resp_headers.unique_push(header),
+                }
             }
         }
 
