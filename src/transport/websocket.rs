@@ -90,6 +90,10 @@ impl WebSocketListenerConnection {
                         continue;
                     }
                 };
+                if !transport_layer_inner.is_whitelisted(remote_addr.ip()).await {
+                    debug!(remote = %remote_addr, "websocket connection rejected by whitelist");
+                    continue;
+                }
 
                 debug!(remote = %remote_addr, "New WebSocket connection");
 

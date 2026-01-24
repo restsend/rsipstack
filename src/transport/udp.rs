@@ -1,5 +1,6 @@
 use super::{connection::TransportSender, SipAddr, SipConnection};
 use crate::{
+    transport::transport_layer::TransportLayerInnerRef,
     transport::{
         connection::{KEEPALIVE_REQUEST, KEEPALIVE_RESPONSE, MAX_UDP_BUF_SIZE},
         TransportEvent,
@@ -64,6 +65,14 @@ impl UdpConnection {
     }
 
     pub async fn serve_loop(&self, sender: TransportSender) -> Result<()> {
+        self.serve_loop_with_whitelist(sender, None).await
+    }
+
+    pub async fn serve_loop_with_whitelist(
+        &self,
+        sender: TransportSender,
+        transport_layer_inner: Option<TransportLayerInnerRef>,
+    ) -> Result<()> {
         let mut buf = BytesMut::with_capacity(MAX_UDP_BUF_SIZE);
         buf.resize(MAX_UDP_BUF_SIZE, 0);
         loop {
@@ -91,6 +100,13 @@ impl UdpConnection {
                     }
                 }
             };
+
+            if let Some(transport_layer_inner) = &transport_layer_inner {
+                if !transport_layer_inner.is_whitelisted(addr.ip()).await {
+                    debug!(src = %addr, "udp packet rejected by whitelist");
+                    continue;
+                }
+            }
 
             match &buf[..len] {
                 KEEPALIVE_REQUEST => {
