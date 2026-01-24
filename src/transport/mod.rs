@@ -14,6 +14,7 @@ pub use sip_addr::SipAddr;
 pub use tcp_listener::TcpListenerConnection;
 pub use tls::{TlsConfig, TlsListenerConnection};
 pub use transport_layer::TransportLayer;
+pub use transport_layer::TransportWhitelist;
 pub use websocket::WebSocketListenerConnection;
 
 #[cfg(test)]

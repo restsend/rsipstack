@@ -11,6 +11,7 @@ use rsip_dns::trust_dns_resolver::TokioAsyncResolver;
 #[cfg(feature = "rsip-dns")]
 use rsip_dns::ResolvableExt;
 
+use std::net::IpAddr;
 use std::sync::{Mutex, RwLock};
 use std::{collections::HashMap, sync::Arc};
 use tokio::select;
@@ -22,6 +23,25 @@ use tracing::{debug, info, warn};
 pub trait DomainResolver: Send + Sync {
     async fn resolve(&self, target: &SipAddr) -> Result<SipAddr>;
 }
+
+#[async_trait]
+pub trait TransportWhitelist: Send + Sync {
+    /// Return true to accept the packet/connection for the given peer IP.
+    async fn allow(&self, ip: IpAddr) -> bool;
+}
+
+#[async_trait]
+impl<F, Fut> TransportWhitelist for F
+where
+    F: Send + Sync + Fn(IpAddr) -> Fut,
+    Fut: std::future::Future<Output = bool> + Send,
+{
+    async fn allow(&self, ip: IpAddr) -> bool {
+        (self)(ip).await
+    }
+}
+
+pub(crate) type TransportWhitelistRef = Arc<dyn TransportWhitelist>;
 
 pub struct DefaultDomainResolver {}
 
@@ -107,6 +127,7 @@ pub struct TransportLayerInner {
     pub(crate) transport_tx: TransportSender,
     pub(crate) transport_rx: Mutex<Option<TransportReceiver>>,
     pub domain_resolver: Box<dyn DomainResolver>,
+    whitelist: RwLock<Option<TransportWhitelistRef>>,
 }
 pub(crate) type TransportLayerInnerRef = Arc<TransportLayerInner>;
 
@@ -129,6 +150,7 @@ impl TransportLayer {
             transport_tx,
             transport_rx: Mutex::new(Some(transport_rx)),
             domain_resolver,
+            whitelist: RwLock::new(None),
         };
         Self {
             outbound: None,
@@ -196,9 +218,48 @@ impl TransportLayer {
             }
         }
     }
+
+    /// Set an async whitelist callback invoked on incoming packets/connections.
+    pub fn set_whitelist<T>(&self, whitelist: T)
+    where
+        T: TransportWhitelist + 'static,
+    {
+        self.inner.set_whitelist(Some(Arc::new(whitelist)));
+    }
+
+    /// Remove the whitelist callback.
+    pub fn clear_whitelist(&self) {
+        self.inner.set_whitelist(None);
+    }
 }
 
 impl TransportLayerInner {
+    pub(super) fn set_whitelist(&self, whitelist: Option<TransportWhitelistRef>) {
+        match self.whitelist.write() {
+            Ok(mut guard) => {
+                *guard = whitelist;
+            }
+            Err(e) => {
+                warn!(error = ?e, "Failed to update whitelist");
+            }
+        }
+    }
+
+    pub(crate) async fn is_whitelisted(&self, ip: IpAddr) -> bool {
+        let whitelist = match self.whitelist.read() {
+            Ok(guard) => guard.clone(),
+            Err(e) => {
+                warn!(error = ?e, "Failed to read whitelist");
+                return true;
+            }
+        };
+
+        match whitelist {
+            Some(whitelist) => whitelist.allow(ip).await,
+            None => true,
+        }
+    }
+
     pub(super) fn add_listener(&self, connection: SipConnection) {
         match self.listens.write() {
             Ok(mut listens) => {
@@ -349,7 +410,12 @@ impl TransportLayerInner {
         let sender = self.transport_tx.clone();
         match transport {
             SipConnection::Udp(transport) => {
-                tokio::spawn(async move { transport.serve_loop(sender).await });
+                let transport_layer_inner = self.clone();
+                tokio::spawn(async move {
+                    transport
+                        .serve_loop_with_whitelist(sender, Some(transport_layer_inner))
+                        .await
+                });
                 Ok(())
             }
             SipConnection::TcpListener(connection) => connection.serve_listener(self.clone()).await,
@@ -383,7 +449,9 @@ impl TransportLayerInner {
             }
             select! {
                 _ = sub_token.cancelled() => { }
-                _ = transport.serve_loop(sender_clone.clone()) => {
+                _ = async {
+                    transport.serve_loop(sender_clone.clone()).await
+                } => {
                 }
             }
             info!(addr=%transport.get_addr(), "transport serve_loop exited");

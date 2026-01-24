@@ -45,6 +45,10 @@ impl TcpListenerConnection {
                         continue;
                     }
                 };
+                if !transport_layer_inner.is_whitelisted(remote_addr.ip()).await {
+                    debug!(remote = %remote_addr, "tcp connection rejected by whitelist");
+                    continue;
+                }
                 let local_addr = SipAddr {
                     r#type: Some(rsip::transport::Transport::Tcp),
                     addr: remote_addr.into(),
