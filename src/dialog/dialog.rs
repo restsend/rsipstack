@@ -432,13 +432,12 @@ impl DialogInner {
         let from = initial_request.from_header()?.typed()?;
         let mut to = initial_request.to_header()?.typed()?;
         if !to.params.iter().any(|p| matches!(p, Param::Tag(_))) {
-            match role {
-                TransactionRole::Client => to
-                    .params
-                    .push(rsip::Param::Tag(id.remote_tag.clone().into())),
-                TransactionRole::Server => to
-                    .params
-                    .push(rsip::Param::Tag(id.local_tag.clone().into())),
+            let tag = match role {
+                TransactionRole::Client => &id.remote_tag,
+                TransactionRole::Server => &id.local_tag,
+            };
+            if !tag.is_empty() {
+                to.params.push(rsip::Param::Tag(tag.clone().into()));
             }
         }
 
