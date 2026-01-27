@@ -78,10 +78,7 @@ impl TlsListenerConnection {
                         continue;
                     }
                 };
-                if !transport_layer_inner
-                    .is_whitelisted(remote_addr.ip())
-                    .await
-                {
+                if !transport_layer_inner.is_whitelisted(remote_addr.ip()).await {
                     debug!(remote = %remote_addr, "tls connection rejected by whitelist");
                     continue;
                 }
