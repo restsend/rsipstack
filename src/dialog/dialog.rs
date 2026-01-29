@@ -11,7 +11,6 @@ use crate::{
     transaction::{
         endpoint::EndpointInnerRef,
         key::{TransactionKey, TransactionRole},
-        make_via_branch,
         transaction::{Transaction, TransactionEventSender},
     },
     transport::SipAddr,
@@ -22,7 +21,7 @@ use rsip::{
     headers::Route,
     message::HasHeaders,
     prelude::{HeadersExt, ToTypedHeader, UntypedHeader},
-    typed::{CSeq, Contact, Via},
+    typed::{CSeq, Contact},
     Header, Method, Param, Request, Response, SipMessage, StatusCode, StatusCodeKind,
 };
 use std::sync::{
@@ -694,30 +693,6 @@ impl DialogInner {
 
         new_route_set.reverse();
         *self.route_set.lock().unwrap() = new_route_set;
-    }
-
-    pub(super) fn build_vias_from_request(&self) -> Result<Vec<Via>> {
-        let mut vias = vec![];
-        let initial_request = self
-            .initial_request
-            .lock()
-            .expect("build vias from request poisoned mutex");
-        for header in initial_request.headers.iter() {
-            if let Header::Via(via) = header {
-                if let Ok(mut typed_via) = via.typed() {
-                    for param in typed_via.params.iter_mut() {
-                        if let Param::Branch(_) = param {
-                            *param = make_via_branch();
-                        }
-                    }
-                    vias.push(typed_via);
-                    return Ok(vias);
-                }
-            }
-        }
-        let via = self.endpoint_inner.get_via(None, None)?;
-        vias.push(via);
-        Ok(vias)
     }
 
     pub(super) fn make_request_with_vias(

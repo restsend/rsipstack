@@ -355,21 +355,13 @@ impl ServerInviteDialog {
             return Ok(());
         }
 
-        let request = self.inner.make_request_with_vias(
-            rsip::Method::Bye,
-            None,
-            self.inner.build_vias_from_request()?,
-            headers,
-            None,
-        )?;
-
-        if let Err(e) = self.inner.do_request(request).await {
-            debug!(id = %self.id(), error = %e, "bye error");
-        }
+        let request =
+            self.inner
+                .make_request(rsip::Method::Bye, None, None, None, headers, None)?;
 
         self.inner
             .transition(DialogState::Terminated(self.id(), TerminatedReason::UasBye))?;
-        Ok(())
+        self.inner.do_request(request).await.map(|_| ())
     }
 
     /// Send a BYE request with a SIP `Reason` header.
@@ -427,13 +419,9 @@ impl ServerInviteDialog {
             return Ok(None);
         }
         debug!(id = %self.id(), ?body, "sending re-invite request");
-        let request = self.inner.make_request_with_vias(
-            rsip::Method::Invite,
-            None,
-            self.inner.build_vias_from_request()?,
-            headers,
-            body,
-        )?;
+        let request =
+            self.inner
+                .make_request(rsip::Method::Invite, None, None, None, headers, body)?;
         let resp = self.inner.do_request(request.clone()).await;
         match resp {
             Ok(Some(ref resp)) => {
@@ -485,13 +473,9 @@ impl ServerInviteDialog {
             return Ok(None);
         }
         debug!(id = %self.id(), ?body, "sending update request");
-        let request = self.inner.make_request_with_vias(
-            rsip::Method::Update,
-            None,
-            self.inner.build_vias_from_request()?,
-            headers,
-            body,
-        )?;
+        let request =
+            self.inner
+                .make_request(rsip::Method::Update, None, None, None, headers, body)?;
         self.inner.do_request(request.clone()).await
     }
 
@@ -536,13 +520,9 @@ impl ServerInviteDialog {
             return Ok(None);
         }
         debug!(id = %self.id(), ?body, "sending info request");
-        let request = self.inner.make_request_with_vias(
-            rsip::Method::Info,
-            None,
-            self.inner.build_vias_from_request()?,
-            headers,
-            body,
-        )?;
+        let request =
+            self.inner
+                .make_request(rsip::Method::Info, None, None, None, headers, body)?;
         self.inner.do_request(request.clone()).await
     }
 
@@ -557,13 +537,9 @@ impl ServerInviteDialog {
             return Ok(None);
         }
         debug!(id = %self.id(), %method, "sending request");
-        let request = self.inner.make_request_with_vias(
-            method,
-            None,
-            self.inner.build_vias_from_request()?,
-            headers,
-            body,
-        )?;
+        let request = self
+            .inner
+            .make_request(method, None, None, None, headers, body)?;
         self.inner.do_request(request).await
     }
 

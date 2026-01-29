@@ -260,7 +260,7 @@ impl TransportLayerInner {
         }
     }
 
-    pub(super) fn add_listener(&self, connection: SipConnection) {
+    pub fn add_listener(&self, connection: SipConnection) {
         match self.listens.write() {
             Ok(mut listens) => {
                 listens.push(connection);

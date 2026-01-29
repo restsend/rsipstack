@@ -42,25 +42,16 @@ async fn test_dialog_make_request() -> crate::Result<()> {
     .expect("Failed to create dialog inner");
 
     let bye = dialog_inner
-        .make_request_with_vias(
-            rsip::Method::Bye,
-            None,
-            dialog_inner
-                .build_vias_from_request()
-                .expect("Failed to build vias"),
-            None,
-            None,
-        )
+        .make_request(rsip::Method::Bye, None, None, None, None, None)
         .expect("Failed to make request");
     assert_eq!(bye.method, rsip::Method::Bye);
 
-    assert_eq!(
-        bye.via_header()
-            .expect("not via header")
-            .typed()?
-            .received()?,
-        "172.0.0.1".parse().ok()
-    );
+    assert!(bye
+        .via_header()
+        .expect("not via header")
+        .typed()?
+        .received()?
+        .is_none());
     assert!(
         bye.via_header().expect("not via header").typed()?.branch()
             != invite_req
@@ -156,6 +147,102 @@ async fn test_accept_with_public_contact_preserves_contact_header() -> crate::Re
         }
         _other => panic!("Expected TransactionEvent::Respond, got different event type"),
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_server_dialog_bye_via() -> crate::Result<()> {
+    let dialog_id = DialogId {
+        call_id: "server-bye-test".to_string(),
+        local_tag: "bob-tag".to_string(),
+        remote_tag: "alice-tag".to_string(),
+    };
+
+    let endpoint = create_test_endpoint().await?;
+    let (tu_sender, _tu_receiver) = unbounded_channel();
+    let (state_sender, _state_receiver) = unbounded_channel();
+
+    // Create an INVITE request FROM alice (remote)
+    // This invite has Via: SIP/2.0/UDP alice.example.com:5060;branch=...;received=172.0.0.1
+    let invite_req = create_invite_request(&dialog_id.remote_tag, "", &dialog_id.call_id);
+
+    let dialog_inner = DialogInner::new(
+        TransactionRole::Server,
+        dialog_id.clone(),
+        invite_req.clone(),
+        endpoint.inner.clone(),
+        state_sender,
+        None,
+        None,
+        tu_sender,
+    )
+    .expect("Failed to create dialog inner");
+
+    let server_dialog = ServerInviteDialog {
+        inner: Arc::new(dialog_inner),
+    };
+
+    // Generate BYE request
+    let bye_req =
+        server_dialog
+            .inner
+            .make_request(rsip::Method::Bye, None, None, None, None, None)?;
+
+    assert_eq!(bye_req.method, rsip::Method::Bye);
+    let via = bye_req.via_header().expect("no via").typed()?;
+
+    // The Via in BYE should NOT have received=172.0.0.1 (which was in the incoming INVITE)
+    assert!(via.received().expect("failed to get received").is_none());
+
+    // The host should be our local address (127.0.0.1) and NOT alice.example.com
+    assert_eq!(via.uri.host_with_port.host.to_string(), "127.0.0.1");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_server_dialog_reinvite_via() -> crate::Result<()> {
+    let dialog_id = DialogId {
+        call_id: "server-reinvite-test".to_string(),
+        local_tag: "bob-tag".to_string(),
+        remote_tag: "alice-tag".to_string(),
+    };
+
+    let endpoint = create_test_endpoint().await?;
+    let (tu_sender, _tu_receiver) = unbounded_channel();
+    let (state_sender, _state_receiver) = unbounded_channel();
+
+    let invite_req = create_invite_request(&dialog_id.remote_tag, "", &dialog_id.call_id);
+
+    let dialog_inner = DialogInner::new(
+        TransactionRole::Server,
+        dialog_id.clone(),
+        invite_req.clone(),
+        endpoint.inner.clone(),
+        state_sender,
+        None,
+        None,
+        tu_sender,
+    )
+    .expect("Failed to create dialog inner");
+
+    let server_dialog = ServerInviteDialog {
+        inner: Arc::new(dialog_inner),
+    };
+
+    // Generate re-INVITE request
+    let reinvite_req =
+        server_dialog
+            .inner
+            .make_request(rsip::Method::Invite, None, None, None, None, None)?;
+
+    assert_eq!(reinvite_req.method, rsip::Method::Invite);
+    let via = reinvite_req.via_header().expect("no via").typed()?;
+
+    // Should not have mirrored the "received" param
+    assert!(via.received().unwrap().is_none());
+    assert_eq!(via.uri.host_with_port.host.to_string(), "127.0.0.1");
 
     Ok(())
 }

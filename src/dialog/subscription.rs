@@ -151,13 +151,9 @@ impl ServerSubscriptionDialog {
         if !self.inner.is_confirmed() {
             return Ok(None);
         }
-        let request = self.inner.make_request_with_vias(
-            Method::Notify,
-            None,
-            self.inner.build_vias_from_request()?,
-            headers,
-            body,
-        )?;
+        let request =
+            self.inner
+                .make_request(rsip::Method::Notify, None, None, None, headers, body)?;
         self.inner.do_request(request).await
     }
 
@@ -176,13 +172,9 @@ impl ServerSubscriptionDialog {
         if !self.inner.is_confirmed() {
             return Ok(None);
         }
-        let request = self.inner.make_request_with_vias(
-            method,
-            None,
-            self.inner.build_vias_from_request()?,
-            headers,
-            body,
-        )?;
+        let request = self
+            .inner
+            .make_request(method, None, None, None, headers, body)?;
         self.inner.do_request(request).await
     }
 

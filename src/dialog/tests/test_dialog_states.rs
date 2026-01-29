@@ -61,6 +61,23 @@ fn create_response(status: StatusCode, from_tag: &str, to_tag: &str, call_id: &s
 pub async fn create_test_endpoint() -> crate::Result<crate::transaction::endpoint::Endpoint> {
     let token = CancellationToken::new();
     let tl = TransportLayer::new(token.child_token());
+
+    // Create a dummy UDP connection for testing using tokio's UdpSocket directly
+    let tokio_socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
+    let local_addr = tokio_socket.local_addr()?;
+
+    let udp_conn = crate::transport::udp::UdpConnection::attach(
+        crate::transport::udp::UdpInner {
+            conn: tokio_socket,
+            addr: crate::transport::SipAddr::from(local_addr),
+        },
+        None,
+        Some(token.child_token()),
+    )
+    .await;
+
+    tl.inner.add_listener(udp_conn.into());
+
     let endpoint = EndpointBuilder::new()
         .with_user_agent("rsipstack-test")
         .with_transport_layer(tl)
