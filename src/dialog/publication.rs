@@ -71,7 +71,7 @@ impl ClientPublicationDialog {
         }
         self.request(Method::Publish, Some(headers), None).await?;
         self.inner
-            .transition(DialogState::Terminated(self.id(), TerminatedReason::UacBye))?;
+            .transition(DialogState::Terminated(self.id(), TerminatedReason::UacBye));
         Ok(())
     }
 
@@ -116,11 +116,8 @@ impl ClientPublicationDialog {
         match tx.original.method {
             Method::Publish => {
                 let (handle, rx) = TransactionHandle::new();
-                self.inner.transition(DialogState::Publish(
-                    self.id(),
-                    tx.original.clone(),
-                    handle,
-                ))?;
+                self.inner
+                    .transition(DialogState::Publish(self.id(), tx.original.clone(), handle));
                 self.inner.process_transaction_handle(tx, rx).await
             }
             _ => Ok(()),
@@ -181,14 +178,13 @@ impl ServerPublicationDialog {
             .tu_sender
             .send(TransactionEvent::Respond(resp.clone()))?;
         self.inner
-            .transition(DialogState::Confirmed(self.id(), resp))?;
+            .transition(DialogState::Confirmed(self.id(), resp));
         Ok(())
     }
 
-    pub async fn close(&self) -> Result<()> {
+    pub async fn close(&self) {
         self.inner
-            .transition(DialogState::Terminated(self.id(), TerminatedReason::UasBye))?;
-        Ok(())
+            .transition(DialogState::Terminated(self.id(), TerminatedReason::UasBye));
     }
 
     pub async fn request(
@@ -235,11 +231,8 @@ impl ServerPublicationDialog {
         match tx.original.method {
             Method::Publish => {
                 let (handle, rx) = TransactionHandle::new();
-                self.inner.transition(DialogState::Publish(
-                    self.id(),
-                    tx.original.clone(),
-                    handle,
-                ))?;
+                self.inner
+                    .transition(DialogState::Publish(self.id(), tx.original.clone(), handle));
                 self.inner.process_transaction_handle(tx, rx).await
             }
             _ => Ok(()),

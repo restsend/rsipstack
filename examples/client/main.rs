@@ -523,9 +523,7 @@ async fn process_invite(opt: &MediaSessionOption, dialog: ServerInviteDialog) ->
     if opt.random_reject > 0 {
         if rand::random::<u32>() % opt.random_reject == 0 {
             info!("Randomly rejecting the call");
-            dialog
-                .reject(Some(rsip::StatusCode::BusyHere), Some("Busy here".into()))
-                .ok();
+            dialog.reject(Some(rsip::StatusCode::BusyHere), Some("Busy here".into()));
             return Ok(());
         }
     }
@@ -597,7 +595,7 @@ async fn process_invite(opt: &MediaSessionOption, dialog: ServerInviteDialog) ->
                                 info!("User answered the call");
                             } else if r == "r" {
                                 info!("User rejected the call");
-                                dialog.reject(Some(rsip::StatusCode::BusyHere), Some("Busy here".into())).ok();
+                                dialog.reject(Some(rsip::StatusCode::BusyHere), Some("Busy here".into()));
                                 rejected = true;
                                 return;
                             } else {

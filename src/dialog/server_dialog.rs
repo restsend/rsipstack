@@ -51,7 +51,7 @@ use tracing::{debug, trace, warn};
 /// dialog.accept(None, Some(answer_sdp))?;
 ///
 /// // Or reject the call
-/// dialog.reject(None, None)?;
+/// dialog.reject(None, None);
 /// # Ok(())
 /// # }
 /// ```
@@ -151,7 +151,7 @@ impl ServerInviteDialog {
         self.inner
             .tu_sender
             .send(TransactionEvent::Respond(resp.clone()))?;
-        self.inner.transition(DialogState::Early(self.id(), resp))?;
+        self.inner.transition(DialogState::Early(self.id(), resp));
         Ok(())
     }
     /// Accept the incoming INVITE request
@@ -193,8 +193,7 @@ impl ServerInviteDialog {
             .tu_sender
             .send(TransactionEvent::Respond(resp.clone()))?;
 
-        self.inner
-            .transition(DialogState::WaitAck(self.id(), resp))?;
+        self.inner.transition(DialogState::WaitAck(self.id(), resp));
         Ok(())
     }
 
@@ -285,13 +284,13 @@ impl ServerInviteDialog {
     /// # fn example() -> rsipstack::Result<()> {
     /// # let dialog: ServerInviteDialog = todo!();
     /// // Reject the incoming call
-    /// dialog.reject(Some(rsip::StatusCode::BusyHere), Some("Busy here".into()))?;
+    /// dialog.reject(Some(rsip::StatusCode::BusyHere), Some("Busy here".into()));
     /// # Ok(())
     /// # }
     /// ```
-    pub fn reject(&self, code: Option<rsip::StatusCode>, reason: Option<String>) -> Result<()> {
+    pub fn reject(&self, code: Option<rsip::StatusCode>, reason: Option<String>) {
         if self.inner.is_terminated() || self.inner.is_confirmed() {
-            return Ok(());
+            return;
         }
         debug!(id=%self.id(), ?code, ?reason, "rejecting dialog");
         let headers = if let Some(reason) = reason {
@@ -360,7 +359,7 @@ impl ServerInviteDialog {
                 .make_request(rsip::Method::Bye, None, None, None, headers, None)?;
 
         self.inner
-            .transition(DialogState::Terminated(self.id(), TerminatedReason::UasBye))?;
+            .transition(DialogState::Terminated(self.id(), TerminatedReason::UasBye));
         self.inner.do_request(request).await.map(|_| ())
     }
 
@@ -428,7 +427,7 @@ impl ServerInviteDialog {
                 if resp.status_code == StatusCode::OK {
                     let (handle, _) = TransactionHandle::new();
                     self.inner
-                        .transition(DialogState::Updated(self.id(), request, handle))?;
+                        .transition(DialogState::Updated(self.id(), request, handle));
                 }
             }
             _ => {}
@@ -725,7 +724,7 @@ impl ServerInviteDialog {
     async fn handle_bye(&mut self, tx: &mut Transaction) -> Result<()> {
         debug!(id = %self.id(), uri = %tx.original.uri, "received bye");
         self.inner
-            .transition(DialogState::Terminated(self.id(), TerminatedReason::UacBye))?;
+            .transition(DialogState::Terminated(self.id(), TerminatedReason::UacBye));
         tx.reply(rsip::StatusCode::OK).await?;
         Ok(())
     }
@@ -734,7 +733,7 @@ impl ServerInviteDialog {
         debug!(id = %self.id(), uri = %tx.original.uri, "received info");
         let (handle, rx) = TransactionHandle::new();
         self.inner
-            .transition(DialogState::Info(self.id(), tx.original.clone(), handle))?;
+            .transition(DialogState::Info(self.id(), tx.original.clone(), handle));
         self.inner.process_transaction_handle(tx, rx).await
     }
 
@@ -755,7 +754,7 @@ impl ServerInviteDialog {
         debug!(id = %self.id(), uri = %tx.original.uri, "received options");
         let (handle, rx) = TransactionHandle::new();
         self.inner
-            .transition(DialogState::Options(self.id(), tx.original.clone(), handle))?;
+            .transition(DialogState::Options(self.id(), tx.original.clone(), handle));
 
         self.inner.process_transaction_handle(tx, rx).await
     }
@@ -764,7 +763,7 @@ impl ServerInviteDialog {
         debug!(id = %self.id(), uri = %tx.original.uri, "received update");
         let (handle, rx) = TransactionHandle::new();
         self.inner
-            .transition(DialogState::Updated(self.id(), tx.original.clone(), handle))?;
+            .transition(DialogState::Updated(self.id(), tx.original.clone(), handle));
 
         self.inner.process_transaction_handle(tx, rx).await
     }
@@ -773,7 +772,7 @@ impl ServerInviteDialog {
         debug!(id = %self.id(), uri = %tx.original.uri, "received refer");
         let (handle, rx) = TransactionHandle::new();
         self.inner
-            .transition(DialogState::Refer(self.id(), tx.original.clone(), handle))?;
+            .transition(DialogState::Refer(self.id(), tx.original.clone(), handle));
 
         self.inner.process_transaction_handle(tx, rx).await
     }
@@ -782,7 +781,7 @@ impl ServerInviteDialog {
         debug!(id = %self.id(), uri = %tx.original.uri, "received message");
         let (handle, rx) = TransactionHandle::new();
         self.inner
-            .transition(DialogState::Message(self.id(), tx.original.clone(), handle))?;
+            .transition(DialogState::Message(self.id(), tx.original.clone(), handle));
 
         self.inner.process_transaction_handle(tx, rx).await
     }
@@ -791,7 +790,7 @@ impl ServerInviteDialog {
         debug!(id = %self.id(), uri = %tx.original.uri, "received notify");
         let (handle, rx) = TransactionHandle::new();
         self.inner
-            .transition(DialogState::Notify(self.id(), tx.original.clone(), handle))?;
+            .transition(DialogState::Notify(self.id(), tx.original.clone(), handle));
 
         self.inner.process_transaction_handle(tx, rx).await
     }
@@ -800,7 +799,7 @@ impl ServerInviteDialog {
         debug!(id = %self.id(), "received re-invite {}", tx.original.uri);
         let (handle, rx) = TransactionHandle::new();
         self.inner
-            .transition(DialogState::Updated(self.id(), tx.original.clone(), handle))?;
+            .transition(DialogState::Updated(self.id(), tx.original.clone(), handle));
 
         self.inner.process_transaction_handle(tx, rx).await?;
 
@@ -812,7 +811,7 @@ impl ServerInviteDialog {
                         self.inner.transition(DialogState::Confirmed(
                             self.id(),
                             tx.last_response.clone().unwrap_or_default(),
-                        ))?;
+                        ));
                         break;
                     }
                     _ => {}
@@ -826,12 +825,8 @@ impl ServerInviteDialog {
     async fn handle_invite(&mut self, tx: &mut Transaction) -> Result<()> {
         let handle_loop = async {
             if !self.inner.is_confirmed() && matches!(tx.original.method, rsip::Method::Invite) {
-                match self.inner.transition(DialogState::Calling(self.id())) {
-                    Ok(_) => {
-                        tx.send_trying().await.ok();
-                    }
-                    Err(_) => {}
-                }
+                self.inner.transition(DialogState::Calling(self.id()));
+                tx.send_trying().await.ok();
             }
 
             while let Some(msg) = tx.receive().await {
@@ -846,7 +841,7 @@ impl ServerInviteDialog {
                             self.inner.transition(DialogState::Confirmed(
                                 self.id(),
                                 tx.last_response.clone().unwrap_or_default(),
-                            ))?;
+                            ));
                             break;
                         }
                         rsip::Method::Cancel => {
@@ -855,7 +850,7 @@ impl ServerInviteDialog {
                             self.inner.transition(DialogState::Terminated(
                                 self.id(),
                                 TerminatedReason::UacCancel,
-                            ))?;
+                            ));
                             break;
                         }
                         _ => {}

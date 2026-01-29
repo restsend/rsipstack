@@ -161,7 +161,7 @@ async fn test_client_dialog_state_transitions() -> crate::Result<()> {
     // Transition to Trying (after sending INVITE)
     client_dialog
         .inner
-        .transition(DialogState::Trying(dialog_id.clone()))?;
+        .transition(DialogState::Trying(dialog_id.clone()));
     let state = client_dialog.inner.state.lock().unwrap().clone();
     assert!(matches!(state, DialogState::Trying(_)));
 
@@ -183,7 +183,7 @@ async fn test_client_dialog_state_transitions() -> crate::Result<()> {
 
     client_dialog
         .inner
-        .transition(DialogState::Early(dialog_id.clone(), ringing_resp.clone()))?;
+        .transition(DialogState::Early(dialog_id.clone(), ringing_resp.clone()));
     let state = client_dialog.inner.state.lock().unwrap().clone();
     assert!(matches!(state, DialogState::Early(_, _)));
 
@@ -192,7 +192,7 @@ async fn test_client_dialog_state_transitions() -> crate::Result<()> {
     // Transition to Confirmed (after receiving 200 OK and sending ACK)
     client_dialog
         .inner
-        .transition(DialogState::Confirmed(dialog_id.clone(), final_resp))?;
+        .transition(DialogState::Confirmed(dialog_id.clone(), final_resp));
     let state = client_dialog.inner.state.lock().unwrap().clone();
     assert!(matches!(state, DialogState::Confirmed(_, _)));
     assert!(client_dialog.inner.is_confirmed());
@@ -234,7 +234,7 @@ async fn test_client_dialog_termination_scenarios() -> crate::Result<()> {
     client_dialog_1.inner.transition(DialogState::Terminated(
         dialog_id_1.clone(),
         TerminatedReason::UasBusy,
-    ))?;
+    ));
 
     let state = client_dialog_1.inner.state.lock().unwrap().clone();
     assert!(matches!(
@@ -270,14 +270,14 @@ async fn test_client_dialog_termination_scenarios() -> crate::Result<()> {
     client_dialog_2.inner.transition(DialogState::Confirmed(
         dialog_id_2.clone(),
         Response::default(),
-    ))?;
+    ));
     assert!(client_dialog_2.inner.is_confirmed());
 
     // Then terminate normally
     client_dialog_2.inner.transition(DialogState::Terminated(
         dialog_id_2.clone(),
         TerminatedReason::UacBye,
-    ))?;
+    ));
     let state = client_dialog_2.inner.state.lock().unwrap().clone();
     assert!(matches!(
         state,

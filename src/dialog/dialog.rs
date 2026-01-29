@@ -627,7 +627,7 @@ impl DialogInner {
                             self.transition(DialogState::Terminated(
                                 id,
                                 TerminatedReason::ProxyAuthRequired,
-                            ))?;
+                            ));
                             break;
                         }
                         auth_sent = true;
@@ -644,7 +644,7 @@ impl DialogInner {
                             self.transition(DialogState::Terminated(
                                 id,
                                 TerminatedReason::ProxyAuthRequired,
-                            ))?;
+                            ));
                             break;
                         }
                     }
@@ -935,7 +935,7 @@ impl DialogInner {
                         if method == Method::Invite {
                             self.handle_provisional_response(&resp).await?;
                         }
-                        self.transition(DialogState::Early(self.id.lock().unwrap().clone(), resp))?;
+                        self.transition(DialogState::Early(self.id.lock().unwrap().clone(), resp));
                         continue;
                     }
 
@@ -952,7 +952,7 @@ impl DialogInner {
                             self.transition(DialogState::Terminated(
                                 id,
                                 TerminatedReason::ProxyAuthRequired,
-                            ))?;
+                            ));
                             break;
                         }
                         auth_sent = true;
@@ -972,7 +972,7 @@ impl DialogInner {
                             self.transition(DialogState::Terminated(
                                 id,
                                 TerminatedReason::ProxyAuthRequired,
-                            ))?;
+                            ));
                             continue;
                         }
                     }
@@ -1170,7 +1170,7 @@ impl DialogInner {
             version: Version::V2,
         }
     }
-    pub(super) fn transition(&self, state: DialogState) -> Result<()> {
+    pub(super) fn transition(&self, state: DialogState) {
         // Try to send state update, but don't fail if channel is closed
         self.state_sender.send(state.clone()).ok();
 
@@ -1179,7 +1179,7 @@ impl DialogInner {
             | DialogState::Notify(_, _, _)
             | DialogState::Info(_, _, _)
             | DialogState::Options(_, _, _) => {
-                return Ok(());
+                return;
             }
             _ => {}
         }
@@ -1191,17 +1191,16 @@ impl DialogInner {
                     target = %state,
                     "dialog already terminated, ignoring transition"
                 );
-                return Ok(());
+                return;
             }
             (DialogState::Confirmed(_, _), DialogState::WaitAck(_, _)) => {
                 warn!(target = %state, "dialog already confirmed, ignoring transition");
-                return Ok(());
+                return;
             }
             _ => {}
         }
         debug!(from = %old_state, to = %state, "transitioning state");
         *old_state = state;
-        Ok(())
     }
 
     pub async fn process_transaction_handle(
@@ -1400,9 +1399,9 @@ impl Dialog {
         match self {
             Dialog::ServerInvite(d) => d.bye().await,
             Dialog::ClientInvite(d) => d.hangup().await,
-            Dialog::ServerSubscription(d) => d.unsubscribe().await,
+            Dialog::ServerSubscription(d) => Ok(d.unsubscribe().await),
             Dialog::ClientSubscription(d) => d.unsubscribe().await,
-            Dialog::ServerPublication(d) => d.close().await,
+            Dialog::ServerPublication(d) => Ok(d.close().await),
             Dialog::ClientPublication(d) => d.close().await,
         }
     }
