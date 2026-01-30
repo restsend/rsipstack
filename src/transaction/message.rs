@@ -260,11 +260,14 @@ impl EndpointInner {
                 }
             }
         }
-        // update route set from Record-Route header
+        // update route set from Record-Route header (support comma-separated lists)
         let mut route_set = Vec::new();
         for header in resp.headers.iter() {
             if let Header::RecordRoute(record_route) = header {
-                route_set.push(Header::Route(Route::from(record_route.value())));
+                let value = record_route.value();
+                for token in value.split(',').map(|t| t.trim()).filter(|t| !t.is_empty()) {
+                    route_set.push(Header::Route(Route::from(token)));
+                }
             }
         }
         route_set.reverse();

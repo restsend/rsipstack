@@ -1,4 +1,4 @@
-use crate::rsip_ext::RsipResponseExt;
+use crate::rsip_ext::{destination_from_request, RsipResponseExt};
 use crate::transaction::key::{TransactionKey, TransactionRole};
 use crate::transaction::transaction::Transaction;
 use crate::transport::udp::UdpConnection;
@@ -162,6 +162,54 @@ Content-Length: 0\r\n\r\n";
             "<sip:proxy1.example.com:5060;transport=tcp;lr>".to_string()
         ],
         "ACK Route headers must follow the reversed Record-Route order"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_make_ack_accepts_comma_separated_record_route() -> Result<()> {
+    let endpoint = super::create_test_endpoint(None).await?;
+
+    let raw_response = "SIP/2.0 200 OK\r\n\
+Via: SIP/2.0/UDP uac.example.com:5060;branch=z9hG4bK1\r\n\
+Record-Route: <sip:3.4.5.6:24364;r2=on;lr;ftag=Xq5kaQn5;did=9e8.3362>,<sip:3.4.5.6:21827;r2=on;lr;ftag=Xq5kaQn5;did=9e8.3362>,<sip:1.2.40.7:21827;lr;ftag=Xq5kaQn5;did=9e8.ab21>\r\n\
+From: <sip:alice@example.com>;tag=from-tag\r\n\
+To: <sip:bob@example.com>;tag=to-tag\r\n\
+Call-ID: callid@example.com\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:uas@192.0.2.55:5080;transport=udp>\r\n\
+Content-Length: 0\r\n\r\n";
+
+    let response = Response::try_from(raw_response)?;
+    let request_uri = response.remote_uri(None)?;
+    let ack = endpoint.inner.make_ack(&response, request_uri)?;
+
+    let routes: Vec<String> = ack
+        .headers
+        .iter()
+        .filter_map(|header| match header {
+            Header::Route(route) => Some(route.value().to_string()),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        routes,
+        vec![
+            "<sip:1.2.40.7:21827;lr;ftag=Xq5kaQn5;did=9e8.ab21>".to_string(),
+            "<sip:3.4.5.6:21827;r2=on;lr;ftag=Xq5kaQn5;did=9e8.3362>".to_string(),
+            "<sip:3.4.5.6:24364;r2=on;lr;ftag=Xq5kaQn5;did=9e8.3362>".to_string(),
+        ],
+        "ACK Route headers must follow the reversed Record-Route order"
+    );
+
+    let destination =
+        destination_from_request(&ack).expect("route-enabled ACK should resolve to a destination");
+    let expected_destination = Uri::try_from("sip:1.2.40.7:21827;lr;ftag=Xq5kaQn5;did=9e8.ab21")?;
+    assert_eq!(
+        &*destination, &expected_destination,
+        "First Route entry must determine the transport destination",
     );
 
     Ok(())
