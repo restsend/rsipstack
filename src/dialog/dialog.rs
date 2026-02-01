@@ -1397,13 +1397,17 @@ impl Dialog {
     }
 
     pub async fn hangup(&self) -> Result<()> {
+        self.hangup_with_headers(None).await
+    }
+
+    pub async fn hangup_with_headers(&self, headers: Option<Vec<rsip::Header>>) -> Result<()> {
         match self {
-            Dialog::ServerInvite(d) => d.bye().await,
-            Dialog::ClientInvite(d) => d.hangup().await,
-            Dialog::ServerSubscription(d) => d.unsubscribe().await,
-            Dialog::ClientSubscription(d) => d.unsubscribe().await,
-            Dialog::ServerPublication(d) => d.close().await,
-            Dialog::ClientPublication(d) => d.close().await,
+            Dialog::ServerInvite(d) => d.bye_with_headers(headers).await,
+            Dialog::ClientInvite(d) => d.hangup_with_headers(headers).await,
+            Dialog::ServerSubscription(d) => d.unsubscribe_with_headers(headers).await,
+            Dialog::ClientSubscription(d) => d.unsubscribe_with_headers(headers).await,
+            Dialog::ServerPublication(d) => d.close_with_headers(headers).await,
+            Dialog::ClientPublication(d) => d.close_with_headers(headers).await,
         }
     }
 

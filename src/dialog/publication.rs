@@ -65,7 +65,12 @@ impl ClientPublicationDialog {
     }
 
     pub async fn close(&self) -> Result<()> {
-        let mut headers = vec![Header::Expires(0.into())];
+        self.close_with_headers(None).await
+    }
+
+    pub async fn close_with_headers(&self, extra_headers: Option<Vec<rsip::Header>>) -> Result<()> {
+        let mut headers = extra_headers.unwrap_or_default();
+        headers.push(Header::Expires(0.into()));
         if let Some(etag) = self.etag() {
             headers.push(Header::Other("SIP-If-Match".into(), etag.into()));
         }
@@ -186,6 +191,16 @@ impl ServerPublicationDialog {
     }
 
     pub async fn close(&self) -> Result<()> {
+        self.close_with_headers(None).await
+    }
+
+    pub async fn close_with_headers(&self, extra_headers: Option<Vec<rsip::Header>>) -> Result<()> {
+        let mut headers = extra_headers.unwrap_or_default();
+        headers.push(Header::Expires(0.into()));
+        if let Some(etag) = self.etag() {
+            headers.push(Header::Other("SIP-If-Match".into(), etag.into()));
+        }
+        self.request(Method::Publish, Some(headers), None).await?;
         self.inner
             .transition(DialogState::Terminated(self.id(), TerminatedReason::UasBye))?;
         Ok(())

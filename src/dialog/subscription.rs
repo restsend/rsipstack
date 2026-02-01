@@ -32,7 +32,12 @@ impl ClientSubscriptionDialog {
     }
 
     pub async fn unsubscribe(&self) -> Result<()> {
-        let headers = vec![Header::Expires(0.into())];
+        self.unsubscribe_with_headers(None).await
+    }
+
+    pub async fn unsubscribe_with_headers(&self, headers: Option<Vec<Header>>) -> Result<()> {
+        let mut headers = headers.unwrap_or_default();
+        headers.push(Header::Expires(0.into()));
         self.request(Method::Subscribe, Some(headers), None).await?;
         self.inner
             .transition(DialogState::Terminated(self.id(), TerminatedReason::UacBye))?;
@@ -158,6 +163,13 @@ impl ServerSubscriptionDialog {
     }
 
     pub async fn unsubscribe(&self) -> Result<()> {
+        self.unsubscribe_with_headers(None).await
+    }
+
+    pub async fn unsubscribe_with_headers(&self, headers: Option<Vec<Header>>) -> Result<()> {
+        let mut headers = headers.unwrap_or_default();
+        headers.push(Header::Expires(0.into()));
+        self.request(Method::Subscribe, Some(headers), None).await?;
         self.inner
             .transition(DialogState::Terminated(self.id(), TerminatedReason::UasBye))?;
         Ok(())
