@@ -233,6 +233,7 @@ pub type Result<T> = std::result::Result<T, crate::error::Error>;
 pub use crate::error::Error;
 pub mod dialog;
 pub mod error;
+pub mod resolver;
 pub mod transaction;
 pub mod transport;
 pub use transaction::EndpointBuilder;
