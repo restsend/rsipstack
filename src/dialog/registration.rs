@@ -15,7 +15,7 @@ use crate::{
 };
 use rsip::{
     prelude::{HeadersExt, ToTypedHeader},
-    Response, SipMessage, StatusCode,
+    Param, Response, SipMessage, StatusCode,
 };
 use tracing::debug;
 
@@ -378,7 +378,7 @@ impl Registration {
         // 3. Local non-loopback address (lowest priority)
         //    - Only used for initial registration attempt
         //    - Will be replaced by server-discovered address after first response
-        let contact = self.contact.clone().unwrap_or_else(|| {
+        let mut contact = self.contact.clone().unwrap_or_else(|| {
             let contact_host_with_port = self
                 .public_address
                 .clone()
@@ -395,6 +395,11 @@ impl Registration {
                 params: vec![],
             }
         });
+
+        if expires.is_some() {
+            contact.params.retain(|p| !matches!(p, Param::Expires(_)));
+        }
+
         let mut request = self.endpoint.make_request(
             rsip::Method::Register,
             server,
