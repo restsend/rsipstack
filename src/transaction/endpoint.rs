@@ -7,6 +7,7 @@ use super::{
 };
 use crate::{
     dialog::DialogId,
+    rsip_ext::destination_from_request,
     transport::{SipAddr, TransportEvent, TransportLayer},
     Error, Result, VERSION,
 };
@@ -333,6 +334,28 @@ impl EndpointInner {
         }
     }
 
+    // Note: This function used for determine destination of response message, from via of the request
+    pub async fn get_destination_from_request(&self, req: &rsip::Request) -> Option<SipAddr> {
+        let (transport, host_with_port) =
+            SipConnection::parse_target_from_via(req.via_header().ok()?).ok()?;
+
+        let sip_addr = SipAddr {
+            r#type: Some(transport),
+            addr: host_with_port,
+        };
+
+        if matches!(sip_addr.addr.host, rsip::Host::Domain(_)) {
+            return self
+                .transport_layer
+                .inner
+                .domain_resolver
+                .resolve(&sip_addr)
+                .await
+                .ok();
+        }
+        Some(sip_addr)
+    }
+
     // receive message from transport layer
     pub async fn on_received_message(
         self: &Arc<Self>,
@@ -377,7 +400,12 @@ impl EndpointInner {
                     .flatten();
 
                 if let Some(last_message) = last_message {
-                    connection.send(last_message, None).await?;
+                    let dest = if !connection.is_reliable() {
+                        self.get_destination_from_request(req).await
+                    } else {
+                        None
+                    };
+                    connection.send(last_message, dest.as_ref()).await?;
                     return Ok(());
                 }
             }
@@ -418,11 +446,28 @@ impl EndpointInner {
                                     connection.send(last_message, Some(from)).await?;
                                     return Ok(());
                                 }
+
+                                let dest = match destination_from_request(&last_req)
+                                    .and_then(|uri| SipAddr::try_from(uri).ok())
+                                {
+                                    Some(addr)
+                                        if matches!(addr.addr.host, rsip::Host::Domain(_)) =>
+                                    {
+                                        self.transport_layer
+                                            .inner
+                                            .domain_resolver
+                                            .resolve(&addr)
+                                            .await
+                                            .ok()
+                                    }
+                                    addr => addr,
+                                };
+
+                                connection.send(last_message, dest.as_ref()).await?;
                             }
                         }
                         _ => {}
                     }
-                    connection.send(last_message, None).await?;
                     return Ok(());
                 }
             }
@@ -462,7 +507,13 @@ impl EndpointInner {
                 } else {
                     resp.into()
                 };
-                connection.send(resp, None).await?;
+
+                let dest = if !connection.is_reliable() {
+                    self.get_destination_from_request(&request).await
+                } else {
+                    None
+                };
+                connection.send(resp, dest.as_ref()).await?;
                 return Ok(());
             }
             rsip::Method::Ack => return Ok(()),
