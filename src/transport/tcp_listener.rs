@@ -36,6 +36,10 @@ impl TcpListenerConnection {
         transport_layer_inner: TransportLayerInnerRef,
     ) -> Result<()> {
         let listener = TcpListener::bind(self.inner.local_addr.get_socketaddr()?).await?;
+        let listener_local_addr = SipAddr {
+            r#type: Some(rsip::transport::Transport::Tcp),
+            addr: listener.local_addr().unwrap().into(),
+        };
         tokio::spawn(async move {
             loop {
                 let (stream, remote_addr) = match listener.accept().await {
@@ -49,10 +53,7 @@ impl TcpListenerConnection {
                     debug!(remote = %remote_addr, "tcp connection rejected by whitelist");
                     continue;
                 }
-                let local_addr = SipAddr {
-                    r#type: Some(rsip::transport::Transport::Tcp),
-                    addr: remote_addr.into(),
-                };
+                let local_addr = listener_local_addr.clone();
                 let tcp_connection = match TcpConnection::from_stream(
                     stream,
                     local_addr.clone(),

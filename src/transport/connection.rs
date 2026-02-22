@@ -347,9 +347,13 @@ impl SipConnection {
             typed_via.params.push(Param::Transport(transport));
         }
 
+        let received_str = match addr {
+            SocketAddr::V6(_) => format!("[{}]", received.host),
+            _ => received.host.to_string(),
+        };
         *via = typed_via
             .with_param(Param::Received(rsip::param::Received::new(
-                received.host.to_string(),
+                received_str,
             )))
             .with_param(Param::Other(
                 rsip::param::OtherParam::new("rport"),
