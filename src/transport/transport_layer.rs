@@ -431,9 +431,12 @@ impl TransportLayerInner {
             }
             select! {
                 _ = sub_token.cancelled() => { }
-                _ = async {
+                result = async {
                     transport.serve_loop(sender_clone.clone()).await
                 } => {
+                    if let Err(e) = result {
+                        warn!(addr=%transport.get_addr(), error = %e, "serve_loop error");
+                    }
                 }
             }
             info!(addr=%transport.get_addr(), "transport serve_loop exited");
