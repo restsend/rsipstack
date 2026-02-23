@@ -38,7 +38,7 @@ impl TcpListenerConnection {
         let listener = TcpListener::bind(self.inner.local_addr.get_socketaddr()?).await?;
         let listener_local_addr = SipAddr {
             r#type: Some(rsip::transport::Transport::Tcp),
-            addr: listener.local_addr().unwrap().into(),
+            addr: listener.local_addr()?.into(),
         };
         tokio::spawn(async move {
             loop {
