@@ -352,9 +352,7 @@ impl SipConnection {
             _ => received.host.to_string(),
         };
         *via = typed_via
-            .with_param(Param::Received(rsip::param::Received::new(
-                received_str,
-            )))
+            .with_param(Param::Received(rsip::param::Received::new(received_str)))
             .with_param(Param::Other(
                 rsip::param::OtherParam::new("rport"),
                 Some(rsip::param::OtherParamValue::new(addr.port().to_string())),
