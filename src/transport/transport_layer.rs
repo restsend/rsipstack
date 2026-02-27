@@ -1,4 +1,4 @@
-use super::tls::TlsConnection;
+use super::tls::{TlsConfig, TlsConnection};
 use super::websocket::WebSocketConnection;
 use super::{connection::TransportSender, sip_addr::SipAddr, tcp::TcpConnection, SipConnection};
 use crate::resolver::SipResolver;
@@ -117,6 +117,7 @@ pub(crate) type TransportLayerInnerRef = Arc<TransportLayerInner>;
 pub struct TransportLayer {
     pub outbound: Option<SipAddr>,
     pub inner: TransportLayerInnerRef,
+    pub tls_config: Option<TlsConfig>,
 }
 
 impl TransportLayer {
@@ -137,6 +138,7 @@ impl TransportLayer {
         Self {
             outbound: None,
             inner: Arc::new(inner),
+            tls_config: None,
         }
     }
 
@@ -166,7 +168,9 @@ impl TransportLayer {
         target: &SipAddr,
         key: Option<&TransactionKey>,
     ) -> Result<(SipConnection, SipAddr)> {
-        self.inner.lookup(target, self.outbound.as_ref(), key).await
+        self.inner
+            .lookup(target, self.outbound.as_ref(), key, self.tls_config.as_ref())
+            .await
     }
 
     pub async fn serve_listens(&self) -> Result<()> {
@@ -292,8 +296,16 @@ impl TransportLayerInner {
         destination: &SipAddr,
         outbound: Option<&SipAddr>,
         key: Option<&TransactionKey>,
+        tls_config: Option<&TlsConfig>,
     ) -> Result<(SipConnection, SipAddr)> {
         let target = outbound.unwrap_or(destination);
+
+        // Capture the original domain name before DNS resolution for TLS SNI
+        let original_domain = match &target.addr.host {
+            rsip::Host::Domain(domain) => Some(domain.to_string()),
+            _ => None,
+        };
+
         let target = if matches!(target.addr.host, rsip::Host::Domain(_)) {
             &self.domain_resolver.resolve(target).await?
         } else {
@@ -330,8 +342,15 @@ impl TransportLayerInner {
                         SipConnection::Tcp(connection)
                     }
                     Some(rsip::transport::Transport::Tls) => {
+                        // Build effective TLS config with SNI from the original domain
+                        let mut effective_config =
+                            tls_config.cloned().unwrap_or_default();
+                        if effective_config.sni_hostname.is_none() {
+                            effective_config.sni_hostname = original_domain;
+                        }
                         let connection = TlsConnection::connect(
                             target,
+                            Some(&effective_config),
                             None,
                             Some(self.cancel_token.child_token()),
                         )
