@@ -278,9 +278,7 @@ impl TlsConnection {
                 ClientConfig::builder()
                     .with_root_certificates(root_store)
                     .with_client_auth_cert(certs, key)
-                    .map_err(|e| {
-                        Error::Error(format!("Client auth configuration error: {}", e))
-                    })?
+                    .map_err(|e| Error::Error(format!("Client auth configuration error: {}", e)))?
             }
             _ => ClientConfig::builder()
                 .with_root_certificates(root_store)
@@ -288,9 +286,7 @@ impl TlsConnection {
         };
 
         if let Some(verifier) = custom_verifier {
-            client_config
-                .dangerous()
-                .set_certificate_verifier(verifier);
+            client_config.dangerous().set_certificate_verifier(verifier);
         }
 
         // Prefer explicit SNI, otherwise use the remote host.
