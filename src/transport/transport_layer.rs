@@ -1,4 +1,4 @@
-use super::tls::TlsConnection;
+use super::tls::{TlsConfig, TlsConnection};
 use super::websocket::WebSocketConnection;
 use super::{connection::TransportSender, sip_addr::SipAddr, tcp::TcpConnection, SipConnection};
 use crate::resolver::SipResolver;
@@ -110,6 +110,7 @@ pub struct TransportLayerInner {
     pub(crate) transport_rx: Mutex<Option<TransportReceiver>>,
     pub domain_resolver: Box<dyn DomainResolver>,
     whitelist: RwLock<Option<TransportWhitelistRef>>,
+    tls_config: RwLock<Option<TlsConfig>>,
 }
 pub(crate) type TransportLayerInnerRef = Arc<TransportLayerInner>;
 
@@ -133,6 +134,7 @@ impl TransportLayer {
             transport_rx: Mutex::new(Some(transport_rx)),
             domain_resolver,
             whitelist: RwLock::new(None),
+            tls_config: RwLock::new(None),
         };
         Self {
             outbound: None,
@@ -213,6 +215,16 @@ impl TransportLayer {
     pub fn clear_whitelist(&self) {
         self.inner.set_whitelist(None);
     }
+
+    /// Set the TLS configuration used for future outbound TLS connections.
+    pub fn set_tls_config(&self, tls_config: TlsConfig) {
+        self.inner.set_tls_config(Some(tls_config));
+    }
+
+    /// Remove the TLS configuration used for future outbound TLS connections.
+    pub fn clear_tls_config(&self) {
+        self.inner.set_tls_config(None);
+    }
 }
 
 impl TransportLayerInner {
@@ -239,6 +251,27 @@ impl TransportLayerInner {
         match whitelist {
             Some(whitelist) => whitelist.allow(ip).await,
             None => true,
+        }
+    }
+
+    fn set_tls_config(&self, tls_config: Option<TlsConfig>) {
+        match self.tls_config.write() {
+            Ok(mut guard) => {
+                *guard = tls_config;
+            }
+            Err(e) => {
+                warn!(error = ?e, "Failed to update tls config");
+            }
+        }
+    }
+
+    fn tls_config(&self) -> Option<TlsConfig> {
+        match self.tls_config.read() {
+            Ok(guard) => guard.clone(),
+            Err(e) => {
+                warn!(error = ?e, "Failed to read tls config");
+                None
+            }
         }
     }
 
@@ -294,6 +327,14 @@ impl TransportLayerInner {
         key: Option<&TransactionKey>,
     ) -> Result<(SipConnection, SipAddr)> {
         let target = outbound.unwrap_or(destination);
+        let tls_config = self.tls_config();
+
+        // Capture the original domain name before DNS resolution for TLS SNI
+        let original_domain = match &target.addr.host {
+            rsip::Host::Domain(domain) => Some(domain.to_string()),
+            _ => None,
+        };
+
         let target = if matches!(target.addr.host, rsip::Host::Domain(_)) {
             &self.domain_resolver.resolve(target).await?
         } else {
@@ -330,8 +371,14 @@ impl TransportLayerInner {
                         SipConnection::Tcp(connection)
                     }
                     Some(rsip::transport::Transport::Tls) => {
+                        // Build effective TLS config with SNI from the original domain
+                        let mut effective_config = tls_config.clone().unwrap_or_default();
+                        if effective_config.sni_hostname.is_none() {
+                            effective_config.sni_hostname = original_domain;
+                        }
                         let connection = TlsConnection::connect(
                             target,
+                            Some(&effective_config),
                             None,
                             Some(self.cancel_token.child_token()),
                         )

@@ -29,6 +29,34 @@ pub struct TlsConfig {
     pub client_key: Option<Vec<u8>>,
     // Root CA certificates in PEM format
     pub ca_certs: Option<Vec<u8>>,
+    // SNI hostname for TLS client connections (overrides the hostname derived from the remote address)
+    pub sni_hostname: Option<String>,
+}
+
+fn parse_private_key(key_data: &[u8]) -> Result<pki_types::PrivateKeyDer<'static>> {
+    // Try PKCS8 format first
+    let mut reader = std::io::BufReader::new(key_data);
+    let keys = rustls_pemfile::pkcs8_private_keys(&mut reader)
+        .collect::<std::result::Result<Vec<_>, std::io::Error>>()
+        .map_err(|e| Error::Error(format!("Failed to parse PKCS8 key: {}", e)))?;
+
+    if !keys.is_empty() {
+        let key_der = pki_types::PrivatePkcs8KeyDer::from(keys[0].clone_key());
+        return Ok(pki_types::PrivateKeyDer::Pkcs8(key_der));
+    }
+
+    // Try PKCS1 format
+    let mut reader = std::io::BufReader::new(key_data);
+    let keys = rustls_pemfile::rsa_private_keys(&mut reader)
+        .collect::<std::result::Result<Vec<_>, std::io::Error>>()
+        .map_err(|e| Error::Error(format!("Failed to parse RSA key: {}", e)))?;
+
+    if !keys.is_empty() {
+        let key_der = pki_types::PrivatePkcs1KeyDer::from(keys[0].clone_key());
+        return Ok(pki_types::PrivateKeyDer::Pkcs1(key_der));
+    }
+
+    Err(Error::Error("No valid private key found".to_string()))
 }
 
 // TLS Listener Connection Structure
@@ -151,31 +179,7 @@ impl TlsListenerConnection {
 
         // Load private key
         let key = match &config.key {
-            Some(key_data) => {
-                let mut reader = std::io::BufReader::new(key_data.as_slice());
-                // Try PKCS8 format first
-                let keys = rustls_pemfile::pkcs8_private_keys(&mut reader)
-                    .collect::<std::result::Result<Vec<_>, std::io::Error>>()
-                    .map_err(|e| Error::Error(format!("Failed to parse PKCS8 key: {}", e)))?;
-
-                if !keys.is_empty() {
-                    let key_der = pki_types::PrivatePkcs8KeyDer::from(keys[0].clone_key());
-                    pki_types::PrivateKeyDer::Pkcs8(key_der)
-                } else {
-                    // Try PKCS1 format
-                    let mut reader = std::io::BufReader::new(key_data.as_slice());
-                    let keys = rustls_pemfile::rsa_private_keys(&mut reader)
-                        .collect::<std::result::Result<Vec<_>, std::io::Error>>()
-                        .map_err(|e| Error::Error(format!("Failed to parse RSA key: {}", e)))?;
-
-                    if !keys.is_empty() {
-                        let key_der = pki_types::PrivatePkcs1KeyDer::from(keys[0].clone_key());
-                        pki_types::PrivateKeyDer::Pkcs1(key_der)
-                    } else {
-                        return Err(Error::Error("No valid private key found".to_string()));
-                    }
-                }
-            }
+            Some(key_data) => parse_private_key(key_data)?,
             None => return Err(Error::Error("No private key provided".to_string())),
         };
 
@@ -239,22 +243,61 @@ impl TlsConnection {
     // Connect to a remote TLS server
     pub async fn connect(
         remote_addr: &SipAddr,
+        tls_config: Option<&TlsConfig>,
         custom_verifier: Option<Arc<dyn ServerCertVerifier>>,
         cancel_token: Option<CancellationToken>,
     ) -> Result<Self> {
-        let root_store = RootCertStore::empty();
+        let mut root_store = RootCertStore::empty();
 
-        let mut config = ClientConfig::builder()
-            .with_root_certificates(root_store)
-            .with_no_client_auth();
-
-        match custom_verifier {
-            Some(verifier) => {
-                config.dangerous().set_certificate_verifier(verifier);
+        // Load CA certificates if provided
+        if let Some(ca_data) = tls_config.and_then(|c| c.ca_certs.as_ref()) {
+            let mut reader = std::io::BufReader::new(ca_data.as_slice());
+            let certs = rustls_pemfile::certs(&mut reader)
+                .collect::<std::result::Result<Vec<_>, std::io::Error>>()
+                .map_err(|e| Error::Error(format!("Failed to parse CA certificates: {}", e)))?;
+            for cert in certs {
+                root_store
+                    .add(cert)
+                    .map_err(|e| Error::Error(format!("Failed to add CA certificate: {}", e)))?;
             }
-            None => {}
         }
-        let connector = TlsConnector::from(Arc::new(config));
+
+        // Build client config with optional mutual TLS
+        let mut client_config = match (
+            tls_config.and_then(|c| c.client_cert.as_ref()),
+            tls_config.and_then(|c| c.client_key.as_ref()),
+        ) {
+            (Some(cert_data), Some(key_data)) => {
+                let mut reader = std::io::BufReader::new(cert_data.as_slice());
+                let certs = rustls_pemfile::certs(&mut reader)
+                    .collect::<std::result::Result<Vec<_>, std::io::Error>>()
+                    .map_err(|e| {
+                        Error::Error(format!("Failed to parse client certificate: {}", e))
+                    })?;
+                let key = parse_private_key(key_data)?;
+                ClientConfig::builder()
+                    .with_root_certificates(root_store)
+                    .with_client_auth_cert(certs, key)
+                    .map_err(|e| Error::Error(format!("Client auth configuration error: {}", e)))?
+            }
+            _ => ClientConfig::builder()
+                .with_root_certificates(root_store)
+                .with_no_client_auth(),
+        };
+
+        if let Some(verifier) = custom_verifier {
+            client_config.dangerous().set_certificate_verifier(verifier);
+        }
+
+        // Prefer explicit SNI, otherwise use the remote host.
+        let domain_string = tls_config
+            .and_then(|c| c.sni_hostname.clone())
+            .unwrap_or_else(|| match &remote_addr.addr.host {
+                rsip::host_with_port::Host::Domain(domain) => domain.to_string(),
+                rsip::host_with_port::Host::IpAddr(ip) => ip.to_string(),
+            });
+
+        let connector = TlsConnector::from(Arc::new(client_config));
 
         let socket_addr = match &remote_addr.addr.host {
             rsip::host_with_port::Host::Domain(domain) => {
@@ -265,11 +308,6 @@ impl TlsConnection {
                 let port = remote_addr.addr.port.as_ref().map_or(5061, |p| *p.value());
                 SocketAddr::new(*ip, port)
             }
-        };
-
-        let domain_string = match &remote_addr.addr.host {
-            rsip::host_with_port::Host::Domain(domain) => domain.to_string(),
-            rsip::host_with_port::Host::IpAddr(ip) => ip.to_string(),
         };
 
         let server_name = pki_types::ServerName::try_from(domain_string.as_str())
