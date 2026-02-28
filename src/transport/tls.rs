@@ -293,12 +293,12 @@ impl TlsConnection {
                 .set_certificate_verifier(verifier);
         }
 
-        // Determine SNI hostname: explicit config > domain from remote_addr > IP from remote_addr
-        let sni_hostname = tls_config
+        // Prefer explicit SNI, otherwise use the remote host.
+        let domain_string = tls_config
             .and_then(|c| c.sni_hostname.clone())
-            .or_else(|| match &remote_addr.addr.host {
-                rsip::host_with_port::Host::Domain(domain) => Some(domain.to_string()),
-                _ => None,
+            .unwrap_or_else(|| match &remote_addr.addr.host {
+                rsip::host_with_port::Host::Domain(domain) => domain.to_string(),
+                rsip::host_with_port::Host::IpAddr(ip) => ip.to_string(),
             });
 
         let connector = TlsConnector::from(Arc::new(client_config));
@@ -313,12 +313,6 @@ impl TlsConnection {
                 SocketAddr::new(*ip, port)
             }
         };
-
-        // Use SNI hostname if available, otherwise fall back to remote addr host
-        let domain_string = sni_hostname.unwrap_or_else(|| match &remote_addr.addr.host {
-            rsip::host_with_port::Host::Domain(domain) => domain.to_string(),
-            rsip::host_with_port::Host::IpAddr(ip) => ip.to_string(),
-        });
 
         let server_name = pki_types::ServerName::try_from(domain_string.as_str())
             .map_err(|_| Error::Error(format!("Invalid DNS name: {}", domain_string)))?
