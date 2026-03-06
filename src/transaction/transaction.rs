@@ -2,7 +2,7 @@ use super::endpoint::EndpointInnerRef;
 use super::key::TransactionKey;
 use super::{SipConnection, TransactionState, TransactionTimer, TransactionType};
 use crate::dialog::DialogId;
-use crate::rsip_ext::{destination_from_request, RsipResponseExt};
+use crate::rsip_ext::destination_from_request;
 use crate::transaction::key::TransactionRole;
 use crate::transaction::make_tag;
 use crate::transport::SipAddr;
@@ -465,12 +465,7 @@ impl Transaction {
         let ack = match self.last_ack.clone() {
             Some(ack) => ack,
             None => match self.last_response {
-                Some(ref resp) => {
-                    let request_uri = resp
-                        .remote_uri(self.destination.as_ref())
-                        .unwrap_or_else(|_| self.original.uri.clone());
-                    self.endpoint_inner.make_ack(resp, request_uri)?
-                }
+                Some(ref resp) => self.endpoint_inner.make_ack(&self.original, resp)?,
                 None => {
                     return Err(Error::TransactionError(
                         "no last response found to send ACK".to_string(),
@@ -986,8 +981,8 @@ impl Transaction {
                     ) {
                         if self.last_ack.is_none() {
                             if let Some(ref resp) = self.last_response {
-                                let request_uri = self.original.uri.clone();
-                                if let Ok(ack) = self.endpoint_inner.make_ack(resp, request_uri) {
+                                if let Ok(ack) = self.endpoint_inner.make_ack(&self.original, resp)
+                                {
                                     self.last_ack.replace(ack);
                                 }
                             }
