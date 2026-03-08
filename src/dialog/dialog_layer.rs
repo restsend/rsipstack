@@ -559,7 +559,7 @@ impl DialogLayer {
         let addr = self
             .endpoint
             .transport_layer
-            .get_addrs()
+            .get_contact_addrs()
             .first()
             .ok_or(crate::Error::EndpointError("not sipaddrs".to_string()))?
             .clone();

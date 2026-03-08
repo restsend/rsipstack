@@ -197,6 +197,13 @@ impl SipConnection {
             SipConnection::WebSocketListener(transport) => transport.get_addr(),
         }
     }
+    pub fn get_contact_addr(&self) -> SipAddr {
+        if let SipConnection::Udp(transpport) = self {
+            transpport.get_contact_addr()
+        } else {
+            self.get_addr().to_owned()
+        }
+    }
     pub async fn send(&self, msg: rsip::SipMessage, destination: Option<&SipAddr>) -> Result<()> {
         match self {
             SipConnection::Channel(transport) => transport.send(msg).await,

@@ -19,6 +19,7 @@ name = "bench_ua"
 path = "src/bin/bench_ua.rs"
 
 [dependencies]
+arc-swap = "1.7.1"
 async-trait = "0.1.89"
 futures = "0.3.31"
 rsip = { version = "0.4.0" }

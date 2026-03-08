@@ -203,6 +203,16 @@ impl TransportLayer {
         }
     }
 
+    pub fn get_contact_addrs(&self) -> Vec<SipAddr> {
+        match self.inner.listens.read() {
+            Ok(listens) => listens.iter().map(|t| t.get_contact_addr()).collect(),
+            Err(e) => {
+                warn!(error = ?e, "Failed to read listens");
+                Vec::new()
+            }
+        }
+    }
+
     /// Set an async whitelist callback invoked on incoming packets/connections.
     pub fn set_whitelist<T>(&self, whitelist: T)
     where
@@ -501,10 +511,15 @@ impl Drop for TransportLayer {
 mod tests {
     use crate::resolver::SipResolver;
     use crate::{
-        transport::{udp::UdpConnection, SipAddr},
+        transport::{
+            udp::{UdpConnection, UdpInner},
+            SipAddr,
+        },
         Result,
     };
+    use arc_swap::ArcSwapOption;
     use rsip::Transport;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_lookup() -> Result<()> {
@@ -624,6 +639,46 @@ mod tests {
         // Cancel to stop the spawned tasks
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
         drop(tl);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_contact_addrs_do_not_change_listener_addrs() -> Result<()> {
+        let tl = super::TransportLayer::new(tokio_util::sync::CancellationToken::new());
+        let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
+        let local_addr = socket.local_addr()?;
+        let local_sip_addr = SipAddr {
+            r#type: Some(rsip::transport::Transport::Udp),
+            addr: local_addr.into(),
+        };
+
+        let learned_public_addr = ArcSwapOption::empty();
+        learned_public_addr.store(Some(Arc::new(
+            "198.51.100.10:62000".parse::<std::net::SocketAddr>()?,
+        )));
+
+        let udp_conn = UdpConnection::attach(
+            UdpInner {
+                conn: socket,
+                addr: local_sip_addr.clone(),
+                learned_public_addr,
+                auto_learn_public_addr: false,
+            },
+            None,
+            Some(tl.inner.cancel_token.child_token()),
+        )
+        .await;
+
+        tl.add_transport(udp_conn.into());
+
+        let addrs = tl.get_addrs();
+        assert_eq!(addrs.len(), 1);
+        assert_eq!(addrs[0], local_sip_addr);
+
+        let contact_addrs = tl.get_contact_addrs();
+        assert_eq!(contact_addrs.len(), 1);
+        assert_eq!(contact_addrs[0].to_string(), "UDP 198.51.100.10:62000");
 
         Ok(())
     }

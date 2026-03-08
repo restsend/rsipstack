@@ -562,6 +562,10 @@ impl EndpointInner {
         self.transport_layer.get_addrs()
     }
 
+    pub fn get_contact_addrs(&self) -> Vec<SipAddr> {
+        self.transport_layer.get_contact_addrs()
+    }
+
     pub fn get_record_route(&self) -> Result<rsip::typed::RecordRoute> {
         let first_addr = self
             .transport_layer
@@ -757,5 +761,9 @@ impl Endpoint {
 
     pub fn get_addrs(&self) -> Vec<SipAddr> {
         self.inner.transport_layer.get_addrs()
+    }
+
+    pub fn get_contact_addrs(&self) -> Vec<SipAddr> {
+        self.inner.transport_layer.get_contact_addrs()
     }
 }

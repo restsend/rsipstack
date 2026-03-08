@@ -7,14 +7,19 @@ use crate::{
     },
     Result,
 };
+use arc_swap::ArcSwapOption;
 use bytes::BytesMut;
+use rsip::prelude::HeadersExt;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::net::UdpSocket;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
+
 pub struct UdpInner {
     pub conn: UdpSocket,
     pub addr: SipAddr,
+    pub learned_public_addr: ArcSwapOption<SocketAddr>,
+    pub auto_learn_public_addr: bool,
 }
 
 #[derive(Clone)]
@@ -30,6 +35,16 @@ impl UdpConnection {
         external: Option<SocketAddr>,
         cancel_token: Option<CancellationToken>,
     ) -> Self {
+        Self::attach_with_auto_learn_public_addr(inner, external, cancel_token, false).await
+    }
+
+    pub async fn attach_with_auto_learn_public_addr(
+        mut inner: UdpInner,
+        external: Option<SocketAddr>,
+        cancel_token: Option<CancellationToken>,
+        auto_learn_public_addr: bool,
+    ) -> Self {
+        inner.auto_learn_public_addr = auto_learn_public_addr;
         UdpConnection {
             external: external.map(|addr| SipAddr {
                 r#type: Some(rsip::transport::Transport::Udp),
@@ -45,6 +60,16 @@ impl UdpConnection {
         external: Option<SocketAddr>,
         cancel_token: Option<CancellationToken>,
     ) -> Result<Self> {
+        Self::create_connection_with_auto_learn_public_addr(local, external, cancel_token, false)
+            .await
+    }
+
+    pub async fn create_connection_with_auto_learn_public_addr(
+        local: SocketAddr,
+        external: Option<SocketAddr>,
+        cancel_token: Option<CancellationToken>,
+        auto_learn_public_addr: bool,
+    ) -> Result<Self> {
         let conn = UdpSocket::bind(local).await?;
 
         let addr = SipAddr {
@@ -57,7 +82,12 @@ impl UdpConnection {
                 r#type: Some(rsip::transport::Transport::Udp),
                 addr: addr.into(),
             }),
-            inner: Arc::new(UdpInner { addr, conn }),
+            inner: Arc::new(UdpInner {
+                addr,
+                conn,
+                learned_public_addr: ArcSwapOption::empty(),
+                auto_learn_public_addr,
+            }),
             cancel_token,
         };
         debug!(local = %t, ?external, "created UDP connection");
@@ -164,6 +194,10 @@ impl UdpConnection {
                 }
             };
 
+            if self.external.is_none() && self.inner.auto_learn_public_addr {
+                self.learn_public_addr_from_message(&msg);
+            }
+
             debug!(len, src=%addr, dest=%self.get_addr(), raw_message=undecoded, "udp received");
 
             sender.send(TransportEvent::Incoming(
@@ -229,8 +263,52 @@ impl UdpConnection {
             &self.inner.addr
         }
     }
+
+    pub fn get_contact_addr(&self) -> SipAddr {
+        if let Some(external) = &self.external {
+            external.clone()
+        } else {
+            self.inner
+                .learned_public_addr
+                .load_full()
+                .map(|addr| SipAddr {
+                    r#type: Some(rsip::transport::Transport::Udp),
+                    addr: (*addr).into(),
+                })
+                .unwrap_or_else(|| self.inner.addr.clone())
+        }
+    }
     pub fn cancel_token(&self) -> Option<CancellationToken> {
         self.cancel_token.clone()
+    }
+
+    fn learn_public_addr_from_message(&self, msg: &rsip::SipMessage) {
+        let response = match msg {
+            rsip::SipMessage::Response(resp) => resp,
+            rsip::SipMessage::Request(_) => return,
+        };
+
+        let via = match response.via_header() {
+            Ok(via) => via,
+            Err(_) => return,
+        };
+
+        let target = match SipConnection::parse_target_from_via(via) {
+            Ok((transport, host_with_port)) if transport == rsip::transport::Transport::Udp => {
+                match host_with_port.try_into() {
+                    Ok(addr) => addr,
+                    Err(_) => return,
+                }
+            }
+            _ => return,
+        };
+
+        let current = self.inner.learned_public_addr.load();
+        let changed = current.as_deref() != Some(&target);
+        if changed {
+            debug!(addr = %target, "udp learned public address");
+            self.inner.learned_public_addr.store(Some(Arc::new(target)));
+        }
     }
 }
 

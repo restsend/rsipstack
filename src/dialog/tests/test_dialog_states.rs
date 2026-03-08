@@ -70,6 +70,8 @@ pub async fn create_test_endpoint() -> crate::Result<crate::transaction::endpoin
         crate::transport::udp::UdpInner {
             conn: tokio_socket,
             addr: crate::transport::SipAddr::from(local_addr),
+            learned_public_addr: arc_swap::ArcSwapOption::empty(),
+            auto_learn_public_addr: false,
         },
         None,
         Some(token.child_token()),
