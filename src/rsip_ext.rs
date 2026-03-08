@@ -22,6 +22,7 @@ pub trait RsipResponseExt {
     fn reason_phrase(&self) -> Option<&str>;
     fn via_received(&self) -> Option<rsip::HostWithPort>;
     fn content_type(&self) -> Option<rsip::headers::ContentType>;
+    fn contact_uri(&self) -> Result<rsip::Uri>;
     fn remote_uri(&self, destination: Option<&SipAddr>) -> Result<rsip::Uri>;
 }
 
@@ -60,16 +61,20 @@ impl RsipResponseExt for rsip::Response {
         None
     }
 
-    fn remote_uri(&self, destination: Option<&SipAddr>) -> Result<rsip::Uri> {
+    fn contact_uri(&self) -> Result<rsip::Uri> {
         let contact = self.contact_header()?;
-        // update remote uri
-        let mut contact_uri = if let Ok(typed_contact) = contact.typed() {
-            typed_contact.uri
+        if let Ok(typed_contact) = contact.typed() {
+            Ok(typed_contact.uri)
         } else {
             let mut uri = extract_uri_from_contact(contact.value())?;
             uri.headers.clear();
-            uri
-        };
+            Ok(uri)
+        }
+    }
+
+    fn remote_uri(&self, destination: Option<&SipAddr>) -> Result<rsip::Uri> {
+        // update remote uri
+        let mut contact_uri = self.contact_uri()?;
 
         for param in contact_uri.params.iter() {
             if let rsip::Param::Other(name, _) = param {

@@ -10,7 +10,7 @@ use crate::{
         dialog::{DialogInner, DialogState, TerminatedReason},
         DialogId,
     },
-    rsip_ext::destination_from_request,
+    rsip_ext::{destination_from_request, RsipResponseExt},
 };
 use async_trait::async_trait;
 use rsip::{headers::*, prelude::HeadersExt, Request, Response, StatusCode, Uri};
@@ -471,6 +471,85 @@ async fn test_route_set_updates_from_200_ok_response() -> crate::Result<()> {
     assert_eq!(
         bye_request.uri, remote_target,
         "Record-Route application must not change the remote target",
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_confirmed_dialog_bye_keeps_contact_uri_with_outbound_route() -> crate::Result<()> {
+    let endpoint = create_test_endpoint().await?;
+    let (state_sender, _) = unbounded_channel();
+
+    let dialog_id = DialogId {
+        call_id: "bye-contact-call".to_string(),
+        local_tag: "from-tag".to_string(),
+        remote_tag: "to-tag".to_string(),
+    };
+
+    let invite_req = create_invite_request("from-tag", "", "bye-contact-call");
+    let (tu_sender, _tu_receiver) = unbounded_channel();
+
+    let dialog_inner = DialogInner::new(
+        TransactionRole::Client,
+        dialog_id,
+        invite_req,
+        endpoint.inner.clone(),
+        state_sender,
+        None,
+        Some(Uri::try_from("sip:alice@alice.example.com:5060")?),
+        tu_sender,
+    )?;
+
+    let client_dialog = ClientInviteDialog {
+        inner: Arc::new(dialog_inner),
+    };
+
+    let mut headers: Vec<Header> = vec![
+        Via::new("SIP/2.0/UDP proxy.example.com:5060;branch=z9hG4bKproxy").into(),
+        CSeq::new("1 INVITE").into(),
+        From::new("Alice <sip:alice@example.com>;tag=from-tag").into(),
+        To::new("Bob <sip:bob@example.com>;tag=to-tag").into(),
+        CallId::new("bye-contact-call").into(),
+        Header::RecordRoute(RecordRoute::new("<sip:proxy.example.com:5060;lr>")),
+        Contact::new("<sip:bob@198.51.100.20:5090;ob>").into(),
+    ];
+    headers.push(ContentLength::new("0").into());
+
+    let success_resp = Response {
+        status_code: StatusCode::OK,
+        version: rsip::Version::V2,
+        headers: headers.into(),
+        body: vec![],
+    };
+
+    client_dialog
+        .inner
+        .update_route_set_from_response(&success_resp);
+    *client_dialog.inner.remote_uri.lock().unwrap() = success_resp.contact_uri()?;
+
+    let outbound_addr = SipAddr::try_from(&Uri::try_from("sip:uac.example.com:5060")?)?;
+    let bye_request = client_dialog.inner.make_request(
+        rsip::Method::Bye,
+        None,
+        Some(outbound_addr),
+        None,
+        None,
+        None,
+    )?;
+
+    assert_eq!(
+        bye_request.uri,
+        Uri::try_from("sip:bob@198.51.100.20:5090;ob")?,
+        "BYE Request-URI must preserve the Contact target learned from 200 OK",
+    );
+
+    let destination = destination_from_request(&bye_request)
+        .expect("route-enabled BYE should resolve to a destination");
+    let expected_destination = Uri::try_from("sip:proxy.example.com:5060;lr")?;
+    assert_eq!(
+        &*destination, &expected_destination,
+        "Transport destination must still come from the Route set",
     );
 
     Ok(())
