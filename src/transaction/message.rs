@@ -1,9 +1,11 @@
 use super::{endpoint::EndpointInner, make_call_id};
-use crate::{transaction::make_via_branch, Result};
+use crate::{rsip_ext::extract_uri_from_contact, transaction::make_via_branch, Result};
 use rsip::{
+    common::uri::{UriWithParams, UriWithParamsList},
     header,
-    headers::{ContentLength, Route},
-    prelude::{ToTypedHeader, UntypedHeader},
+    headers::ContentLength,
+    prelude::{HeadersExt, ToTypedHeader, UntypedHeader as _},
+    typed::Route as TypedRoute,
     Error, Header, Request, Response, StatusCode,
 };
 
@@ -244,10 +246,23 @@ impl EndpointInner {
         }
     }
 
-    pub fn make_ack(&self, resp: &Response, request_uri: rsip::Uri) -> Result<Request> {
+    // make ack from response, for ack to non-200 reponse, should pass the original invite
+    pub fn make_ack(&self, invite: &Request, resp: &Response) -> Result<Request> {
         let mut headers = resp.headers.clone();
-        if matches!(resp.status_code.kind(), rsip::StatusCodeKind::Successful) {
-            //For non-2xx final responses (3xx–6xx), the ACK stays within the original INVITE client transaction.
+        let request_uri;
+        if resp.status_code.kind() != rsip::StatusCodeKind::Successful {
+            // Non-2xx ACK stays in the original INVITE transaction.
+            request_uri = invite.uri.clone();
+            headers.extend(
+                invite
+                    .headers
+                    .iter()
+                    .filter(|header| matches!(header, Header::Route(_)))
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            );
+        } else {
+            // 2xx ACK is a separate request built from the dialog remote target and route set.
             if let Ok(top_most_via) = header!(
                 headers.iter_mut(),
                 Header::Via,
@@ -259,19 +274,72 @@ impl EndpointInner {
                     *top_most_via = typed_via.into();
                 }
             }
-        }
-        // update route set from Record-Route header (support comma-separated lists)
-        let mut route_set = Vec::new();
-        for header in resp.headers.iter() {
-            if let Header::RecordRoute(record_route) = header {
-                let value = record_route.value();
-                for token in value.split(',').map(|t| t.trim()).filter(|t| !t.is_empty()) {
-                    route_set.push(Header::Route(Route::from(token)));
+            let mut route_set: Vec<UriWithParams> = Vec::new();
+            for header in resp.headers.iter() {
+                if let Header::RecordRoute(record_route) = header {
+                    let typed = record_route.typed()?;
+                    for uri in typed.uris() {
+                        route_set.push(uri.clone());
+                    }
                 }
             }
+            route_set.reverse();
+
+            let contact = resp.contact_header()?;
+
+            // work around for rsip parsing bug
+            let remote_target_uri = if let Ok(typed_contact) = contact.typed() {
+                typed_contact.uri
+            } else {
+                let mut uri = extract_uri_from_contact(contact.value())?;
+                uri.headers.clear();
+                uri
+            };
+
+            let route_headers = match route_set.as_slice() {
+                [] => {
+                    request_uri = remote_target_uri;
+                    Vec::new()
+                }
+                [head, rest @ ..] => {
+                    // loose rooting
+                    if head
+                        .uri
+                        .params
+                        .iter()
+                        .any(|param| matches!(param, rsip::Param::Lr))
+                    {
+                        request_uri = remote_target_uri;
+                        route_set
+                    } else {
+                        // Strict routing promotes the first route URI into the Request-URI
+                        // and appends the remote target as the last Route value.
+                        let mut request_uri_value = head.uri.clone();
+                        request_uri_value.headers.clear();
+                        request_uri = request_uri_value;
+
+                        let mut strict_routes = rest.to_vec();
+                        strict_routes.push(UriWithParams {
+                            uri: remote_target_uri.clone(),
+                            params: vec![],
+                        });
+
+                        strict_routes
+                    }
+                }
+            };
+
+            headers.extend(
+                route_headers
+                    .iter()
+                    .cloned()
+                    .map(|route| {
+                        let typed_route = TypedRoute::from(UriWithParamsList::from(vec![route]));
+                        Header::Route(typed_route.into())
+                    })
+                    .collect::<Vec<_>>(),
+            );
         }
-        route_set.reverse();
-        headers.extend(route_set);
 
         headers.retain(|h| {
             matches!(

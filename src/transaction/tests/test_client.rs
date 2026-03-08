@@ -1,14 +1,31 @@
-use crate::rsip_ext::{destination_from_request, RsipResponseExt};
+use crate::rsip_ext::destination_from_request;
 use crate::transaction::key::{TransactionKey, TransactionRole};
 use crate::transaction::transaction::Transaction;
 use crate::transport::udp::UdpConnection;
-use crate::transport::SipAddr;
 use crate::{transport::TransportEvent, Result};
 use rsip::{headers::*, Header, Response, SipMessage, Uri};
 use std::convert::TryFrom;
 use std::time::Duration;
 use tokio::{select, sync::mpsc::unbounded_channel, time::sleep};
 use tracing::info;
+
+fn make_invite_request(uri: &str) -> Result<rsip::Request> {
+    Ok(rsip::Request {
+        method: rsip::Method::Invite,
+        uri: Uri::try_from(uri)?,
+        headers: vec![
+            Via::new("SIP/2.0/TCP uac.example.com:5060;branch=z9hG4bK1").into(),
+            CSeq::new("1 INVITE").into(),
+            From::new("<sip:alice@example.com>;tag=from-tag").into(),
+            To::new("<sip:bob@example.com>").into(),
+            CallId::new("callid@example.com").into(),
+            MaxForwards::new("70").into(),
+        ]
+        .into(),
+        version: rsip::Version::V2,
+        body: vec![],
+    })
+}
 
 #[tokio::test]
 async fn test_client_transaction() -> Result<()> {
@@ -128,8 +145,8 @@ Contact: <sip:uas@192.0.2.55:5080;transport=tcp>\r\n\
 Content-Length: 0\r\n\r\n";
 
     let response = Response::try_from(raw_response)?;
-    let request_uri = response.remote_uri(None)?;
-    let ack = endpoint.inner.make_ack(&response, request_uri)?;
+    let invite = make_invite_request("sip:bob@example.com")?;
+    let ack = endpoint.inner.make_ack(&invite, &response)?;
 
     let expected_uri = Uri::try_from("sip:uas@192.0.2.55:5080;transport=tcp")?;
     assert_eq!(ack.uri, expected_uri, "ACK must target the remote Contact");
@@ -158,8 +175,8 @@ Content-Length: 0\r\n\r\n";
     assert_eq!(
         routes,
         vec![
-            "<sip:proxy2.example.com:5070;transport=tcp;lr>".to_string(),
-            "<sip:proxy1.example.com:5060;transport=tcp;lr>".to_string()
+            "<sip:proxy2.example.com:5070;transport=TCP;lr>".to_string(),
+            "<sip:proxy1.example.com:5060;transport=TCP;lr>".to_string()
         ],
         "ACK Route headers must follow the reversed Record-Route order"
     );
@@ -182,8 +199,8 @@ Contact: <sip:uas@192.0.2.55:5080;transport=udp>\r\n\
 Content-Length: 0\r\n\r\n";
 
     let response = Response::try_from(raw_response)?;
-    let request_uri = response.remote_uri(None)?;
-    let ack = endpoint.inner.make_ack(&response, request_uri)?;
+    let invite = make_invite_request("sip:bob@example.com")?;
+    let ack = endpoint.inner.make_ack(&invite, &response)?;
 
     let routes: Vec<String> = ack
         .headers
@@ -229,13 +246,55 @@ Contact: <sip:uas@192.0.2.55:5080;ob>\r\n\
 Content-Length: 0\r\n\r\n";
 
     let response = Response::try_from(raw_response)?;
-    let dest = SipAddr {
-        r#type: Some(rsip::transport::Transport::Tcp),
-        addr: "1.2.3.4:15060".try_into()?,
-    };
-    let request_uri = dest.try_into().expect("to uri failed");
-    let ack = endpoint.inner.make_ack(&response, request_uri)?;
-    let expected_uri = Uri::try_from("sip:1.2.3.4:15060;transport=tcp")?;
+    let invite = make_invite_request("sip:bob@example.com")?;
+    let ack = endpoint.inner.make_ack(&invite, &response)?;
+    let expected_uri = Uri::try_from("sip:uas@192.0.2.55:5080;ob")?;
     assert_eq!(ack.uri, expected_uri, "ACK must target the remote Contact");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_make_ack_uses_first_route_without_lr() -> Result<()> {
+    let endpoint = super::create_test_endpoint(None).await?;
+
+    let raw_response = "SIP/2.0 200 OK\r\n\
+Via: SIP/2.0/TCP uac.example.com:5060;branch=z9hG4bK1\r\n\
+Record-Route: <sip:strict-proxy-1.example.com:5060>\r\n\
+Record-Route: <sip:strict-proxy-2.example.com:5070>\r\n\
+From: <sip:alice@example.com>;tag=from-tag\r\n\
+To: <sip:bob@example.com>;tag=to-tag\r\n\
+Call-ID: callid@example.com\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:uas@192.0.2.55:5080;transport=tcp>\r\n\
+Content-Length: 0\r\n\r\n";
+
+    let response = Response::try_from(raw_response)?;
+    let invite = make_invite_request("sip:bob@example.com")?;
+    let ack = endpoint.inner.make_ack(&invite, &response)?;
+
+    assert_eq!(
+        ack.uri,
+        Uri::try_from("sip:strict-proxy-2.example.com:5070")?,
+        "strict routing must place the first route set URI into the Request-URI"
+    );
+
+    let routes: Vec<String> = ack
+        .headers
+        .iter()
+        .filter_map(|header| match header {
+            Header::Route(route) => Some(route.value().to_string()),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        routes,
+        vec![
+            "<sip:strict-proxy-1.example.com:5060>".to_string(),
+            "<sip:uas@192.0.2.55:5080;transport=TCP>".to_string(),
+        ],
+        "strict routing must place the remaining route set first and the remote target last"
+    );
+
     Ok(())
 }
