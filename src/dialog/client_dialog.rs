@@ -794,8 +794,7 @@ impl ClientInviteDialog {
                                 .unwrap()
                                 .replace(contact.clone());
 
-                            *self.inner.remote_uri.lock().unwrap() =
-                                resp.remote_uri(tx.destination.as_ref())?;
+                            *self.inner.remote_uri.lock().unwrap() = resp.contact_uri()?;
                             self.inner
                                 .transition(DialogState::Confirmed(dialog_id.clone(), resp))?;
                         }
