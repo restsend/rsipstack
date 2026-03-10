@@ -22,6 +22,7 @@ pub trait RsipResponseExt {
     fn reason_phrase(&self) -> Option<&str>;
     fn via_received(&self) -> Option<rsip::HostWithPort>;
     fn content_type(&self) -> Option<rsip::headers::ContentType>;
+    fn typed_contact_headers(&self) -> Result<Vec<rsip::typed::Contact>>;
     fn contact_uri(&self) -> Result<rsip::Uri>;
     fn remote_uri(&self, destination: Option<&SipAddr>) -> Result<rsip::Uri>;
 }
@@ -61,14 +62,20 @@ impl RsipResponseExt for rsip::Response {
         None
     }
 
+    fn typed_contact_headers(&self) -> Result<Vec<rsip::typed::Contact>> {
+        let contact = match self.contact_header() {
+            Ok(contact) => contact,
+            Err(rsip::Error::MissingHeader(_)) => return Ok(Vec::new()),
+            Err(e) => return Err(Error::from(e)),
+        };
+        parse_typed_contact_header_list(contact.value())
+    }
+
     fn contact_uri(&self) -> Result<rsip::Uri> {
-        let contact = self.contact_header()?;
-        if let Ok(typed_contact) = contact.typed() {
-            Ok(typed_contact.uri)
+        if let Some(contact) = self.typed_contact_headers()?.first() {
+            Ok(contact.uri.clone())
         } else {
-            let mut uri = extract_uri_from_contact(contact.value())?;
-            uri.headers.clear();
-            Ok(uri)
+            Err(Error::Error("missing Contact header".to_string()))
         }
     }
 
@@ -138,6 +145,132 @@ pub fn extract_uri_from_contact(line: &str) -> Result<rsip::Uri> {
     });
     apply_tokenizer_params(&mut uri, &tokenizer);
     return Ok(uri);
+}
+
+pub fn parse_typed_contact_header_list(line: &str) -> Result<Vec<rsip::typed::Contact>> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return Err(Error::Error("empty Contact header".to_string()));
+    }
+
+    let values = split_contact_header_values(trimmed)?;
+    let mut contacts = Vec::with_capacity(values.len());
+    for value in values {
+        contacts.push(parse_typed_contact(value.as_str())?);
+    }
+
+    Ok(contacts)
+}
+
+pub fn parse_typed_contact(line: &str) -> Result<rsip::typed::Contact> {
+    if let Ok(contact) = rsip::headers::Contact::from(line).typed() {
+        return Ok(contact);
+    }
+
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return Err(Error::Error("empty Contact header".to_string()));
+    }
+
+    let (display_name, uri_part, header_params_part) = if let Some(start) = trimmed.find('<') {
+        let end = trimmed[start..]
+            .find('>')
+            .map(|offset| start + offset)
+            .ok_or_else(|| Error::Error("invalid Contact header: missing '>'".to_string()))?;
+        let display = trimmed[..start].trim();
+        let display_name = if display.is_empty() {
+            None
+        } else {
+            Some(display.trim_matches('"').to_string())
+        };
+        let uri = &trimmed[start + 1..end];
+        let params = trimmed[end + 1..].trim();
+        (display_name, uri, params)
+    } else {
+        let (uri, params) = split_uri_and_header_params(trimmed);
+        (None, uri, params)
+    };
+
+    let mut uri = extract_uri_from_contact(uri_part)?;
+    uri.headers.clear();
+
+    let params = parse_contact_header_params(header_params_part)?;
+
+    Ok(rsip::typed::Contact {
+        display_name,
+        uri,
+        params,
+    })
+}
+
+pub fn split_contact_header_values(line: &str) -> Result<Vec<String>> {
+    let mut values = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut angle_depth = 0usize;
+
+    for ch in line.chars() {
+        match ch {
+            '"' => {
+                in_quotes = !in_quotes;
+                current.push(ch);
+            }
+            '<' if !in_quotes => {
+                angle_depth += 1;
+                current.push(ch);
+            }
+            '>' if !in_quotes => {
+                angle_depth = angle_depth.saturating_sub(1);
+                current.push(ch);
+            }
+            ',' if !in_quotes && angle_depth == 0 => {
+                let value = current.trim();
+                if !value.is_empty() {
+                    values.push(value.to_string());
+                }
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    let value = current.trim();
+    if !value.is_empty() {
+        values.push(value.to_string());
+    }
+
+    if values.is_empty() {
+        return Err(Error::Error("empty Contact header".to_string()));
+    }
+
+    Ok(values)
+}
+
+fn split_uri_and_header_params(input: &str) -> (&str, &str) {
+    let path = input.split_once('?').map_or(input, |(path, _)| path);
+    if let Some(idx) = path.find(';') {
+        (&input[..idx], &input[idx..])
+    } else {
+        (input, "")
+    }
+}
+
+fn parse_contact_header_params(input: &str) -> Result<Vec<rsip::Param>> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let params = separated_list0(char(';'), custom_contact_param)
+        .parse(trimmed.trim_start_matches(';'))
+        .map_err(|_| Error::Error(format!("invalid Contact header params: {}", input)))?
+        .1;
+
+    params
+        .into_iter()
+        .filter(|param| !param.name.is_empty())
+        .map(|param| rsip::Param::try_from((param.name, param.value)).map_err(Error::from))
+        .collect()
 }
 
 fn apply_tokenizer_params(uri: &mut rsip::Uri, tokenizer: &CustomContactTokenizer) {
@@ -355,4 +488,45 @@ fn test_rsip_headers_ext() {
             &Header::Via("SIP/2.0/WSS".into())
         ]
     );
+}
+
+#[test]
+fn test_parse_typed_contact_headers_from_masked_kamailio_response() {
+    use rsip::Response;
+
+    let response: Response = concat!(
+        "SIP/2.0 200 OK\r\n",
+        "Via: SIP/2.0/UDP 192.0.2.10:13050;branch=z9hG4bK-test;rport=60326;received=198.51.100.20\r\n",
+        "From: <sip:1001@example.com>;tag=from-tag\r\n",
+        "To: <sip:1001@example.com>;tag=to-tag\r\n",
+        "CSeq: 1 REGISTER\r\n",
+        "Call-ID: test-call-id@example.com\r\n",
+        "Contact: <sip:1001@198.51.100.20:56734;transport=udp>;expires=573;+sip.instance=\"<urn:uuid:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee>\", <sip:1001@192.0.2.10:13050>;expires=3600\r\n",
+        "Content-Length: 0\r\n",
+        "\r\n"
+    )
+    .try_into()
+    .expect("failed to parse response");
+
+    let contacts = response
+        .typed_contact_headers()
+        .expect("failed to parse typed Contact headers");
+
+    assert_eq!(contacts.len(), 2);
+    assert_eq!(contacts[0].uri.to_string(), "sip:1001@198.51.100.20:56734");
+    assert_eq!(contacts[1].uri.to_string(), "sip:1001@192.0.2.10:13050");
+    assert_eq!(
+        contacts[0].expires().map(|expires| expires.value()),
+        Some("573")
+    );
+    assert_eq!(
+        contacts[1].expires().map(|expires| expires.value()),
+        Some("3600")
+    );
+    assert!(contacts[0].params.iter().any(|param| matches!(
+        param,
+        rsip::Param::Other(name, Some(value))
+            if name.value().eq_ignore_ascii_case("+sip.instance")
+                && value.value() == "<urn:uuid:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee>"
+    )));
 }
