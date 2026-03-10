@@ -307,7 +307,7 @@ pub fn make_tag() -> rsip::param::Tag {
 
 #[cfg(not(target_family = "wasm"))]
 pub fn random_text(count: usize) -> String {
-    use rand::Rng;
+    use rand::RngExt;
     rand::rng()
         .sample_iter(rand::distr::Alphanumeric)
         .take(count)

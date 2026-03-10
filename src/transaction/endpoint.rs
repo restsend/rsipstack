@@ -8,7 +8,7 @@ use super::{
 use crate::{
     dialog::DialogId,
     rsip_ext::destination_from_request,
-    transport::{SipAddr, TransportEvent, TransportLayer},
+    transport::{transport_layer::DomainResolver, SipAddr, TransportEvent, TransportLayer},
     Error, Result, VERSION,
 };
 use async_trait::async_trait;
@@ -146,6 +146,7 @@ pub struct EndpointBuilder {
     message_inspector: Option<Box<dyn MessageInspector>>,
     target_locator: Option<Box<dyn TargetLocator>>,
     transport_inspector: Option<Box<dyn TransportEventInspector>>,
+    domain_resolver: Option<Box<dyn DomainResolver>>,
 }
 
 /// SIP Endpoint
@@ -647,12 +648,15 @@ impl EndpointBuilder {
             message_inspector: None,
             target_locator: None,
             transport_inspector: None,
+            domain_resolver: None,
         }
     }
+
     pub fn with_option(&mut self, option: EndpointOption) -> &mut Self {
         self.option = Some(option);
         self
     }
+
     pub fn with_user_agent(&mut self, user_agent: &str) -> &mut Self {
         self.user_agent = user_agent.to_string();
         self
@@ -693,13 +697,20 @@ impl EndpointBuilder {
         self
     }
 
+    pub fn with_domain_resolver(&mut self, resolver: Box<dyn DomainResolver>) -> &mut Self {
+        self.domain_resolver = Some(resolver);
+        self
+    }
+
     pub fn build(&mut self) -> Endpoint {
         let cancel_token = self.cancel_token.take().unwrap_or_default();
-
-        let transport_layer = self
-            .transport_layer
-            .take()
-            .unwrap_or(TransportLayer::new(cancel_token.child_token()));
+        let transport_layer = self.transport_layer.take().unwrap_or_else(|| {
+            if let Some(resolver) = self.domain_resolver.take() {
+                TransportLayer::new_with_domain_resolver(cancel_token.clone(), resolver)
+            } else {
+                TransportLayer::new(cancel_token.clone())
+            }
+        });
 
         let allows = self.allows.to_owned();
         let user_agent = self.user_agent.to_owned();

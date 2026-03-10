@@ -1,11 +1,10 @@
+use hickory_resolver::TokioResolver;
+use rand::RngExt;
 use rsip::{Domain, Port, Transport};
 use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
-
-use hickory_resolver::TokioResolver;
-use rand::Rng;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Target {
