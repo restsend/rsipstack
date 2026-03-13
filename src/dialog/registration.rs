@@ -13,11 +13,8 @@ use crate::{
     transport::SipAddr,
     Result,
 };
-use rsip::{
-    prelude::{HeadersExt, ToTypedHeader},
-    Param, Response, SipMessage, StatusCode,
-};
-use tracing::debug;
+use rsip::{Param, Response, SipMessage, StatusCode};
+use tracing::{debug, warn};
 
 /// SIP Registration Client
 ///
@@ -469,11 +466,15 @@ impl Registration {
                         let received = resp.via_received();
                         // Update contact header from response
 
-                        match resp.contact_header() {
+                        match resp.typed_contact_headers() {
                             Ok(contact) => {
-                                self.contact = contact.typed().ok();
+                                if let Some(contact) = contact.first().cloned() {
+                                    self.contact = Some(contact);
+                                }
                             }
-                            Err(_) => {}
+                            Err(e) => {
+                                warn!("failed to parse contact: {:?}", e);
+                            }
                         };
                         if self.public_address != received {
                             debug!(
