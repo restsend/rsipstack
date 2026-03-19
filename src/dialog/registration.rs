@@ -368,13 +368,10 @@ impl Registration {
         let via = self.endpoint.get_via(None, None)?;
 
         // Contact address selection priority:
-        // 1. Contact header from REGISTER response (highest priority)
-        //    - Most accurate as it reflects server's view of client address
+        // 1. Explicitly set self.contact (if caller set it)
         // 2. Public address discovered during registration
-        //    - Address detected from Via received parameter
-        // 3. Local non-loopback address (lowest priority)
-        //    - Only used for initial registration attempt
-        //    - Will be replaced by server-discovered address after first response
+        //    (Via received parameter from server)
+        // 3. Local non-loopback address from Via (initial registration only)
         let mut contact = self.contact.clone().unwrap_or_else(|| {
             let contact_host_with_port = self
                 .public_address
@@ -464,18 +461,16 @@ impl Registration {
                     StatusCode::OK => {
                         // Check if server indicated our public IP in Via header
                         let received = resp.via_received();
-                        // Update contact header from response
 
-                        match resp.typed_contact_headers() {
-                            Ok(contact) => {
-                                if let Some(contact) = contact.first().cloned() {
-                                    self.contact = Some(contact);
-                                }
-                            }
-                            Err(e) => {
-                                warn!("failed to parse contact: {:?}", e);
-                            }
-                        };
+                        // Do NOT adopt the Contact from the 200 OK response.
+                        // The response may contain Contact bindings from OTHER
+                        // devices sharing the same AOR (Address of Record).
+                        // Blindly reusing it would corrupt our Contact in
+                        // subsequent re-registrations, routing calls to the
+                        // wrong host. Instead, always derive Contact from
+                        // self.public_address (set from Via received parameter).
+                        self.contact = None;
+
                         if self.public_address != received {
                             debug!(
                                 old = ?self.public_address,
