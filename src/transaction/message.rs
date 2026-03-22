@@ -302,12 +302,12 @@ impl EndpointInner {
                     Vec::new()
                 }
                 [head, rest @ ..] => {
-                    // loose rooting
+                    // loose routing — also match ;lr=<value> (e.g. ;lr=on from Kamailio/Plivo)
                     if head
                         .uri
                         .params
                         .iter()
-                        .any(|param| matches!(param, rsip::Param::Lr))
+                        .any(|param| matches!(param, rsip::Param::Lr) || matches!(param, rsip::Param::Other(name, _) if name.to_string().eq_ignore_ascii_case("lr")))
                     {
                         request_uri = remote_target_uri;
                         route_set
