@@ -715,6 +715,9 @@ impl ServerInviteDialog {
                 ))?;
                 return Ok(());
             }
+            // Accept BYE even in WaitAck state — remote may tear down call
+            // before ACK arrives (common with SIP proxies)
+            rsip::Method::Bye => return self.handle_bye(tx).await,
             _ => {
                 // ignore other requests in non-confirmed state
                 return Ok(());
