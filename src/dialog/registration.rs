@@ -405,6 +405,7 @@ impl Registration {
         );
 
         // Thanks to https://github.com/restsend/rsipstack/issues/32
+        let contact_for_retry = contact.clone();
         request.headers.unique_push(self.call_id.clone().into());
         request.headers.unique_push(contact.into());
         request.headers.unique_push(self.allow.clone().into());
@@ -446,9 +447,25 @@ impl Registration {
                         if let Some(cred) = &self.credential {
                             self.last_seq += 1;
 
-                            // Handle authentication with the existing transaction
-                            // The contact will be updated in the next registration cycle if needed
                             tx = handle_client_authenticate(self.last_seq, &tx, resp, cred).await?;
+
+                            // Update Contact in the retry request to use the discovered
+                            // public address (rport/received from 401 Via header).
+                            // handle_client_authenticate clones tx.original which has
+                            // the stale Contact from the initial REGISTER.
+                            if let Some(ref pa) = self.public_address {
+                                let new_contact_uri = rsip::Uri {
+                                    auth: contact_for_retry.uri.auth.clone(),
+                                    scheme: Some(rsip::Scheme::Sip),
+                                    host_with_port: pa.clone(),
+                                    params: vec![],
+                                    headers: vec![],
+                                };
+                                let mut new_contact = contact_for_retry.clone();
+                                new_contact.uri = new_contact_uri;
+                                tx.original.headers.retain(|h| !matches!(h, rsip::Header::Contact(_)));
+                                tx.original.headers.unique_push(new_contact.into());
+                            }
 
                             tx.send().await?;
                             auth_sent = true;
