@@ -14,7 +14,7 @@ use crate::{
     Result,
 };
 use rsip::{Param, Response, SipMessage, StatusCode};
-use tracing::{debug, warn};
+use tracing::debug;
 
 /// SIP Registration Client
 ///
@@ -463,7 +463,9 @@ impl Registration {
                                 };
                                 let mut new_contact = contact_for_retry.clone();
                                 new_contact.uri = new_contact_uri;
-                                tx.original.headers.retain(|h| !matches!(h, rsip::Header::Contact(_)));
+                                tx.original
+                                    .headers
+                                    .retain(|h| !matches!(h, rsip::Header::Contact(_)));
                                 tx.original.headers.unique_push(new_contact.into());
                             }
 

@@ -503,17 +503,19 @@ impl EndpointInner {
                     rsip::StatusCode::CallTransactionDoesNotExist,
                     None,
                 );
-                let resp = if let Some(ref inspector) = self.message_inspector {
-                    inspector.before_send(resp.into(), None)
-                } else {
-                    resp.into()
-                };
 
                 let dest = if !connection.is_reliable() {
                     self.get_destination_from_request(&request).await
                 } else {
                     None
                 };
+
+                let resp = if let Some(ref inspector) = self.message_inspector {
+                    inspector.before_send(resp.into(), dest.as_ref())
+                } else {
+                    resp.into()
+                };
+
                 connection.send(resp, dest.as_ref()).await?;
                 return Ok(());
             }
