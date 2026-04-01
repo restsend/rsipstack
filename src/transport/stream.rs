@@ -6,7 +6,7 @@ use crate::{
     Result,
 };
 use bytes::{Buf, BytesMut};
-use rsip::SipMessage;
+use crate::sip::SipMessage;
 use tokio::{
     io::{AsyncRead, AsyncWrite, AsyncWriteExt},
     sync::Mutex,

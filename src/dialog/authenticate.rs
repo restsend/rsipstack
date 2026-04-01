@@ -1,13 +1,13 @@
 use super::DialogId;
+use crate::sip::headers::auth::{Algorithm, AuthQop, Qop};
+use crate::sip::prelude::{HasHeaders, HeadersExt, ToTypedHeader};
+use crate::sip::typed::{Authorization, ProxyAuthorization};
+use crate::sip::DigestGenerator;
+use crate::sip::{Header, Method, Param, Response};
 use crate::transaction::key::{TransactionKey, TransactionRole};
 use crate::transaction::transaction::Transaction;
 use crate::transaction::{make_via_branch, random_text, CNONCE_LEN};
 use crate::Result;
-use rsip::headers::auth::{Algorithm, AuthQop, Qop};
-use rsip::prelude::{HasHeaders, HeadersExt, ToTypedHeader};
-use rsip::services::DigestGenerator;
-use rsip::typed::{Authorization, ProxyAuthorization};
-use rsip::{Header, Method, Param, Response};
 
 /// SIP Authentication Credentials
 ///
@@ -68,11 +68,11 @@ use rsip::{Header, Method, Param, Response};
 /// #     realm: Some("example.com".to_string()),
 /// # };
 /// let invite_option = InviteOption {
-///     caller: rsip::Uri::try_from("sip:alice@example.com")?,
-///     callee: rsip::Uri::try_from("sip:bob@example.com")?,
+///     caller: rsipstack::sip::Uri::try_from("sip:alice@example.com")?,
+///     callee: rsipstack::sip::Uri::try_from("sip:bob@example.com")?,
 ///     content_type: Some("application/sdp".to_string()),
 ///     offer: Some(sdp_bytes),
-///     contact: rsip::Uri::try_from("sip:alice@192.168.1.100:5060")?,
+///     contact: rsipstack::sip::Uri::try_from("sip:alice@192.168.1.100:5060")?,
 ///     credential: Some(credential),
 ///     ..Default::default()
 /// };
@@ -111,7 +111,7 @@ pub struct Credential {
 /// ```rust,no_run
 /// # use rsipstack::dialog::authenticate::{handle_client_authenticate, Credential};
 /// # use rsipstack::transaction::transaction::Transaction;
-/// # use rsip::Response;
+/// # use rsipstack::sip::Response;
 /// # async fn example() -> rsipstack::Result<()> {
 /// # let new_seq = 1u32;
 /// # let original_tx: Transaction = todo!();
@@ -140,7 +140,7 @@ pub struct Credential {
 /// ```rust,no_run
 /// # use rsipstack::dialog::authenticate::{handle_client_authenticate, Credential};
 /// # use rsipstack::transaction::transaction::Transaction;
-/// # use rsip::{SipMessage, StatusCode, Response};
+/// # use rsipstack::sip::{SipMessage, StatusCode, Response};
 /// # async fn example() -> rsipstack::Result<()> {
 /// # let mut tx: Transaction = todo!();
 /// # let credential = Credential {
@@ -194,7 +194,8 @@ pub async fn handle_client_authenticate(
         Some(h) => Header::WwwAuthenticate(h.clone()),
         None => {
             let code = resp.status_code.clone();
-            let proxy_header = rsip::header_opt!(resp.headers().iter(), Header::ProxyAuthenticate);
+            let proxy_header =
+                crate::sip_header_opt!(resp.headers().iter(), Header::ProxyAuthenticate);
             let proxy_header = proxy_header.ok_or(crate::Error::DialogError(
                 "missing proxy/www authenticate".to_string(),
                 DialogId::try_from(tx)?,
@@ -207,9 +208,22 @@ pub async fn handle_client_authenticate(
     let mut new_req = tx.original.clone();
     new_req.cseq_header_mut()?.mut_seq(new_seq)?;
 
-    let challenge = match &header {
+    let challenge: crate::sip::typed::WwwAuthenticate = match &header {
         Header::WwwAuthenticate(h) => h.typed()?,
-        Header::ProxyAuthenticate(h) => h.typed()?.0,
+        Header::ProxyAuthenticate(h) => {
+            let t = h.typed()?;
+            crate::sip::typed::WwwAuthenticate {
+                scheme: t.scheme,
+                realm: t.realm,
+                domain: t.domain,
+                nonce: t.nonce,
+                opaque: t.opaque,
+                stale: t.stale,
+                algorithm: t.algorithm,
+                qop: t.qop,
+                charset: t.charset,
+            }
+        }
         _ => unreachable!(),
     };
 
@@ -223,7 +237,7 @@ pub async fn handle_client_authenticate(
     // Use MD5 as default algorithm if none specified (RFC 2617 compatibility)
     let algorithm = challenge
         .algorithm
-        .unwrap_or(rsip::headers::auth::Algorithm::Md5);
+        .unwrap_or(crate::sip::headers::auth::Algorithm::Md5);
 
     let response = DigestGenerator {
         username: cred.username.as_str(),
@@ -251,13 +265,10 @@ pub async fn handle_client_authenticate(
 
     let mut via_header = tx.original.via_header()?.clone().typed()?;
     let params = &mut via_header.params;
-    params.retain(|p| !matches!(p, rsip::Param::Branch(_)));
+    params.retain(|p| !matches!(p, crate::sip::Param::Branch(_)));
     params.push(make_via_branch());
-    if !params
-        .iter()
-        .any(|p| matches!(p, Param::Other(key, _) if key.value().eq_ignore_ascii_case("rport")))
-    {
-        params.push(Param::Other("rport".into(), None));
+    if !params.iter().any(|p| matches!(p, Param::Rport(_))) {
+        params.push(Param::Rport(None));
     }
     new_req.headers_mut().unique_push(via_header.into());
 
@@ -276,9 +287,20 @@ pub async fn handle_client_authenticate(
             new_req.headers_mut().unique_push(auth.into());
         }
         Header::ProxyAuthenticate(_) => {
-            new_req
-                .headers_mut()
-                .unique_push(ProxyAuthorization(auth).into());
+            new_req.headers_mut().unique_push(
+                ProxyAuthorization {
+                    scheme: auth.scheme,
+                    username: auth.username,
+                    realm: auth.realm,
+                    nonce: auth.nonce,
+                    uri: auth.uri,
+                    response: auth.response,
+                    algorithm: auth.algorithm,
+                    opaque: auth.opaque,
+                    qop: auth.qop,
+                }
+                .into(),
+            );
         }
         _ => unreachable!(),
     }
@@ -305,19 +327,27 @@ fn hash_value(algorithm: Algorithm, value: &str) -> String {
         Algorithm::Md5 | Algorithm::Md5Sess => {
             let mut hasher = Md5::new();
             hasher.update(value.as_bytes());
-            format!("{:x}", hasher.finalize())
+            encode_lower_hex(hasher.finalize())
         }
         Algorithm::Sha256 | Algorithm::Sha256Sess => {
             let mut hasher = Sha256::new();
             hasher.update(value.as_bytes());
-            format!("{:x}", hasher.finalize())
+            encode_lower_hex(hasher.finalize())
         }
         Algorithm::Sha512 | Algorithm::Sha512Sess => {
             let mut hasher = Sha512::new();
             hasher.update(value.as_bytes());
-            format!("{:x}", hasher.finalize())
+            encode_lower_hex(hasher.finalize())
         }
     }
+}
+
+fn encode_lower_hex(bytes: impl AsRef<[u8]>) -> String {
+    bytes
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{:02x}", byte))
+        .collect()
 }
 
 /// Compute the digest response using raw URI string.
@@ -349,13 +379,13 @@ fn hash_value(algorithm: Algorithm, value: &str) -> String {
 ///
 /// ```rust,no_run
 /// # use rsipstack::dialog::authenticate::compute_digest;
-/// # use rsip::headers::auth::Algorithm;
+/// # use rsipstack::sip::headers::auth::Algorithm;
 /// let response = compute_digest(
 ///     "alice",
 ///     "secret123",
 ///     "example.com",
 ///     "dcd98b7102dd2f0e8b11d0f600bfb0c093",
-///     &rsip::Method::Register,
+///     &rsipstack::sip::Method::Register,
 ///     "sip:example.com:5061;transport=tls",
 ///     Algorithm::Md5,
 ///     None,
@@ -401,7 +431,7 @@ pub fn compute_digest(
 /// Extract the raw `uri` value from a SIP Authorization/Proxy-Authorization header.
 ///
 /// Uses rsip's `AuthTokenizer` to parse the header, which preserves the original
-/// case of parameter values. This is necessary because `rsip::Uri::Display`
+/// case of parameter values. This is necessary because `rsipstack::sip::Uri::Display`
 /// normalizes transport parameters to uppercase (e.g., `transport=tls` → `transport=TLS`),
 /// which breaks digest authentication verification when the client used a different case.
 ///
@@ -422,8 +452,8 @@ pub fn compute_digest(
 /// assert_eq!(uri, Some("sip:pbx.e36:5061;transport=tls".to_string()));
 /// ```
 pub fn extract_digest_uri_raw(header_value: &str) -> Option<String> {
-    use rsip::headers::typed::tokenizers::AuthTokenizer;
-    use rsip::headers::typed::Tokenize;
+    use crate::sip::headers::typed::tokenizers::AuthTokenizer;
+    use crate::sip::headers::typed::Tokenize;
 
     let tokenizer = AuthTokenizer::tokenize(header_value).ok()?;
     tokenizer
@@ -456,15 +486,15 @@ pub fn extract_digest_uri_raw(header_value: &str) -> Option<String> {
 ///
 /// ```rust,no_run
 /// # use rsipstack::dialog::authenticate::verify_digest;
-/// # use rsip::typed::Authorization;
-/// # use rsip::prelude::ToTypedHeader;
+/// # use rsipstack::sip::typed::Authorization;
+/// # use rsipstack::sip::prelude::ToTypedHeader;
 /// # fn example() -> rsipstack::Result<()> {
 /// # let auth_header_value = "";
 /// # let auth: Authorization = todo!();
 /// let is_valid = verify_digest(
 ///     &auth,
 ///     "secret123",
-///     &rsip::Method::Register,
+///     &rsipstack::sip::Method::Register,
 ///     auth_header_value,
 /// );
 ///

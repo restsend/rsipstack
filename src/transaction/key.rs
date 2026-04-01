@@ -1,12 +1,10 @@
 use crate::{Error, Result};
-use rsip::headers::UntypedHeader;
-use rsip::typed::Via;
-use rsip::{
+use crate::sip::{
+    typed::Via,
     param::Tag,
     prelude::{HeadersExt, ToTypedHeader},
-    Method,
+    Method, Request, Response,
 };
-use rsip::{Request, Response};
 use std::fmt::Write;
 use std::hash::Hash;
 
@@ -97,12 +95,13 @@ impl TransactionKey {
 
 #[test]
 fn test_transaction_key() -> Result<()> {
-    use rsip::headers::*;
-    let register_req = rsip::message::Request {
-        method: rsip::method::Method::Register,
-        uri: rsip::Uri {
-            scheme: Some(rsip::Scheme::Sips),
-            host_with_port: rsip::Domain::from("restsend.com").into(),
+    use crate::sip::headers::*;
+    use crate::sip::{Domain, Method, Request, Response, Scheme, StatusCode, Uri, Version};
+    let register_req = Request {
+        method: Method::Register,
+        uri: Uri {
+            scheme: Some(Scheme::Sips),
+            host_with_port: Domain::from("restsend.com").into(),
             ..Default::default()
         },
         headers: vec![
@@ -112,7 +111,7 @@ fn test_transaction_key() -> Result<()> {
             CallId::new("1j9FpLxk3uxtm8tn@sip.restsend.com").into(),
         ]
         .into(),
-        version: rsip::Version::V2,
+        version: Version::V2,
         body: Default::default(),
     };
     let key = TransactionKey::from_request(&register_req, TransactionRole::Client)?;
@@ -123,9 +122,9 @@ fn test_transaction_key() -> Result<()> {
                 .to_string()
         )
     );
-    let register_resp = rsip::message::Response {
-        status_code: rsip::StatusCode::OK,
-        version: rsip::Version::V2,
+    let register_resp = Response {
+        status_code: StatusCode::OK,
+        version: Version::V2,
         headers: vec![
             Via::new("SIP/2.0/TLS client.sip.restsend.com:5061;branch=z9hG4bKnashd92").into(),
             CSeq::new("2 REGISTER").into(),

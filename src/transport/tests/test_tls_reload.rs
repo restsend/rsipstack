@@ -157,7 +157,7 @@ async fn test_tls_listener_connection_with_config() -> Result<()> {
 
     let (cert, key) = generate_test_cert("test.example.com")?;
     let socket_addr: SocketAddr = "127.0.0.1:0".parse()?;
-    let local_addr = SipAddr::new(rsip::transport::Transport::Tls, socket_addr.into());
+    let local_addr = SipAddr::new(crate::sip::transport::Transport::Tls, socket_addr.into());
 
     let config = TlsConfig {
         cert: Some(cert.into_bytes()),

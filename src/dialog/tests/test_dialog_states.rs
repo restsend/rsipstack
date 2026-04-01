@@ -9,15 +9,15 @@ use crate::dialog::{
 };
 use crate::transaction::{endpoint::EndpointBuilder, key::TransactionRole};
 use crate::transport::TransportLayer;
-use rsip::{headers::*, Request, Response, StatusCode};
+use crate::sip::{headers::*, Request, Response, StatusCode};
 use tokio::sync::mpsc::unbounded_channel;
 use tokio_util::sync::CancellationToken;
 
 /// Test helper to create a mock INVITE request
 pub fn create_invite_request(from_tag: &str, to_tag: &str, call_id: &str) -> Request {
     Request {
-        method: rsip::Method::Invite,
-        uri: rsip::Uri::try_from("sip:bob@example.com:5060").unwrap(),
+        method: crate::sip::Method::Invite,
+        uri: crate::sip::Uri::try_from("sip:bob@example.com:5060").unwrap(),
         headers: vec![
             Via::new("SIP/2.0/UDP alice.example.com:5060;branch=z9hG4bKnashds;received=172.0.0.1")
                 .into(),
@@ -29,7 +29,7 @@ pub fn create_invite_request(from_tag: &str, to_tag: &str, call_id: &str) -> Req
             MaxForwards::new("70").into(),
         ]
         .into(),
-        version: rsip::Version::V2,
+        version: crate::sip::Version::V2,
         body: b"v=0\r\no=alice 2890844526 2890844527 IN IP4 host.atlanta.com\r\n".to_vec(),
     }
 }
@@ -44,7 +44,7 @@ fn create_response(status: StatusCode, from_tag: &str, to_tag: &str, call_id: &s
 
     Response {
         status_code: status,
-        version: rsip::Version::V2,
+        version: crate::sip::Version::V2,
         headers: vec![
             Via::new("SIP/2.0/UDP alice.example.com:5060;branch=z9hG4bKnashds").into(),
             CSeq::new("1 INVITE").into(),
@@ -130,17 +130,17 @@ async fn test_dialog_state_transitions() -> crate::Result<()> {
         endpoint.inner.clone(),
         state_sender,
         None,
-        Some(rsip::Uri::try_from("sip:alice@alice.example.com:5060")?),
+        Some(crate::sip::Uri::try_from("sip:alice@alice.example.com:5060")?),
         tu_sender,
     )?;
 
     // Test initial state
-    let initial_state = dialog_inner.state.lock().unwrap().clone();
+    let initial_state = dialog_inner.state.lock().clone();
     assert!(matches!(initial_state, DialogState::Calling(_)));
 
     // Test transition to Trying
     dialog_inner.transition(DialogState::Trying(dialog_id.clone()))?;
-    let state = dialog_inner.state.lock().unwrap().clone();
+    let state = dialog_inner.state.lock().clone();
     assert!(matches!(state, DialogState::Trying(_)));
 
     // Test transition to Early
@@ -151,7 +151,7 @@ async fn test_dialog_state_transitions() -> crate::Result<()> {
         "test-call-id-123",
     );
     dialog_inner.transition(DialogState::Early(dialog_id.clone(), ringing_resp))?;
-    let state = dialog_inner.state.lock().unwrap().clone();
+    let state = dialog_inner.state.lock().clone();
     assert!(matches!(state, DialogState::Early(_, _)));
 
     // Test transition to Confirmed
@@ -159,7 +159,7 @@ async fn test_dialog_state_transitions() -> crate::Result<()> {
         dialog_id.clone(),
         Response::default(),
     ))?;
-    let state = dialog_inner.state.lock().unwrap().clone();
+    let state = dialog_inner.state.lock().clone();
     assert!(matches!(state, DialogState::Confirmed(_, _)));
     assert!(dialog_inner.is_confirmed());
 
@@ -168,7 +168,7 @@ async fn test_dialog_state_transitions() -> crate::Result<()> {
         dialog_id.clone(),
         TerminatedReason::Timeout,
     ))?;
-    let state = dialog_inner.state.lock().unwrap().clone();
+    let state = dialog_inner.state.lock().clone();
     assert!(matches!(state, DialogState::Terminated(_, _)));
 
     Ok(())
@@ -198,17 +198,17 @@ async fn test_server_dialog_state_transitions() -> crate::Result<()> {
         endpoint.inner.clone(),
         state_sender,
         None,
-        Some(rsip::Uri::try_from("sip:bob@bob.example.com:5060")?),
+        Some(crate::sip::Uri::try_from("sip:bob@bob.example.com:5060")?),
         tu_sender,
     )?;
 
     // Test initial state
-    let initial_state = dialog_inner.state.lock().unwrap().clone();
+    let initial_state = dialog_inner.state.lock().clone();
     assert!(matches!(initial_state, DialogState::Calling(_)));
 
     // Test transition to Trying (server sends 100 Trying)
     dialog_inner.transition(DialogState::Trying(dialog_id.clone()))?;
-    let state = dialog_inner.state.lock().unwrap().clone();
+    let state = dialog_inner.state.lock().clone();
     assert!(matches!(state, DialogState::Trying(_)));
 
     // Test transition to WaitAck (server sends 200 OK)
@@ -219,12 +219,12 @@ async fn test_server_dialog_state_transitions() -> crate::Result<()> {
         "test-call-id-server-123",
     );
     dialog_inner.transition(DialogState::WaitAck(dialog_id.clone(), ok_resp.clone()))?;
-    let state = dialog_inner.state.lock().unwrap().clone();
+    let state = dialog_inner.state.lock().clone();
     assert!(matches!(state, DialogState::WaitAck(_, _)));
 
     // Test transition to Confirmed (after receiving ACK)
     dialog_inner.transition(DialogState::Confirmed(dialog_id.clone(), ok_resp))?;
-    let state = dialog_inner.state.lock().unwrap().clone();
+    let state = dialog_inner.state.lock().clone();
     assert!(matches!(state, DialogState::Confirmed(_, _)));
     assert!(dialog_inner.is_confirmed());
 
@@ -256,7 +256,7 @@ async fn test_dialog_in_dialog_requests() -> crate::Result<()> {
         endpoint.inner.clone(),
         state_sender,
         None,
-        Some(rsip::Uri::try_from("sip:alice@alice.example.com:5060")?),
+        Some(crate::sip::Uri::try_from("sip:alice@alice.example.com:5060")?),
         tu_sender,
     )?;
 
@@ -269,8 +269,8 @@ async fn test_dialog_in_dialog_requests() -> crate::Result<()> {
 
     // Test INFO request in dialog
     let info_req = Request {
-        method: rsip::Method::Info,
-        uri: rsip::Uri::try_from("sip:bob@example.com:5060")?,
+        method: crate::sip::Method::Info,
+        uri: crate::sip::Uri::try_from("sip:bob@example.com:5060")?,
         headers: vec![
             Via::new("SIP/2.0/UDP 127.0.0.1:5060;branch=z9hG4bK-info").into(),
             CSeq::new("2 INFO").into(),
@@ -279,7 +279,7 @@ async fn test_dialog_in_dialog_requests() -> crate::Result<()> {
             CallId::new("test-call-id-in-dialog-123").into(),
         ]
         .into(),
-        version: rsip::Version::V2,
+        version: crate::sip::Version::V2,
         body: vec![],
     };
 
@@ -288,8 +288,8 @@ async fn test_dialog_in_dialog_requests() -> crate::Result<()> {
 
     // Test UPDATE request in dialog
     let update_req = Request {
-        method: rsip::Method::Update,
-        uri: rsip::Uri::try_from("sip:bob@example.com:5060")?,
+        method: crate::sip::Method::Update,
+        uri: crate::sip::Uri::try_from("sip:bob@example.com:5060")?,
         headers: vec![
             Via::new("SIP/2.0/UDP 127.0.0.1:5060;branch=z9hG4bK-update").into(),
             CSeq::new("3 UPDATE").into(),
@@ -298,7 +298,7 @@ async fn test_dialog_in_dialog_requests() -> crate::Result<()> {
             CallId::new("test-call-id-in-dialog-123").into(),
         ]
         .into(),
-        version: rsip::Version::V2,
+        version: crate::sip::Version::V2,
         body: b"v=0\r\no=alice 2890844526 2890844528 IN IP4 host.atlanta.com\r\n".to_vec(),
     };
 
@@ -307,8 +307,8 @@ async fn test_dialog_in_dialog_requests() -> crate::Result<()> {
 
     // Test OPTIONS request in dialog
     let options_req = Request {
-        method: rsip::Method::Options,
-        uri: rsip::Uri::try_from("sip:bob@example.com:5060")?,
+        method: crate::sip::Method::Options,
+        uri: crate::sip::Uri::try_from("sip:bob@example.com:5060")?,
         headers: vec![
             Via::new("SIP/2.0/UDP 127.0.0.1:5060;branch=z9hG4bK-options").into(),
             CSeq::new("4 OPTIONS").into(),
@@ -317,7 +317,7 @@ async fn test_dialog_in_dialog_requests() -> crate::Result<()> {
             CallId::new("test-call-id-in-dialog-123").into(),
         ]
         .into(),
-        version: rsip::Version::V2,
+        version: crate::sip::Version::V2,
         body: vec![],
     };
 
@@ -352,7 +352,7 @@ async fn test_dialog_termination_scenarios() -> crate::Result<()> {
         endpoint.inner.clone(),
         state_sender.clone(),
         None,
-        Some(rsip::Uri::try_from("sip:alice@alice.example.com:5060")?),
+        Some(crate::sip::Uri::try_from("sip:alice@alice.example.com:5060")?),
         tu_sender,
     )?;
 
@@ -361,7 +361,7 @@ async fn test_dialog_termination_scenarios() -> crate::Result<()> {
         dialog_id_1.clone(),
         TerminatedReason::UasBusy,
     ))?;
-    let state = dialog_inner_1.state.lock().unwrap().clone();
+    let state = dialog_inner_1.state.lock().clone();
     assert!(matches!(
         state,
         DialogState::Terminated(_, TerminatedReason::UasBusy)
@@ -384,7 +384,7 @@ async fn test_dialog_termination_scenarios() -> crate::Result<()> {
         endpoint.inner.clone(),
         state_sender.clone(),
         None,
-        Some(rsip::Uri::try_from("sip:alice@alice.example.com:5060")?),
+        Some(crate::sip::Uri::try_from("sip:alice@alice.example.com:5060")?),
         tu_sender,
     )?;
 
@@ -400,7 +400,7 @@ async fn test_dialog_termination_scenarios() -> crate::Result<()> {
         dialog_id_2.clone(),
         TerminatedReason::UacBye,
     ))?;
-    let state = dialog_inner_2.state.lock().unwrap().clone();
+    let state = dialog_inner_2.state.lock().clone();
     assert!(matches!(state, DialogState::Terminated(_, _)));
 
     Ok(())
@@ -427,7 +427,7 @@ async fn test_dialog_sequence_numbers() -> crate::Result<()> {
         endpoint.inner.clone(),
         state_sender,
         None,
-        Some(rsip::Uri::try_from("sip:alice@alice.example.com:5060")?),
+        Some(crate::sip::Uri::try_from("sip:alice@alice.example.com:5060")?),
         tu_sender,
     )?;
 

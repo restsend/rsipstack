@@ -13,16 +13,14 @@ use rsipstack::{
     transport::{udp::UdpConnection, TransportLayer},
     EndpointBuilder, Error,
 };
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::pin::Pin;
-use std::sync::Mutex;
-use std::{
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
-    time::{Duration, Instant},
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
 };
+use std::time::{Duration, Instant};
 use tokio::{select, time::sleep};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
@@ -56,6 +54,7 @@ struct Stats {
     total_calls: Arc<AtomicU64>,
     reject_calls: Arc<AtomicU64>,
     failed_calls: Arc<AtomicU64>,
+    pending_calls: Arc<AtomicU64>,
     active_calls: Arc<Mutex<HashMap<DialogId, Instant>>>,
     calls_per_second: Arc<AtomicU64>,
 }
@@ -66,6 +65,7 @@ impl Stats {
             total_calls: Arc::new(AtomicU64::new(0)),
             reject_calls: Arc::new(AtomicU64::new(0)),
             failed_calls: Arc::new(AtomicU64::new(0)),
+            pending_calls: Arc::new(AtomicU64::new(0)),
             active_calls: Arc::new(Mutex::new(HashMap::new())),
             calls_per_second: Arc::new(AtomicU64::new(0)),
         }
@@ -76,7 +76,7 @@ async fn run_server(
     dialog_layer: Arc<DialogLayer>,
     mut incoming: TransactionReceiver,
     state_sender: DialogStateSender,
-    contact: rsip::Uri,
+    contact: rsipstack::sip::Uri,
     answer_prob: u8,
     stats: Stats,
 ) -> Result<()> {
@@ -85,12 +85,12 @@ async fn run_server(
     loop {
         while let Some(mut tx) = incoming.recv().await {
             match tx.original.method {
-                rsip::Method::Invite => {
+                rsipstack::sip::Method::Invite => {
                     stats.total_calls.fetch_add(1, Ordering::Relaxed);
                     let should_answer = rand::random_range(0..=99) < answer_prob as u64;
                     if !should_answer {
                         stats.reject_calls.fetch_add(1, Ordering::Relaxed);
-                        tx.reply(rsip::StatusCode::BusyHere).await.ok();
+                        tx.reply(rsipstack::sip::StatusCode::BusyHere).await.ok();
                         continue;
                     }
                     let mut dialog = dialog_layer
@@ -106,10 +106,10 @@ async fn run_server(
                         dialog.handle(&mut tx).await.ok();
                     });
                 }
-                rsip::Method::Bye => {
+                rsipstack::sip::Method::Bye => {
                     if let Ok(dialog_id) = DialogId::try_from(&tx) {
-                        stats.active_calls.lock().unwrap().remove(&dialog_id);
-                        tx.reply(rsip::StatusCode::OK).await.ok();
+                        stats.active_calls.lock().remove(&dialog_id);
+                        tx.reply(rsipstack::sip::StatusCode::OK).await.ok();
                         dialog_layer.remove_dialog(&dialog_id);
                     }
                 }
@@ -123,7 +123,7 @@ type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
 async fn run_client(
     dialog_layer: Arc<DialogLayer>,
-    contact: rsip::Uri,
+    contact: rsipstack::sip::Uri,
     credential: Option<Credential>,
     concurrent_calls: u32,
     state_sender: DialogStateSender,
@@ -141,9 +141,13 @@ async fn run_client(
         // Calculate how many calls we need to create to maintain target concurrency
         let calls_to_create;
         {
-            let dialogs = stats.active_calls.lock().unwrap();
-            calls_to_create =
-                concurrent_calls as usize - dialogs.len().min(concurrent_calls as usize);
+            let dialogs = stats.active_calls.lock();
+            let in_flight = stats.pending_calls.load(Ordering::Relaxed) as usize;
+            let occupied = dialogs
+                .len()
+                .saturating_add(in_flight)
+                .min(concurrent_calls as usize);
+            calls_to_create = concurrent_calls as usize - occupied;
         }
         let calls_to_create_now = calls_to_create.min(max_calls_per_cycle);
 
@@ -158,6 +162,7 @@ async fn run_client(
                 let credential = credential.clone();
                 let state_sender = state_sender.clone();
                 let stats = stats.clone();
+                stats.pending_calls.fetch_add(1, Ordering::Relaxed);
 
                 let invite_loop = async move {
                     let invite_option = InviteOption {
@@ -171,20 +176,22 @@ async fn run_client(
 
                     match dialog_layer.do_invite(invite_option, state_sender).await {
                         Ok((dialog, _)) => {
-                            // Update total call count
-
                             // Get dialog ID and add to active calls tracking
                             let dialog_id = dialog.id();
                             stats
                                 .active_calls
                                 .lock()
-                                .unwrap()
                                 .insert(dialog_id.clone(), Instant::now());
+                            stats.pending_calls.fetch_sub(1, Ordering::Relaxed);
 
                             // Return the dialog for call management
                             Some((dialog_id, dialog))
                         }
-                        Err(_) => None,
+                        Err(_) => {
+                            stats.failed_calls.fetch_add(1, Ordering::Relaxed);
+                            stats.pending_calls.fetch_sub(1, Ordering::Relaxed);
+                            None
+                        }
                     }
                 };
                 tokio::spawn(async move {
@@ -229,7 +236,7 @@ async fn update_stats(dialog_layer: Arc<DialogLayer>, stats: Stats) {
         println!("=== SIP Benchmark UA Stats ===");
 
         // Get active calls count from the HashMap
-        let active_calls_count = stats.active_calls.lock().unwrap().len();
+        let active_calls_count = stats.active_calls.lock().len();
         println!("Dialogs: {}", dialog_layer.len());
         println!("Active Calls: {}", active_calls_count);
         println!(
@@ -269,7 +276,6 @@ async fn process_dialog_state(
                 stats
                     .active_calls
                     .lock()
-                    .unwrap()
                     .insert(id, Instant::now());
             }
             DialogState::Terminated(id, status) => {
@@ -284,7 +290,7 @@ async fn process_dialog_state(
                 }
                 dialog_layer.remove_dialog(&id);
                 // Remove from active calls tracking
-                stats.active_calls.lock().unwrap().remove(&id);
+                stats.active_calls.lock().remove(&id);
             }
             _ => {
                 debug!(state = %state, "Dialog state update");
@@ -294,7 +300,7 @@ async fn process_dialog_state(
     Ok(())
 }
 
-fn parse_server_uri(server: &str) -> Result<rsip::Uri> {
+fn parse_server_uri(server: &str) -> Result<rsipstack::sip::Uri> {
     // If the server string doesn't start with "sip:", add it
     let server_str = if !server.starts_with("sip:") {
         format!("sip:{}", server)
@@ -303,7 +309,7 @@ fn parse_server_uri(server: &str) -> Result<rsip::Uri> {
     };
 
     // Parse the URI
-    let uri = rsip::Uri::try_from(server_str.as_str())
+    let uri = rsipstack::sip::Uri::try_from(server_str.as_str())
         .map_err(|e| Error::Error(format!("Invalid server URI: {}", e)))?;
 
     // If no port is specified, use default SIP port
@@ -361,8 +367,8 @@ async fn main() -> Result<()> {
         .ok_or(Error::Error("no address found".to_string()))?
         .clone();
 
-    let contact = rsip::Uri {
-        scheme: Some(rsip::Scheme::Sip),
+    let contact = rsipstack::sip::Uri {
+        scheme: Some(rsipstack::sip::Scheme::Sip),
         auth: None,
         host_with_port: first_addr.addr.into(),
         params: vec![],

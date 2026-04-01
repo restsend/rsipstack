@@ -5,7 +5,8 @@ use super::{
     SipAddr, SipConnection,
 };
 use crate::Result;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex;
 
 struct ChannelInner {
     incoming: Mutex<Option<TransportReceiver>>,
@@ -37,7 +38,7 @@ impl ChannelConnection {
         Ok(t)
     }
 
-    pub async fn send(&self, msg: rsip::SipMessage) -> crate::Result<()> {
+    pub async fn send(&self, msg: crate::sip::SipMessage) -> crate::Result<()> {
         let transport = SipConnection::Channel(self.clone());
         let source = self.get_addr().clone();
         self.inner
@@ -51,7 +52,7 @@ impl ChannelConnection {
     }
 
     pub async fn serve_loop(&self, sender: TransportSender) -> Result<()> {
-        let mut incoming = match self.inner.clone().incoming.lock().unwrap().take() {
+        let mut incoming = match self.inner.clone().incoming.lock().take() {
             Some(incoming) => incoming,
             None => {
                 return Err(crate::Error::Error(

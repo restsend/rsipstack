@@ -3,7 +3,7 @@ use crate::dialog::dialog_layer::DialogLayer;
 use crate::dialog::DialogId;
 use crate::transaction::key::{TransactionKey, TransactionRole};
 use crate::transaction::transaction::Transaction;
-use rsip::Method;
+use crate::sip::Method;
 use std::sync::Arc;
 
 #[tokio::test]
@@ -84,7 +84,7 @@ async fn test_client_publication_etag_handling() -> crate::Result<()> {
     assert!(client_pub.etag().is_none());
 
     // Simulate receiving a 200 OK with SIP-ETag manually
-    *client_pub.etag.lock().unwrap() = Some("test-etag".to_string());
+    *client_pub.etag.lock() = Some("test-etag".to_string());
     assert_eq!(client_pub.etag(), Some("test-etag".to_string()));
 
     Ok(())

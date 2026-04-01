@@ -1,3 +1,4 @@
+use crate::sip::SipMessage;
 use crate::{
     transport::{
         connection::TransportSender,
@@ -7,7 +8,6 @@ use crate::{
     },
     Result,
 };
-use rsip::SipMessage;
 use std::{fmt, sync::Arc};
 use tokio::net::TcpStream;
 use tokio_util::sync::CancellationToken;
@@ -31,7 +31,7 @@ impl TcpConnection {
         let stream = TcpStream::connect(socket_addr).await?;
 
         let local_addr = SipAddr {
-            r#type: Some(rsip::transport::Transport::Tcp),
+            r#type: Some(crate::sip::transport::Transport::Tcp),
             addr: SipConnection::resolve_bind_address(stream.local_addr()?).into(),
         };
 
@@ -63,7 +63,7 @@ impl TcpConnection {
     ) -> Result<Self> {
         let remote_addr = stream.peer_addr()?;
         let remote_sip_addr = SipAddr {
-            r#type: Some(rsip::transport::Transport::Tcp),
+            r#type: Some(crate::sip::transport::Transport::Tcp),
             addr: remote_addr.into(),
         };
 

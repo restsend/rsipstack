@@ -22,7 +22,7 @@ impl TcpListenerConnection {
         let inner = TcpListenerConnectionInner {
             local_addr,
             external: external.map(|addr| SipAddr {
-                r#type: Some(rsip::transport::Transport::Tcp),
+                r#type: Some(crate::sip::transport::Transport::Tcp),
                 addr: addr.into(),
             }),
         };
@@ -37,7 +37,7 @@ impl TcpListenerConnection {
     ) -> Result<()> {
         let listener = TcpListener::bind(self.inner.local_addr.get_socketaddr()?).await?;
         let listener_local_addr = SipAddr {
-            r#type: Some(rsip::transport::Transport::Tcp),
+            r#type: Some(crate::sip::transport::Transport::Tcp),
             addr: listener.local_addr()?.into(),
         };
         tokio::spawn(async move {

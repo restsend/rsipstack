@@ -1,17 +1,16 @@
-use crate::rsip_ext::destination_from_request;
+use crate::sip::{headers::*, Header, Response, SipMessage, Uri};
 use crate::transaction::key::{TransactionKey, TransactionRole};
 use crate::transaction::transaction::Transaction;
 use crate::transport::udp::UdpConnection;
 use crate::{transport::TransportEvent, Result};
-use rsip::{headers::*, Header, Response, SipMessage, Uri};
 use std::convert::TryFrom;
 use std::time::Duration;
 use tokio::{select, sync::mpsc::unbounded_channel, time::sleep};
 use tracing::info;
 
-fn make_invite_request(uri: &str) -> Result<rsip::Request> {
-    Ok(rsip::Request {
-        method: rsip::Method::Invite,
+fn make_invite_request(uri: &str) -> Result<crate::sip::Request> {
+    Ok(crate::sip::Request {
+        method: crate::sip::Method::Invite,
         uri: Uri::try_from(uri)?,
         headers: vec![
             Via::new("SIP/2.0/TCP uac.example.com:5060;branch=z9hG4bK1").into(),
@@ -22,7 +21,7 @@ fn make_invite_request(uri: &str) -> Result<rsip::Request> {
             MaxForwards::new("70").into(),
         ]
         .into(),
-        version: rsip::Version::V2,
+        version: crate::sip::Version::V2,
         body: vec![],
     })
 }
@@ -50,18 +49,18 @@ async fn test_client_transaction() -> Result<()> {
                             match msg {
                                 SipMessage::Request(req) => {
                                     let headers = req.headers.clone();
-                                    let response = SipMessage::Response(rsip::message::Response {
-                                        version: rsip::Version::V2,
-                                        status_code:rsip::StatusCode::Trying,
+                                    let response = SipMessage::Response(crate::sip::message::Response {
+                                        version: crate::sip::Version::V2,
+                                        status_code:crate::sip::StatusCode::Trying,
                                         headers: headers.clone(),
                                         body: Default::default(),
                                     });
                                     connection.send(response, None).await.expect("send trying");
                                     sleep(Duration::from_millis(100)).await;
 
-                                    let response = SipMessage::Response(rsip::message::Response {
-                                        version: rsip::Version::V2,
-                                        status_code:rsip::StatusCode::OK,
+                                    let response = SipMessage::Response(crate::sip::message::Response {
+                                        version: crate::sip::Version::V2,
+                                        status_code:crate::sip::StatusCode::OK,
                                         headers,
                                         body: Default::default(),
                                     });
@@ -86,10 +85,10 @@ async fn test_client_transaction() -> Result<()> {
     };
 
     let recv_loop = async {
-        let register_req = rsip::message::Request {
-            method: rsip::method::Method::Register,
-            uri: rsip::Uri {
-                scheme: Some(rsip::Scheme::Sip),
+        let register_req = crate::sip::message::Request {
+            method: crate::sip::method::Method::Register,
+            uri: crate::sip::Uri {
+                scheme: Some(crate::sip::Scheme::Sip),
                 host_with_port: peer_server.get_addr().addr.clone(),
                 ..Default::default()
             },
@@ -100,7 +99,7 @@ async fn test_client_transaction() -> Result<()> {
                 CallId::new("1j9FpLxk3uxtm8tn@restsend.com").into(),
             ]
             .into(),
-            version: rsip::Version::V2,
+            version: crate::sip::Version::V2,
             body: Default::default(),
         };
 
@@ -221,12 +220,48 @@ Content-Length: 0\r\n\r\n";
         "ACK Route headers must follow the reversed Record-Route order"
     );
 
-    let destination =
-        destination_from_request(&ack).expect("route-enabled ACK should resolve to a destination");
+    let destination = ack.destination();
     let expected_destination = Uri::try_from("sip:1.2.40.7:21827;lr;ftag=Xq5kaQn5;did=9e8.ab21")?;
     assert_eq!(
-        &*destination, &expected_destination,
+        destination, expected_destination,
         "First Route entry must determine the transport destination",
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_make_ack_preserves_du_param_with_colons_in_record_route() -> Result<()> {
+    let endpoint = super::create_test_endpoint(None).await?;
+
+    let raw_response = "SIP/2.0 200 OK\r\n\
+Via: SIP/2.0/UDP uac.example.com:5060;branch=z9hG4bK1\r\n\
+Record-Route: <sip:2.2.2.2;lr=on;ftag=d4nwJ0jF;du=sip:1.2.3.4:5060;did=893.d6d1>,<sip:4.5.6.7:32222;lr=on;ftag=d4nwJ0jF>\r\n\
+From: <sip:alice@example.com>;tag=from-tag\r\n\
+To: <sip:bob@example.com>;tag=to-tag\r\n\
+Call-ID: callid@example.com\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:uas@192.0.2.55:5080;transport=udp>\r\n\
+Content-Length: 0\r\n\r\n";
+
+    let response = Response::try_from(raw_response)?;
+    let invite = make_invite_request("sip:bob@example.com")?;
+    let ack = endpoint.inner.make_ack(&invite, &response)?;
+
+    let routes: Vec<String> = ack
+        .headers
+        .iter()
+        .filter_map(|header| match header {
+            Header::Route(route) => Some(route.value().to_string()),
+            _ => None,
+        })
+        .collect();
+
+    assert!(
+        routes
+            .iter()
+            .any(|r| { r.contains("du=sip:1.2.3.4:5060") && r.contains("did=893.d6d1") }),
+        "ACK Route headers must preserve du parameter values with colons and keep following params"
     );
 
     Ok(())

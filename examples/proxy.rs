@@ -12,11 +12,10 @@ use axum::{
 use clap::Parser;
 use futures::{SinkExt, StreamExt};
 use get_if_addrs::get_if_addrs;
-use rsip::headers::UntypedHeader;
 use rsip::prelude::{HeadersExt, ToTypedHeader};
 use rsip::SipMessage;
 use rsipstack::dialog::DialogId;
-use rsipstack::rsip_ext::{extract_uri_from_contact, RsipHeadersExt};
+use rsipstack::sip as rsip;
 use rsipstack::transaction::endpoint::EndpointInnerRef;
 use rsipstack::transaction::key::{TransactionKey, TransactionRole};
 use rsipstack::transaction::transaction::Transaction;
@@ -28,8 +27,8 @@ use rsipstack::transport::udp::UdpConnection;
 use rsipstack::transport::websocket::WebSocketListenerConnection;
 use rsipstack::transport::SipAddr;
 use rsipstack::transport::{SipConnection, TransportEvent};
-use rsipstack::{header_pop, Error, Result};
 use rsipstack::{transport::TransportLayer, EndpointBuilder};
+use rsipstack::{Error, Result};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fmt::Formatter;
@@ -309,7 +308,11 @@ async fn process_incoming_request(
 impl TryFrom<&rsip::Request> for User {
     type Error = Error;
     fn try_from(req: &rsip::Request) -> Result<Self> {
-        let contact = extract_uri_from_contact(req.contact_header()?.value())?;
+        let contact = req
+            .typed_contact_headers()?
+            .first()
+            .map(|c| c.uri.clone())
+            .ok_or_else(|| Error::Error("missing Contact header".to_string()))?;
         let via = req.via_header()?.typed()?;
 
         let username = req
@@ -332,14 +335,7 @@ impl TryFrom<&rsip::Request> for User {
                 Ok(addr) => destination.addr.host = addr,
                 Err(_) => {}
             },
-            rsip::Param::Other(o, Some(v)) => {
-                if o.value().eq_ignore_ascii_case("rport") {
-                    match v.value().try_into() {
-                        Ok(port) => destination.addr.port = Some(port),
-                        Err(_) => {}
-                    }
-                }
-            }
+            rsip::Param::Rport(Some(port)) => destination.addr.port = Some((*port).into()),
             _ => {}
         });
 
@@ -359,7 +355,12 @@ async fn handle_register(state: AppState, mut tx: Transaction) -> Result<()> {
         }
     };
 
-    let orig_contact_uri = extract_uri_from_contact(tx.original.contact_header()?.value())?;
+    let orig_contact_uri = tx
+        .original
+        .typed_contact_headers()?
+        .first()
+        .map(|c| c.uri.clone())
+        .ok_or_else(|| Error::Error("missing Contact header".to_string()))?;
     let contact = rsip::typed::Contact {
         display_name: None,
         uri: orig_contact_uri,
@@ -455,7 +456,15 @@ async fn handle_invite(state: AppState, mut tx: Transaction) -> Result<()> {
                     match msg {
                         rsip::message::SipMessage::Response(mut resp) => {
                             // pop first Via
-                            header_pop!(resp.headers, rsip::Header::Via);
+                            let mut first = true;
+                            resp.headers.retain(|h| {
+                                if first && matches!(h, rsip::Header::Via(_)) {
+                                    first = false;
+                                    false
+                                } else {
+                                    true
+                                }
+                            });
                             resp.headers.push_front(record_route.clone().into());
                             if resp.status_code.kind() == rsip::StatusCodeKind::Successful {
                                 let dialog_id = DialogId::try_from((&resp, TransactionRole::Client))?;
@@ -532,7 +541,15 @@ async fn handle_bye(state: AppState, mut tx: Transaction) -> Result<()> {
         match msg {
             rsip::message::SipMessage::Response(mut resp) => {
                 // pop first Via
-                header_pop!(resp.headers, rsip::Header::Via);
+                let mut first = true;
+                resp.headers.retain(|h| {
+                    if first && matches!(h, rsip::Header::Via(_)) {
+                        first = false;
+                        false
+                    } else {
+                        true
+                    }
+                });
                 info!(raw_message = %resp.to_string(), "UAC/BYE Forwarding response");
                 tx.respond(resp).await?;
             }

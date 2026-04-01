@@ -19,7 +19,7 @@ use crate::{
     Result,
 };
 use futures::FutureExt;
-use rsip::{
+use crate::sip::{
     prelude::{HeadersExt, ToTypedHeader},
     Request, Response, SipMessage, StatusCodeKind,
 };
@@ -83,8 +83,8 @@ use tracing::{debug, info, warn};
 /// # let sdp_bytes = vec![];
 /// # let auth_credential = todo!();
 /// let custom_headers = vec![
-///     rsip::Header::UserAgent("MyApp/1.0".into()),
-///     rsip::Header::Subject("Important Call".into()),
+///     rsipstack::sip::Header::UserAgent("MyApp/1.0".into()),
+///     rsipstack::sip::Header::Subject("Important Call".into()),
 /// ];
 ///
 /// let invite_option = InviteOption {
@@ -128,15 +128,15 @@ use tracing::{debug, info, warn};
 #[derive(Default, Clone)]
 pub struct InviteOption {
     pub caller_display_name: Option<String>,
-    pub caller_params: Vec<rsip::uri::Param>,
-    pub caller: rsip::Uri,
-    pub callee: rsip::Uri,
+    pub caller_params: Vec<crate::sip::uri::Param>,
+    pub caller: crate::sip::Uri,
+    pub callee: crate::sip::Uri,
     pub destination: Option<SipAddr>,
     pub content_type: Option<String>,
     pub offer: Option<Vec<u8>>,
-    pub contact: rsip::Uri,
+    pub contact: crate::sip::Uri,
     pub credential: Option<Credential>,
-    pub headers: Option<Vec<rsip::Header>>,
+    pub headers: Option<Vec<crate::sip::Header>>,
     pub support_prack: bool,
     pub call_id: Option<String>,
 }
@@ -157,12 +157,9 @@ impl DialogGuard {
 
 impl Drop for DialogGuard {
     fn drop(&mut self) {
-        let dlg = match self.dialog_layer_inner.dialogs.write() {
-            Ok(mut dialogs) => match dialogs.remove(&self.id.to_string()) {
-                Some(dlg) => dlg,
-                None => return,
-            },
-            _ => return,
+        let dlg = match self.dialog_layer_inner.dialogs.remove(&self.id.to_string()) {
+            Some((_, dlg)) => dlg,
+            None => return,
         };
         let _ = tokio::spawn(async move {
             if let Err(e) = dlg.hangup().await {
@@ -181,64 +178,56 @@ pub(super) struct DialogGuardForUnconfirmed<'a> {
 impl<'a> Drop for DialogGuardForUnconfirmed<'a> {
     fn drop(&mut self) {
         // If the dialog is still unconfirmed, we should try to cancel it
-        match self.dialog_layer_inner.dialogs.write() {
-            Ok(mut dialogs) => match dialogs.remove(&self.id.to_string()) {
-                Some(dlg) => {
-                    debug!(%self.id, "unconfirmed dialog dropped, cancelling it");
-                    let invite_tx = self.invite_tx.take();
-                    let _ = tokio::spawn(async move {
-                        if let Dialog::ClientInvite(ref client_dialog) = dlg {
-                            if client_dialog.inner.can_cancel() {
-                                if let Err(e) = client_dialog.cancel().await {
-                                    warn!(id = %client_dialog.id(), error = %e, "dialog cancel failed");
-                                    return;
-                                }
+        if let Some((_, dlg)) = self.dialog_layer_inner.dialogs.remove(&self.id.to_string()) {
+            debug!(%self.id, "unconfirmed dialog dropped, cancelling it");
+            let invite_tx = self.invite_tx.take();
+            let _ = tokio::spawn(async move {
+                if let Dialog::ClientInvite(ref client_dialog) = dlg {
+                    if client_dialog.inner.can_cancel() {
+                        if let Err(e) = client_dialog.cancel().await {
+                            warn!(id = %client_dialog.id(), error = %e, "dialog cancel failed");
+                            return;
+                        }
 
-                                if let Some(mut invite_tx) = invite_tx {
-                                    let duration = tokio::time::Duration::from_secs(2);
-                                    let timeout = tokio::time::sleep(duration);
-                                    tokio::pin!(timeout);
-                                    loop {
-                                        tokio::select! {
-                                            _ = &mut timeout => break,
-                                            msg = invite_tx.receive() => {
-                                                if let Some(msg) = msg{
-                                                    if let SipMessage::Response(resp) = msg {
-                                                        if resp.status_code.kind() != StatusCodeKind::Provisional {
-                                                            debug!(
-                                                                id = %client_dialog.id(),
-                                                                status = %resp.status_code,
-                                                                "received final response"
-                                                            );
-                                                            break;
-                                                        }
-                                                    }
-                                                }else{
+                        if let Some(mut invite_tx) = invite_tx {
+                            let duration = tokio::time::Duration::from_secs(2);
+                            let timeout = tokio::time::sleep(duration);
+                            tokio::pin!(timeout);
+                            loop {
+                                tokio::select! {
+                                    _ = &mut timeout => break,
+                                    msg = invite_tx.receive() => {
+                                        if let Some(msg) = msg{
+                                            if let SipMessage::Response(resp) = msg {
+                                                if resp.status_code.kind() != StatusCodeKind::Provisional {
+                                                    debug!(
+                                                        id = %client_dialog.id(),
+                                                        status = %resp.status_code,
+                                                        "received final response"
+                                                    );
                                                     break;
                                                 }
                                             }
+                                        }else{
+                                            break;
                                         }
                                     }
                                 }
-                                let _ = client_dialog.inner.transition(DialogState::Terminated(
-                                    client_dialog.id(),
-                                    TerminatedReason::UacCancel,
-                                ));
-                                debug!(id = %client_dialog.id(), "dialog terminated");
-                                return;
                             }
                         }
-
-                        if let Err(e) = dlg.hangup().await {
-                            info!(id = %dlg.id(), error = %e, "failed to hangup unconfirmed dialog");
-                        }
-                    });
+                        let _ = client_dialog.inner.transition(DialogState::Terminated(
+                            client_dialog.id(),
+                            TerminatedReason::UacCancel,
+                        ));
+                        debug!(id = %client_dialog.id(), "dialog terminated");
+                        return;
+                    }
                 }
-                None => {}
-            },
-            Err(e) => {
-                warn!(id = %self.id, error = %e, "failed to acquire write lock on dialogs");
-            }
+
+                if let Err(e) = dlg.hangup().await {
+                    info!(id = %dlg.id(), error = %e, "failed to hangup unconfirmed dialog");
+                }
+            });
         }
     }
 }
@@ -287,14 +276,14 @@ impl DialogLayer {
     /// ```
     pub fn make_invite_request(&self, opt: &InviteOption) -> Result<Request> {
         let last_seq = self.increment_last_seq();
-        let to = rsip::typed::To {
+        let to = crate::sip::typed::To {
             display_name: None,
             uri: opt.callee.clone(),
             params: vec![],
         };
         let recipient = to.uri.clone();
 
-        let from = rsip::typed::From {
+        let from = crate::sip::typed::From {
             display_name: opt.caller_display_name.clone(),
             uri: opt.caller.clone(),
             params: opt.caller_params.clone(),
@@ -304,11 +293,11 @@ impl DialogLayer {
         let call_id = opt
             .call_id
             .as_ref()
-            .map(|id| rsip::headers::CallId::from(id.clone()));
+            .map(|id| crate::sip::headers::CallId::from(id.clone()));
 
         let via = self.endpoint.get_via(None, None)?;
         let mut request = self.endpoint.make_request(
-            rsip::Method::Invite,
+            crate::sip::Method::Invite,
             recipient,
             via,
             from,
@@ -317,7 +306,7 @@ impl DialogLayer {
             call_id,
         );
 
-        let contact = rsip::typed::Contact {
+        let contact = crate::sip::typed::Contact {
             display_name: None,
             uri: opt.contact.clone(),
             params: vec![],
@@ -325,9 +314,9 @@ impl DialogLayer {
 
         request
             .headers
-            .unique_push(rsip::Header::Contact(contact.into()));
+            .unique_push(crate::sip::Header::Contact(contact.into()));
 
-        request.headers.unique_push(rsip::Header::ContentType(
+        request.headers.unique_push(crate::sip::Header::ContentType(
             opt.content_type
                 .clone()
                 .unwrap_or("application/sdp".to_string())
@@ -337,7 +326,7 @@ impl DialogLayer {
         if opt.support_prack {
             request
                 .headers
-                .unique_push(rsip::Header::Supported("100rel".into()));
+                .unique_push(crate::sip::Header::Supported("100rel".into()));
         }
         // can't override default headers
         if let Some(headers) = opt.headers.as_ref() {
@@ -347,7 +336,7 @@ impl DialogLayer {
                 // some clients consider messages with duplicate "max-forwards"
                 // headers as malformed and may silently ignore invites
                 match header {
-                    rsip::Header::MaxForwards(_) => request.headers.unique_push(header.clone()),
+                    crate::sip::Header::MaxForwards(_) => request.headers.unique_push(header.clone()),
                     _ => request.headers.push(header.clone()),
                 }
             }
@@ -396,11 +385,11 @@ impl DialogLayer {
     ///
     /// if let Some(resp) = response {
     ///     match resp.status_code {
-    ///         rsip::StatusCode::OK => {
+    ///         rsipstack::sip::StatusCode::OK => {
     ///             println!("Call answered!");
     ///             // Process SDP answer in resp.body
     ///         },
-    ///         rsip::StatusCode::BusyHere => {
+    ///         rsipstack::sip::StatusCode::BusyHere => {
     ///             println!("Called party is busy");
     ///         },
     ///         _ => {
@@ -470,10 +459,7 @@ impl DialogLayer {
 
         self.inner
             .dialogs
-            .write()
-            .as_mut()
-            .map(|ds| ds.insert(id.to_string(), Dialog::ClientInvite(dialog.clone())))
-            .ok();
+            .insert(id.to_string(), Dialog::ClientInvite(dialog.clone()));
 
         debug!(%id, "client invite dialog created");
         let mut guard = DialogGuardForUnconfirmed {
@@ -490,30 +476,22 @@ impl DialogLayer {
         let r = dialog.process_invite(tx).boxed().await;
         self.inner
             .dialogs
-            .write()
-            .as_mut()
-            .map(|ds| ds.remove(&id.to_string()))
-            .ok();
+            .remove(&id.to_string());
 
         match r {
             Ok((new_dialog_id, resp)) => {
                 match resp {
-                    Some(ref r) if r.status_code.kind() == rsip::StatusCodeKind::Successful => {
+                    Some(ref r) if r.status_code.kind() == crate::sip::StatusCodeKind::Successful => {
                         debug!(
                             "client invite dialog confirmed: {} => {}",
                             id, new_dialog_id
                         );
                         self.inner
                             .dialogs
-                            .write()
-                            .as_mut()
-                            .map(|ds| {
-                                ds.insert(
-                                    new_dialog_id.to_string(),
-                                    Dialog::ClientInvite(dialog.clone()),
-                                )
-                            })
-                            .ok();
+                            .insert(
+                                new_dialog_id.to_string(),
+                                Dialog::ClientInvite(dialog.clone()),
+                            );
                     }
                     _ => {}
                 }
@@ -546,10 +524,7 @@ impl DialogLayer {
         // 1) register early key (so in-dialog requests can be matched)
         self.inner
             .dialogs
-            .write()
-            .as_mut()
-            .map(|ds| ds.insert(id0.to_string(), Dialog::ClientInvite(dialog.clone())))
-            .ok();
+            .insert(id0.to_string(), Dialog::ClientInvite(dialog.clone()));
 
         debug!(%id0, "client invite dialog created (async)");
 
@@ -563,31 +538,23 @@ impl DialogLayer {
             // remove early key
             inner
                 .dialogs
-                .write()
-                .as_mut()
-                .map(|ds| ds.remove(&id0.to_string()))
-                .ok();
+                .remove(&id0.to_string());
 
             match &r {
                 Ok((new_id, resp_opt)) => {
                     let is_2xx = resp_opt
                         .as_ref()
-                        .map(|resp| resp.status_code.kind() == rsip::StatusCodeKind::Successful)
+                        .map(|resp| resp.status_code.kind() == crate::sip::StatusCodeKind::Successful)
                         .unwrap_or(false);
 
                     if is_2xx {
                         debug!("client invite dialog confirmed: {} => {}", id0, new_id);
                         inner
                             .dialogs
-                            .write()
-                            .as_mut()
-                            .map(|ds| {
-                                ds.insert(
-                                    new_id.to_string(),
-                                    Dialog::ClientInvite(dialog_clone.clone()),
-                                )
-                            })
-                            .ok();
+                            .insert(
+                                new_id.to_string(),
+                                Dialog::ClientInvite(dialog_clone.clone()),
+                            );
                     }
                 }
                 Err(e) => debug!(%id0, error = %e, "async invite failed"),
@@ -606,7 +573,7 @@ impl DialogLayer {
     ) -> Result<(ClientInviteDialog, Transaction)> {
         let mut request = self.make_invite_request(&opt)?;
         request.body = opt.offer.unwrap_or_default();
-        request.headers.unique_push(rsip::Header::ContentLength(
+        request.headers.unique_push(crate::sip::Header::ContentLength(
             (request.body.len() as u32).into(),
         ));
         let key = TransactionKey::from_request(&request, TransactionRole::Client)?;
@@ -616,9 +583,7 @@ impl DialogLayer {
             tx.destination = opt.destination;
         } else {
             if let Some(route) = tx.original.route_header() {
-                if let Some(first_route) =
-                    route.typed().ok().and_then(|r| r.uris().first().cloned())
-                {
+                if let Some(first_route) = route.typed().ok() {
                     tx.destination = SipAddr::try_from(&first_route.uri).ok();
                 }
             }
@@ -638,13 +603,7 @@ impl DialogLayer {
 
         if let Some(destination) = &tx.destination {
             let uri = destination.clone().into();
-            dlg_inner
-                .remote_uri
-                .lock()
-                .map(|mut guard| {
-                    *guard = uri;
-                })
-                .ok();
+            *dlg_inner.remote_uri.lock() = uri;
         }
         let dialog = ClientInviteDialog {
             inner: Arc::new(dlg_inner),

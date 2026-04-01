@@ -1,20 +1,20 @@
 use crate::transport::{SipAddr, SipConnection};
-use rsip::{headers::*, prelude::HeadersExt, HostWithPort, SipMessage};
+use crate::sip::{headers::*, prelude::HeadersExt, HostWithPort, SipMessage};
 
 #[test]
 fn test_via_received() {
-    let register_req = rsip::message::Request {
-        method: rsip::method::Method::Register,
-        uri: rsip::Uri {
-            scheme: Some(rsip::Scheme::Sip),
-            host_with_port: rsip::HostWithPort::try_from("127.0.0.1:2025")
+    let register_req = crate::sip::message::Request {
+        method: crate::sip::method::Method::Register,
+        uri: crate::sip::Uri {
+            scheme: Some(crate::sip::Scheme::Sip),
+            host_with_port: crate::sip::HostWithPort::try_from("127.0.0.1:2025")
                 .expect("host_port parse")
                 .into(),
             ..Default::default()
         },
         headers: vec![Via::new("SIP/2.0/TLS restsend.com:5061;branch=z9hG4bKnashd92").into()]
             .into(),
-        version: rsip::Version::V2,
+        version: crate::sip::Version::V2,
         body: Default::default(),
     };
 
@@ -32,7 +32,7 @@ fn test_via_received() {
     let msg = SipConnection::update_msg_received(
         register_req.into(),
         addr,
-        rsip::transport::Transport::Udp,
+        crate::sip::transport::Transport::Udp,
     )
     .expect("update_msg_received");
 
@@ -50,12 +50,12 @@ fn test_via_received() {
 #[test]
 fn test_sipaddr() {
     let addr = "sip:proxy1.example.org:25060;transport=tcp";
-    let uri = rsip::Uri::try_from(addr).expect("parse uri");
+    let uri = crate::sip::Uri::try_from(addr).expect("parse uri");
     let sipaddr = SipAddr::try_from(&uri).expect("SipAddr::try_from");
-    assert_eq!(sipaddr.r#type, Some(rsip::transport::Transport::Tcp));
+    assert_eq!(sipaddr.r#type, Some(crate::sip::transport::Transport::Tcp));
     assert_eq!(
         sipaddr.addr,
-        rsip::HostWithPort {
+        crate::sip::HostWithPort {
             host: "proxy1.example.org".parse().unwrap(),
             port: Some(25060.into()),
         }

@@ -7,10 +7,11 @@ use crate::transport::{
 };
 use crate::Result;
 use get_if_addrs::IfAddr;
-use rsip::{
+use crate::sip::{
     prelude::{HeadersExt, ToTypedHeader},
-    Param, SipMessage,
+    HostWithPort, Param, SipMessage, Transport,
 };
+use crate::sip::headers::untyped::Via;
 use std::net::{IpAddr, Ipv4Addr};
 use std::{fmt, net::SocketAddr};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -92,7 +93,7 @@ pub const MAX_UDP_BUF_SIZE: usize = 8192;
 ///
 /// ```rust,no_run
 /// use rsipstack::transport::{SipConnection, SipAddr};
-/// use rsip::SipMessage;
+/// use rsipstack::sip::SipMessage;
 ///
 /// // Send a message through any connection type
 /// async fn send_message(
@@ -197,7 +198,7 @@ impl SipConnection {
             SipConnection::WebSocketListener(transport) => transport.get_addr(),
         }
     }
-    pub async fn send(&self, msg: rsip::SipMessage, destination: Option<&SipAddr>) -> Result<()> {
+    pub async fn send(&self, msg: SipMessage, destination: Option<&SipAddr>) -> Result<()> {
         match self {
             SipConnection::Channel(transport) => transport.send(msg).await,
             SipConnection::Udp(transport) => transport.send(msg, destination).await,
@@ -270,7 +271,7 @@ impl SipConnection {
     pub fn update_msg_received(
         msg: SipMessage,
         addr: SocketAddr,
-        transport: rsip::transport::Transport,
+        transport: Transport,
     ) -> Result<SipMessage> {
         match msg {
             SipMessage::Request(mut req) => {
@@ -308,20 +309,17 @@ impl SipConnection {
         addr
     }
     pub fn build_via_received(
-        via: &mut rsip::headers::Via,
+        via: &mut Via,
         addr: SocketAddr,
-        transport: rsip::transport::Transport,
+        transport: Transport,
     ) -> Result<()> {
         let received = addr.into();
         let mut typed_via = via.typed()?;
 
         typed_via.params.retain(|param| {
-            if let Param::Other(key, _) = param {
-                !key.value().eq_ignore_ascii_case("rport")
-            } else if matches!(param, Param::Received(_)) {
-                false
-            } else {
-                true
+            match param {
+                Param::Rport(_) | Param::Received(_) => false,
+                _ => true,
             }
         });
 
@@ -332,7 +330,7 @@ impl SipConnection {
 
         // For reliable transports (TCP/TLS/WS), we need to be more careful about received parameter
         let should_add_received = match transport {
-            rsip::transport::Transport::Udp => true,
+            Transport::Udp => true,
             _ => {
                 // For connection-oriented protocols, only add if explicitly different
                 typed_via.uri.host_with_port.host != received.host
@@ -343,7 +341,7 @@ impl SipConnection {
             return Ok(());
         }
 
-        if transport != rsip::transport::Transport::Udp && typed_via.transport != transport {
+        if transport != Transport::Udp && typed_via.transport != transport {
             typed_via.params.push(Param::Transport(transport));
         }
 
@@ -351,48 +349,41 @@ impl SipConnection {
             SocketAddr::V6(_) => format!("[{}]", received.host),
             _ => received.host.to_string(),
         };
-        *via = typed_via
-            .with_param(Param::Received(rsip::param::Received::new(received_str)))
-            .with_param(Param::Other(
-                rsip::param::OtherParam::new("rport"),
-                Some(rsip::param::OtherParamValue::new(addr.port().to_string())),
-            ))
-            .into();
+        typed_via.params.push(Param::Received(crate::sip::param::Received::new(received_str)));
+        typed_via.params.push(Param::Rport(Some(addr.port())));
+        *via = typed_via.into();
         Ok(())
     }
 
     pub fn parse_target_from_via(
-        via: &rsip::headers::untyped::Via,
-    ) -> Result<(rsip::Transport, rsip::HostWithPort)> {
-        let mut host_with_port = via.uri()?.host_with_port;
-        let mut transport = via.trasnport().unwrap_or(rsip::Transport::Udp);
-        if let Ok(params) = via.params().as_ref() {
-            for param in params {
-                match param {
-                    Param::Received(v) => {
-                        if let Ok(addr) = v.parse() {
-                            host_with_port.host = addr.into();
-                        }
+        via: &Via,
+    ) -> Result<(Transport, HostWithPort)> {
+        let typed_via = via.typed()?;
+        let mut host_with_port = typed_via.uri.host_with_port.clone();
+        let mut transport = typed_via.transport.clone();
+        for param in &typed_via.params {
+            match param {
+                Param::Received(v) => {
+                    if let Ok(addr) = v.parse() {
+                        host_with_port.host = addr.into();
                     }
-                    Param::Transport(t) => {
-                        transport = t.clone();
-                    }
-                    Param::Other(key, Some(value)) if key.value().eq_ignore_ascii_case("rport") => {
-                        if let Ok(port) = value.value().try_into() {
-                            host_with_port.port = Some(port);
-                        }
-                    }
-                    _ => {}
                 }
+                Param::Transport(t) => {
+                    transport = t.clone();
+                }
+                Param::Rport(Some(port)) => {
+                    host_with_port.port = Some((*port).into());
+                }
+                _ => {}
             }
         }
         Ok((transport, host_with_port))
     }
 
-    pub fn get_destination(msg: &rsip::SipMessage) -> Result<SocketAddr> {
+    pub fn get_destination(msg: &SipMessage) -> Result<SocketAddr> {
         let host_with_port = match msg {
-            rsip::SipMessage::Request(req) => req.uri().host_with_port.clone(),
-            rsip::SipMessage::Response(res) => Self::parse_target_from_via(res.via_header()?)?.1,
+            SipMessage::Request(req) => req.uri().host_with_port.clone(),
+            SipMessage::Response(res) => Self::parse_target_from_via(res.via_header()?)?.1,
         };
         host_with_port.try_into().map_err(Into::into)
     }

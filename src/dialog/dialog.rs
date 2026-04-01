@@ -6,8 +6,13 @@ use super::{
     subscription::{ClientSubscriptionDialog, ServerSubscriptionDialog},
     DialogId,
 };
+use crate::sip::{
+    prelude::{HeadersExt, ToTypedHeader},
+    typed::{CSeq, Contact},
+    HasHeaders, Header, Method, Param, Request, Response, Route, SipMessage, StatusCode,
+    StatusCodeKind,
+};
 use crate::{
-    rsip_ext::{extract_uri_from_contact, header_contains_token, parse_rseq_header},
     transaction::{
         endpoint::EndpointInnerRef,
         key::{TransactionKey, TransactionRole},
@@ -17,16 +22,10 @@ use crate::{
     Result,
 };
 use futures::FutureExt;
-use rsip::{
-    headers::Route,
-    message::HasHeaders,
-    prelude::{HeadersExt, ToTypedHeader, UntypedHeader},
-    typed::{CSeq, Contact},
-    Header, Method, Param, Request, Response, SipMessage, StatusCode, StatusCodeKind,
-};
+use parking_lot::Mutex;
 use std::sync::{
     atomic::{AtomicU32, Ordering},
-    Arc, Mutex,
+    Arc,
 };
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio_util::sync::CancellationToken;
@@ -38,7 +37,7 @@ pub type TransactionCommandReceiver = mpsc::Receiver<TransactionCommand>;
 pub enum TransactionCommand {
     Respond {
         status: StatusCode,
-        headers: Option<Vec<rsip::Header>>,
+        headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
     },
 }
@@ -64,7 +63,7 @@ impl TransactionHandle {
     pub async fn respond(
         &self,
         status: StatusCode,
-        headers: Option<Vec<rsip::Header>>,
+        headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
     ) -> std::result::Result<(), mpsc::error::SendError<TransactionCommand>> {
         self.sender
@@ -107,7 +106,7 @@ impl TransactionHandle {
 /// #     local_tag: "from-tag".to_string(),
 /// #     remote_tag: "to-tag".to_string(),
 /// # };
-/// let state = DialogState::Confirmed(dialog_id, rsip::Response::default());
+/// let state = DialogState::Confirmed(dialog_id, rsipstack::sip::Response::default());
 /// if state.is_confirmed() {
 ///     println!("Dialog is established");
 /// }
@@ -117,16 +116,16 @@ impl TransactionHandle {
 pub enum DialogState {
     Calling(DialogId),
     Trying(DialogId),
-    Early(DialogId, rsip::Response),
-    WaitAck(DialogId, rsip::Response),
-    Confirmed(DialogId, rsip::Response),
-    Updated(DialogId, rsip::Request, TransactionHandle),
-    Publish(DialogId, rsip::Request, TransactionHandle),
-    Notify(DialogId, rsip::Request, TransactionHandle),
-    Refer(DialogId, rsip::Request, TransactionHandle),
-    Message(DialogId, rsip::Request, TransactionHandle),
-    Info(DialogId, rsip::Request, TransactionHandle),
-    Options(DialogId, rsip::Request, TransactionHandle),
+    Early(DialogId, crate::sip::Response),
+    WaitAck(DialogId, crate::sip::Response),
+    Confirmed(DialogId, crate::sip::Response),
+    Updated(DialogId, crate::sip::Request, TransactionHandle),
+    Publish(DialogId, crate::sip::Request, TransactionHandle),
+    Notify(DialogId, crate::sip::Request, TransactionHandle),
+    Refer(DialogId, crate::sip::Request, TransactionHandle),
+    Message(DialogId, crate::sip::Request, TransactionHandle),
+    Info(DialogId, crate::sip::Request, TransactionHandle),
+    Options(DialogId, crate::sip::Request, TransactionHandle),
     Terminated(DialogId, TerminatedReason),
 }
 
@@ -139,26 +138,26 @@ pub enum TerminatedReason {
     UacBusy,
     UasBusy,
     UasDecline,
-    ProxyError(rsip::StatusCode),
+    ProxyError(crate::sip::StatusCode),
     ProxyAuthRequired,
-    UacOther(rsip::StatusCode),
-    UasOther(rsip::StatusCode),
+    UacOther(crate::sip::StatusCode),
+    UasOther(crate::sip::StatusCode),
 }
 
 /// Represents the status of a REFER operation parsed from a NOTIFY request.
 #[derive(Debug, Clone)]
 pub struct ReferStatus {
-    pub status_code: rsip::StatusCode,
+    pub status_code: crate::sip::StatusCode,
     pub is_terminated: bool,
 }
 
 impl ReferStatus {
-    pub fn parse(req: &rsip::Request) -> Option<Self> {
-        use rsip::prelude::HasHeaders;
+    pub fn parse(req: &crate::sip::Request) -> Option<Self> {
+        use crate::sip::HasHeaders;
 
         let mut event = None;
         for header in req.headers().iter() {
-            if let rsip::Header::Other(name, value) = header {
+            if let crate::sip::Header::Other(name, value) = header {
                 if name.to_string().eq_ignore_ascii_case("event") {
                     event = Some(value.to_string().to_lowercase());
                     break;
@@ -172,7 +171,7 @@ impl ReferStatus {
 
         let mut sub_state = None;
         for header in req.headers().iter() {
-            if let rsip::Header::Other(name, value) = header {
+            if let crate::sip::Header::Other(name, value) = header {
                 if name.to_string().eq_ignore_ascii_case("subscription-state") {
                     sub_state = Some(value.to_string().to_lowercase());
                     break;
@@ -189,7 +188,7 @@ impl ReferStatus {
             return None;
         }
         let code: u16 = parts[1].parse().ok()?;
-        let status_code = rsip::StatusCode::from(code);
+        let status_code = crate::sip::StatusCode::from(code);
 
         Some(Self {
             status_code,
@@ -317,14 +316,14 @@ pub struct DialogInner {
     pub state: Mutex<DialogState>,
 
     pub local_seq: AtomicU32,
-    pub local_contact: Option<rsip::Uri>,
-    pub remote_contact: Mutex<Option<rsip::headers::untyped::Contact>>,
+    pub local_contact: Option<crate::sip::Uri>,
+    pub remote_contact: Mutex<Option<crate::sip::headers::untyped::Contact>>,
 
     pub remote_seq: AtomicU32,
-    pub remote_uri: Mutex<rsip::Uri>,
+    pub remote_uri: Mutex<crate::sip::Uri>,
 
-    pub from: rsip::typed::From,
-    pub to: Mutex<rsip::typed::To>,
+    pub from: crate::sip::typed::From,
+    pub to: Mutex<crate::sip::typed::To>,
 
     pub credential: Option<Credential>,
     pub route_set: Mutex<Vec<Route>>,
@@ -394,16 +393,16 @@ pub struct DialogSnapshot {
     pub role: TransactionRole,
     pub id: DialogId,
 
-    pub from: rsip::typed::From,
-    pub to: rsip::typed::To,
+    pub from: crate::sip::typed::From,
+    pub to: crate::sip::typed::To,
 
     pub local_cseq: u32,
     pub remote_cseq: u32,
 
-    pub local_contact: Option<rsip::Uri>,
+    pub local_contact: Option<crate::sip::Uri>,
 
-    pub remote_uri: rsip::Uri,
-    pub remote_contact: Option<rsip::headers::untyped::Contact>,
+    pub remote_uri: crate::sip::Uri,
+    pub remote_contact: Option<crate::sip::headers::untyped::Contact>,
 
     pub route_set: Vec<Route>,
     pub supports_100rel: bool,
@@ -416,16 +415,18 @@ impl DialogInner {
         endpoint_inner: EndpointInnerRef,
         state_sender: DialogStateSender,
         credential: Option<Credential>,
-        local_contact: Option<rsip::Uri>,
+        local_contact: Option<crate::sip::Uri>,
         tu_sender: TransactionEventSender,
     ) -> Result<Self> {
         let cseq = initial_request.cseq_header()?.seq()?;
 
         let remote_uri = match role {
             TransactionRole::Client => initial_request.uri.clone(),
-            TransactionRole::Server => {
-                extract_uri_from_contact(initial_request.contact_header()?.value())?
-            }
+            TransactionRole::Server => initial_request
+                .typed_contact_headers()?
+                .first()
+                .map(|c| c.uri.clone())
+                .ok_or_else(|| crate::Error::Error("missing Contact header".to_string()))?,
         };
 
         let from = initial_request.from_header()?.typed()?;
@@ -436,7 +437,7 @@ impl DialogInner {
                 TransactionRole::Server => &id.local_tag,
             };
             if !tag.is_empty() {
-                to.params.push(rsip::Param::Tag(tag.clone().into()));
+                to.params.push(crate::sip::Param::Tag(tag.clone().into()));
             }
         }
 
@@ -448,9 +449,8 @@ impl DialogInner {
         }
         route_set.reverse();
 
-        let supports_100rel =
-            header_contains_token(&initial_request.headers, "Supported", "100rel")
-                || header_contains_token(&initial_request.headers, "Require", "100rel");
+        let supports_100rel = initial_request.header_contains_token("Supported", "100rel")
+            || initial_request.header_contains_token("Require", "100rel");
 
         Ok(Self {
             role,
@@ -475,16 +475,16 @@ impl DialogInner {
         })
     }
     pub fn can_cancel(&self) -> bool {
-        self.state.lock().unwrap().can_cancel()
+        self.state.lock().can_cancel()
     }
     pub fn is_confirmed(&self) -> bool {
-        self.state.lock().unwrap().is_confirmed()
+        self.state.lock().is_confirmed()
     }
     pub fn is_terminated(&self) -> bool {
-        self.state.lock().unwrap().is_terminated()
+        self.state.lock().is_terminated()
     }
     pub fn waiting_ack(&self) -> bool {
-        self.state.lock().unwrap().waiting_ack()
+        self.state.lock().waiting_ack()
     }
     pub fn get_local_seq(&self) -> u32 {
         self.local_seq.load(Ordering::Relaxed)
@@ -495,27 +495,27 @@ impl DialogInner {
     }
 
     pub fn update_remote_tag(&self, tag: &str) -> Result<()> {
-        self.id.lock().unwrap().remote_tag = tag.to_string();
+        self.id.lock().remote_tag = tag.to_string();
 
         if self.role == TransactionRole::Client {
-            let mut to = self.to.lock().unwrap();
+            let mut to = self.to.lock();
             *to = to.clone().with_tag(tag.into());
         }
         Ok(())
     }
 
     fn clear_remote_reliable(&self) {
-        self.remote_reliable.lock().unwrap().take();
+        self.remote_reliable.lock().take();
     }
 
     pub(super) fn prepare_prack_request(&self, resp: &Response) -> Result<Option<Request>> {
-        if !header_contains_token(resp.headers(), "Require", "100rel") {
+        if !resp.header_contains_token("Require", "100rel") {
             return Ok(None);
         }
 
-        let Some(rseq) = parse_rseq_header(resp.headers()) else {
+        let Some(rseq) = resp.rseq_value() else {
             warn!(
-                id = self.id.lock().unwrap().to_string(),
+                id = self.id.lock().to_string(),
                 "received reliable provisional response without RSeq"
             );
             return Ok(None);
@@ -526,7 +526,7 @@ impl DialogInner {
         let method = cseq_header.method()?;
 
         {
-            let state_guard = self.remote_reliable.lock().unwrap();
+            let state_guard = self.remote_reliable.lock();
             if let Some(state) = state_guard.as_ref() {
                 if state.last_rseq == rseq {
                     return Ok(Some(state.prack_request.clone()));
@@ -539,9 +539,9 @@ impl DialogInner {
         }
 
         let rack_value = format!("{} {} {}", rseq, cseq, method);
-        let mut headers = vec![Header::Other("RAck".into(), rack_value.into())];
+        let mut headers = vec![Header::RAck(rack_value.into())];
         if self.supports_100rel {
-            headers.push(Header::Other("Supported".into(), "100rel".into()));
+            headers.push(Header::Supported("100rel".into()));
         }
 
         let prack_request = self.make_request(
@@ -559,7 +559,7 @@ impl DialogInner {
         };
 
         {
-            let mut state_guard = self.remote_reliable.lock().unwrap();
+            let mut state_guard = self.remote_reliable.lock();
             *state_guard = Some(state);
         }
 
@@ -585,7 +585,7 @@ impl DialogInner {
         let mut tx = Transaction::new_client(key, request, self.endpoint_inner.clone(), None);
 
         if let Some(route) = tx.original.route_header() {
-            if let Some(first_route) = route.typed().ok().and_then(|r| r.uris().first().cloned()) {
+            if let Some(first_route) = route.typed().ok() {
                 tx.destination = SipAddr::try_from(&first_route.uri).ok();
             }
         }
@@ -593,7 +593,7 @@ impl DialogInner {
         match tx.send().await {
             Ok(_) => {
                 debug!(
-                    id = self.id.lock().unwrap().to_string(),
+                    id = self.id.lock().to_string(),
                     method = %method,
                     destination=tx.destination.as_ref().map(|d| d.to_string()).as_deref(),
                     key=%tx.key,
@@ -602,7 +602,7 @@ impl DialogInner {
             }
             Err(e) => {
                 warn!(
-                    id = self.id.lock().unwrap().to_string(),
+                    id = self.id.lock().to_string(),
                     destination = tx.destination.as_ref().map(|d| d.to_string()).as_deref(),
                     "failed to send request error: {}\n{}",
                     e,
@@ -618,10 +618,10 @@ impl DialogInner {
                 SipMessage::Response(resp) => match resp.status_code {
                     StatusCode::Trying => continue,
                     StatusCode::ProxyAuthenticationRequired | StatusCode::Unauthorized => {
-                        let id = self.id.lock().unwrap().clone();
+                        let id = self.id.lock().clone();
                         if auth_sent {
                             debug!(
-                                id = self.id.lock().unwrap().to_string(),
+                                id = self.id.lock().to_string(),
                                 "received {} response after auth sent", resp.status_code
                             );
                             self.transition(DialogState::Terminated(
@@ -638,7 +638,7 @@ impl DialogInner {
                             continue;
                         } else {
                             debug!(
-                                id = self.id.lock().unwrap().to_string(),
+                                id = self.id.lock().to_string(),
                                 "received 407 response without auth option"
                             );
                             self.transition(DialogState::Terminated(
@@ -664,11 +664,11 @@ impl DialogInner {
     /// subsequent in-dialog requests route to the latest remote target.
     pub fn set_remote_target(
         &self,
-        uri: rsip::Uri,
-        contact: Option<rsip::headers::untyped::Contact>,
+        uri: crate::sip::Uri,
+        contact: Option<crate::sip::headers::untyped::Contact>,
     ) {
-        *self.remote_uri.lock().unwrap() = uri;
-        *self.remote_contact.lock().unwrap() = contact;
+        *self.remote_uri.lock() = uri;
+        *self.remote_contact.lock() = contact;
     }
 
     /// Update the stored route set from Record-Route headers present in a response.
@@ -692,17 +692,17 @@ impl DialogInner {
             .collect();
 
         new_route_set.reverse();
-        *self.route_set.lock().unwrap() = new_route_set;
+        *self.route_set.lock() = new_route_set;
     }
 
     pub(super) fn make_request_with_vias(
         &self,
-        method: rsip::Method,
+        method: crate::sip::Method,
         cseq: Option<u32>,
-        vias: Vec<rsip::headers::typed::Via>,
-        headers: Option<Vec<rsip::Header>>,
+        vias: Vec<crate::sip::headers::typed::Via>,
+        headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
-    ) -> Result<rsip::Request> {
+    ) -> Result<crate::sip::Request> {
         let mut out: Vec<Header> = Vec::new();
 
         // --- system headers first ---
@@ -716,20 +716,11 @@ impl DialogInner {
             out.push(Header::Via(via.into()));
         }
 
-        out.push(Header::CallId(
-            self.id.lock().unwrap().call_id.clone().into(),
-        ));
+        out.push(Header::CallId(self.id.lock().call_id.clone().into()));
 
-        let to = self
-            .to
-            .lock()
-            .unwrap()
-            .clone()
-            .untyped()
-            .value()
-            .to_string();
+        let to = self.to.lock().clone().to_string();
 
-        let from = self.from.clone().untyped().value().to_string();
+        let from = self.from.clone().to_string();
 
         match self.role {
             TransactionRole::Client => {
@@ -752,7 +743,7 @@ impl DialogInner {
         }
 
         {
-            let route_set = self.route_set.lock().unwrap();
+            let route_set = self.route_set.lock();
             out.extend(route_set.iter().cloned().map(Header::Route));
         }
 
@@ -771,24 +762,24 @@ impl DialogInner {
             }
         }
 
-        Ok(rsip::Request {
+        Ok(crate::sip::Request {
             method,
-            uri: self.remote_uri.lock().unwrap().clone(),
+            uri: self.remote_uri.lock().clone(),
             headers: out.into(),
             body: body.unwrap_or_default(),
-            version: rsip::Version::V2,
+            version: crate::sip::Version::V2,
         })
     }
 
     pub(super) fn make_request(
         &self,
-        method: rsip::Method,
+        method: crate::sip::Method,
         cseq: Option<u32>,
         addr: Option<crate::transport::SipAddr>,
         branch: Option<Param>,
-        headers: Option<Vec<rsip::Header>>,
+        headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
-    ) -> Result<rsip::Request> {
+    ) -> Result<crate::sip::Request> {
         let via = self.endpoint_inner.get_via(addr, branch)?;
         self.make_request_with_vias(method, cseq, vec![via], headers, body)
     }
@@ -797,10 +788,10 @@ impl DialogInner {
         &self,
         request: &Request,
         status: StatusCode,
-        headers: Option<Vec<rsip::Header>>,
+        headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
-    ) -> rsip::Response {
-        let mut resp_headers = rsip::Headers::default();
+    ) -> crate::sip::Response {
+        let mut resp_headers = crate::sip::Headers::default();
 
         for header in request.headers.iter() {
             match header {
@@ -822,8 +813,8 @@ impl DialogInner {
                     if status != StatusCode::Trying
                         && !to.params.iter().any(|p| matches!(p, Param::Tag(_)))
                     {
-                        to.params.push(rsip::Param::Tag(
-                            self.id.lock().unwrap().local_tag.clone().into(),
+                        to.params.push(crate::sip::Param::Tag(
+                            self.id.lock().local_tag.clone().into(),
                         ));
                     }
                     resp_headers.push(Header::To(to.into()));
@@ -849,12 +840,12 @@ impl DialogInner {
         if let Some(headers) = headers {
             for header in headers {
                 match &header {
-                    rsip::Header::Other(name, _) => {
+                    crate::sip::Header::Other(name, _) => {
                         let lname = name.to_ascii_lowercase();
                         resp_headers.retain(|h| {
                             !matches!(
                                 h,
-                                rsip::Header::Other(n, _) if n.to_ascii_lowercase() == lname
+                                crate::sip::Header::Other(n, _) if n.to_ascii_lowercase() == lname
                             )
                         });
                         resp_headers.push(header);
@@ -888,23 +879,18 @@ impl DialogInner {
         let mut tx = Transaction::new_client(key, request, self.endpoint_inner.clone(), None);
 
         if matches!(method, Method::Cancel) {
-            self.remote_uri
-                .lock()
-                .map(|guard| {
-                    tx.destination = SipAddr::try_from(guard.clone()).ok();
-                })
-                .ok();
+            tx.destination = SipAddr::try_from(self.remote_uri.lock().clone()).ok();
         }
 
         if let Some(route) = tx.original.route_header() {
-            if let Some(first_route) = route.typed().ok().and_then(|r| r.uris().first().cloned()) {
+            if let Some(first_route) = route.typed().ok() {
                 tx.destination = SipAddr::try_from(&first_route.uri).ok();
             }
         }
         match tx.send().await {
             Ok(_) => {
                 debug!(
-                    id = self.id.lock().unwrap().to_string(),
+                    id = self.id.lock().to_string(),
                     method = %method,
                     destination=tx.destination.as_ref().map(|d| d.to_string()).as_deref(),
                     key=%tx.key,
@@ -913,7 +899,7 @@ impl DialogInner {
             }
             Err(e) => {
                 warn!(
-                    id = self.id.lock().unwrap().to_string(),
+                    id = self.id.lock().to_string(),
                     destination = tx.destination.as_ref().map(|d| d.to_string()).as_deref(),
                     "failed to send request error: {}\n{}",
                     e,
@@ -935,7 +921,7 @@ impl DialogInner {
                         if method == Method::Invite {
                             self.handle_provisional_response(&resp).await?;
                         }
-                        self.transition(DialogState::Early(self.id.lock().unwrap().clone(), resp))?;
+                        self.transition(DialogState::Early(self.id.lock().clone(), resp))?;
                         continue;
                     }
 
@@ -943,10 +929,10 @@ impl DialogInner {
                         status,
                         StatusCode::ProxyAuthenticationRequired | StatusCode::Unauthorized
                     ) {
-                        let id = self.id.lock().unwrap().clone();
+                        let id = self.id.lock().clone();
                         if auth_sent {
                             debug!(
-                                id = self.id.lock().unwrap().to_string(),
+                                id = self.id.lock().to_string(),
                                 "received {} response after auth sent", status
                             );
                             self.transition(DialogState::Terminated(
@@ -958,7 +944,7 @@ impl DialogInner {
                         auth_sent = true;
                         if let Some(cred) = &self.credential {
                             let new_seq = match method {
-                                rsip::Method::Cancel => self.get_local_seq(),
+                                crate::sip::Method::Cancel => self.get_local_seq(),
                                 _ => self.increment_local_seq(),
                             };
                             tx = handle_client_authenticate(new_seq, &tx, resp, cred).await?;
@@ -966,7 +952,7 @@ impl DialogInner {
                             continue;
                         } else {
                             debug!(
-                                id = self.id.lock().unwrap().to_string(),
+                                id = self.id.lock().to_string(),
                                 "received 407 response without auth option"
                             );
                             self.transition(DialogState::Terminated(
@@ -978,7 +964,7 @@ impl DialogInner {
                     }
 
                     debug!(
-                        id = self.id.lock().unwrap().to_string(),
+                        id = self.id.lock().to_string(),
                         method = %method,
                         "dialog do_request done: {:?}", status
                     );
@@ -998,9 +984,9 @@ impl DialogInner {
     }
 
     pub fn snapshot(&self) -> DialogSnapshot {
-        let id = self.id.lock().unwrap().clone();
+        let id = self.id.lock().clone();
 
-        let state = match &*self.state.lock().unwrap() {
+        let state = match &*self.state.lock() {
             DialogState::Calling(_) => DialogSnapshotState::Calling,
             DialogState::Trying(_) => DialogSnapshotState::Trying,
             DialogState::Early(_, _) => DialogSnapshotState::Early,
@@ -1024,16 +1010,16 @@ impl DialogInner {
             id: id.clone(),
 
             from: self.from.clone(),
-            to: self.to.lock().unwrap().clone(),
+            to: self.to.lock().clone(),
 
             local_cseq: self.local_seq.load(Ordering::Relaxed),
             remote_cseq: self.remote_seq.load(Ordering::Relaxed),
 
             local_contact: self.local_contact.clone(),
-            remote_uri: self.remote_uri.lock().unwrap().clone(),
-            remote_contact: self.remote_contact.lock().unwrap().clone(),
+            remote_uri: self.remote_uri.lock().clone(),
+            remote_contact: self.remote_contact.lock().clone(),
 
-            route_set: self.route_set.lock().unwrap().clone(),
+            route_set: self.route_set.lock().clone(),
             supports_100rel: self.supports_100rel,
         }
     }
@@ -1059,8 +1045,13 @@ impl DialogInner {
             TransactionRole::Client => snapshot.id.remote_tag.clone(),
             TransactionRole::Server => snapshot.id.local_tag.clone(),
         };
-        if !to_tag.is_empty() && !to.params.iter().any(|p| matches!(p, rsip::Param::Tag(_))) {
-            to.params.push(rsip::Param::Tag(to_tag.into()));
+        if !to_tag.is_empty()
+            && !to
+                .params
+                .iter()
+                .any(|p| matches!(p, crate::sip::Param::Tag(_)))
+        {
+            to.params.push(crate::sip::Param::Tag(to_tag.into()));
         }
 
         // Ensure From has tag
@@ -1121,21 +1112,21 @@ impl DialogInner {
     fn build_restored_initial_request(
         role: TransactionRole,
         id: &DialogId,
-        from: &rsip::typed::From,
-        to: &rsip::typed::To,
-        remote_uri: &rsip::Uri,
+        from: &crate::sip::typed::From,
+        to: &crate::sip::typed::To,
+        remote_uri: &crate::sip::Uri,
         local_seq: u32,
-        local_contact: Option<&rsip::Uri>,
+        local_contact: Option<&crate::sip::Uri>,
         user_agent: &str,
     ) -> Request {
-        use rsip::Version;
+        use crate::sip::Version;
 
         let mut headers: Vec<Header> = Vec::new();
 
         headers.push(Header::CallId(id.call_id.clone().into()));
 
-        let from_str = from.clone().untyped().value().to_string();
-        let to_str = to.clone().untyped().value().to_string();
+        let from_str = from.clone().to_string();
+        let to_str = to.clone().to_string();
         match role {
             TransactionRole::Client => {
                 headers.push(Header::From(from_str.into()));
@@ -1183,7 +1174,7 @@ impl DialogInner {
             }
             _ => {}
         }
-        let mut old_state = self.state.lock().unwrap();
+        let mut old_state = self.state.lock();
         match (&*old_state, &state) {
             (DialogState::Terminated(id, _), _) => {
                 warn!(
@@ -1238,7 +1229,7 @@ impl DialogInner {
         match result {
             Ok(Ok(())) => Ok(()),
             Ok(Err(_)) | Err(_) => {
-                let id = self.id.lock().unwrap().to_string();
+                let id = self.id.lock().to_string();
                 warn!(
                     id,
                     "{} handle dropped or timed out without final reply, returning 501",
@@ -1273,16 +1264,16 @@ impl std::fmt::Display for DialogState {
 impl Dialog {
     pub fn id(&self) -> DialogId {
         match self {
-            Dialog::ServerInvite(d) => d.inner.id.lock().unwrap().clone(),
-            Dialog::ClientInvite(d) => d.inner.id.lock().unwrap().clone(),
-            Dialog::ServerSubscription(d) => d.inner.id.lock().unwrap().clone(),
-            Dialog::ClientSubscription(d) => d.inner.id.lock().unwrap().clone(),
-            Dialog::ServerPublication(d) => d.inner.id.lock().unwrap().clone(),
-            Dialog::ClientPublication(d) => d.inner.id.lock().unwrap().clone(),
+            Dialog::ServerInvite(d) => d.inner.id.lock().clone(),
+            Dialog::ClientInvite(d) => d.inner.id.lock().clone(),
+            Dialog::ServerSubscription(d) => d.inner.id.lock().clone(),
+            Dialog::ClientSubscription(d) => d.inner.id.lock().clone(),
+            Dialog::ServerPublication(d) => d.inner.id.lock().clone(),
+            Dialog::ClientPublication(d) => d.inner.id.lock().clone(),
         }
     }
 
-    pub fn from(&self) -> &rsip::typed::From {
+    pub fn from(&self) -> &crate::sip::typed::From {
         match self {
             Dialog::ServerInvite(d) => &d.inner.from,
             Dialog::ClientInvite(d) => &d.inner.from,
@@ -1293,14 +1284,14 @@ impl Dialog {
         }
     }
 
-    pub fn to(&self) -> rsip::typed::To {
+    pub fn to(&self) -> crate::sip::typed::To {
         match self {
-            Dialog::ServerInvite(d) => d.inner.to.lock().unwrap().clone(),
-            Dialog::ClientInvite(d) => d.inner.to.lock().unwrap().clone(),
-            Dialog::ServerSubscription(d) => d.inner.to.lock().unwrap().clone(),
-            Dialog::ClientSubscription(d) => d.inner.to.lock().unwrap().clone(),
-            Dialog::ServerPublication(d) => d.inner.to.lock().unwrap().clone(),
-            Dialog::ClientPublication(d) => d.inner.to.lock().unwrap().clone(),
+            Dialog::ServerInvite(d) => d.inner.to.lock().clone(),
+            Dialog::ClientInvite(d) => d.inner.to.lock().clone(),
+            Dialog::ServerSubscription(d) => d.inner.to.lock().clone(),
+            Dialog::ClientSubscription(d) => d.inner.to.lock().clone(),
+            Dialog::ServerPublication(d) => d.inner.to.lock().clone(),
+            Dialog::ClientPublication(d) => d.inner.to.lock().clone(),
         }
     }
 
@@ -1310,56 +1301,38 @@ impl Dialog {
             TransactionRole::Server => Dialog::ServerInvite(ServerInviteDialog::from_inner(inner)),
         }
     }
-    pub fn remote_contact(&self) -> Option<rsip::Uri> {
+    pub fn remote_contact(&self) -> Option<crate::sip::Uri> {
         match self {
-            Dialog::ServerInvite(d) => d
-                .inner
-                .remote_contact
-                .lock()
-                .unwrap()
-                .as_ref()
-                .map(|c| extract_uri_from_contact(c.value()).ok())
-                .flatten(),
-            Dialog::ClientInvite(d) => d
-                .inner
-                .remote_contact
-                .lock()
-                .unwrap()
-                .as_ref()
-                .map(|c| extract_uri_from_contact(c.value()).ok())
-                .flatten(),
-            Dialog::ServerSubscription(d) => d
-                .inner
-                .remote_contact
-                .lock()
-                .unwrap()
-                .as_ref()
-                .map(|c| extract_uri_from_contact(c.value()).ok())
-                .flatten(),
-            Dialog::ClientSubscription(d) => d
-                .inner
-                .remote_contact
-                .lock()
-                .unwrap()
-                .as_ref()
-                .map(|c| extract_uri_from_contact(c.value()).ok())
-                .flatten(),
-            Dialog::ServerPublication(d) => d
-                .inner
-                .remote_contact
-                .lock()
-                .unwrap()
-                .as_ref()
-                .map(|c| extract_uri_from_contact(c.value()).ok())
-                .flatten(),
-            Dialog::ClientPublication(d) => d
-                .inner
-                .remote_contact
-                .lock()
-                .unwrap()
-                .as_ref()
-                .map(|c| extract_uri_from_contact(c.value()).ok())
-                .flatten(),
+            Dialog::ServerInvite(d) => d.inner.remote_contact.lock().as_ref().and_then(|c| {
+                crate::sip::typed::Contact::parse(c.value())
+                    .ok()
+                    .map(|c| c.uri)
+            }),
+            Dialog::ClientInvite(d) => d.inner.remote_contact.lock().as_ref().and_then(|c| {
+                crate::sip::typed::Contact::parse(c.value())
+                    .ok()
+                    .map(|c| c.uri)
+            }),
+            Dialog::ServerSubscription(d) => d.inner.remote_contact.lock().as_ref().and_then(|c| {
+                crate::sip::typed::Contact::parse(c.value())
+                    .ok()
+                    .map(|c| c.uri)
+            }),
+            Dialog::ClientSubscription(d) => d.inner.remote_contact.lock().as_ref().and_then(|c| {
+                crate::sip::typed::Contact::parse(c.value())
+                    .ok()
+                    .map(|c| c.uri)
+            }),
+            Dialog::ServerPublication(d) => d.inner.remote_contact.lock().as_ref().and_then(|c| {
+                crate::sip::typed::Contact::parse(c.value())
+                    .ok()
+                    .map(|c| c.uri)
+            }),
+            Dialog::ClientPublication(d) => d.inner.remote_contact.lock().as_ref().and_then(|c| {
+                crate::sip::typed::Contact::parse(c.value())
+                    .ok()
+                    .map(|c| c.uri)
+            }),
         }
     }
 
@@ -1400,7 +1373,10 @@ impl Dialog {
         self.hangup_with_headers(None).await
     }
 
-    pub async fn hangup_with_headers(&self, headers: Option<Vec<rsip::Header>>) -> Result<()> {
+    pub async fn hangup_with_headers(
+        &self,
+        headers: Option<Vec<crate::sip::Header>>,
+    ) -> Result<()> {
         match self {
             Dialog::ServerInvite(d) => d.bye_with_headers(headers).await,
             Dialog::ClientInvite(d) => d.hangup_with_headers(headers).await,
@@ -1426,8 +1402,8 @@ impl Dialog {
     /// receiving responses such as 200 OK.
     pub fn set_remote_target(
         &self,
-        uri: rsip::Uri,
-        contact: Option<rsip::headers::untyped::Contact>,
+        uri: crate::sip::Uri,
+        contact: Option<crate::sip::headers::untyped::Contact>,
     ) {
         match self {
             Dialog::ServerInvite(d) => d.inner.set_remote_target(uri, contact),
@@ -1441,10 +1417,10 @@ impl Dialog {
 
     pub async fn request(
         &self,
-        method: rsip::Method,
-        headers: Option<Vec<rsip::Header>>,
+        method: crate::sip::Method,
+        headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
-    ) -> Result<Option<rsip::Response>> {
+    ) -> Result<Option<crate::sip::Response>> {
         match self {
             Dialog::ServerInvite(d) => d.request(method, headers, body).await,
             Dialog::ClientInvite(d) => d.request(method, headers, body).await,
@@ -1457,10 +1433,10 @@ impl Dialog {
 
     pub async fn refer(
         &self,
-        refer_to: rsip::Uri,
-        headers: Option<Vec<rsip::Header>>,
+        refer_to: crate::sip::Uri,
+        headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
-    ) -> Result<Option<rsip::Response>> {
+    ) -> Result<Option<crate::sip::Response>> {
         match self {
             Dialog::ServerInvite(d) => d.refer(refer_to, headers, body).await,
             Dialog::ClientInvite(d) => d.refer(refer_to, headers, body).await,
@@ -1473,9 +1449,9 @@ impl Dialog {
 
     pub async fn message(
         &self,
-        headers: Option<Vec<rsip::Header>>,
+        headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
-    ) -> Result<Option<rsip::Response>> {
+    ) -> Result<Option<crate::sip::Response>> {
         match self {
             Dialog::ServerInvite(d) => d.message(headers, body).await,
             Dialog::ClientInvite(d) => d.message(headers, body).await,
@@ -1487,8 +1463,8 @@ impl Dialog {
     }
 }
 
-fn is_system_header(h: &rsip::Header) -> bool {
-    use rsip::Header::*;
+fn is_system_header(h: &crate::sip::Header) -> bool {
+    use crate::sip::Header::*;
     matches!(
         h,
         Via(_)

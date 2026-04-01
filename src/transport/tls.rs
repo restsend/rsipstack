@@ -4,8 +4,8 @@ use super::{
     stream::{StreamConnection, StreamConnectionInner},
     SipConnection,
 };
+use crate::sip::SipMessage;
 use crate::{error::Error, transport::transport_layer::TransportLayerInnerRef, Result};
-use rsip::SipMessage;
 use rustls::client::danger::ServerCertVerifier;
 use rustls::crypto::CryptoProvider;
 use rustls::server::{ClientHello, ResolvesServerCert};
@@ -112,7 +112,7 @@ struct TlsKeyAndCert {
 }
 
 pub struct ReloadableCertResolver {
-    key_and_cert: std::sync::RwLock<TlsKeyAndCert>,
+    key_and_cert: parking_lot::RwLock<TlsKeyAndCert>,
     provider: Arc<CryptoProvider>,
 }
 
@@ -125,7 +125,7 @@ impl ReloadableCertResolver {
         let certified_key = Self::create_certified_key(cert_data, key_data, &provider)?;
 
         Ok(Self {
-            key_and_cert: std::sync::RwLock::new(TlsKeyAndCert { certified_key }),
+            key_and_cert: parking_lot::RwLock::new(TlsKeyAndCert { certified_key }),
             provider,
         })
     }
@@ -189,9 +189,7 @@ impl ReloadableCertResolver {
             .map(|e| format!("expires={}", e))
             .unwrap_or_else(|| "expires=unknown".to_string());
 
-        let mut guard = self.key_and_cert.write().map_err(|_| {
-            Error::Error("Failed to acquire write lock on cert resolver".to_string())
-        })?;
+        let mut guard = self.key_and_cert.write();
         guard.certified_key = certified_key;
         warn!(
             "TLS certificate reloaded successfully [{}, {}]",
@@ -203,7 +201,7 @@ impl ReloadableCertResolver {
 
 impl ResolvesServerCert for ReloadableCertResolver {
     fn resolve(&self, _client_hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
-        let guard = self.key_and_cert.read().ok()?;
+        let guard = self.key_and_cert.read();
         Some(guard.certified_key.clone())
     }
 }
@@ -217,8 +215,8 @@ impl Debug for ReloadableCertResolver {
 impl Clone for ReloadableCertResolver {
     fn clone(&self) -> Self {
         Self {
-            key_and_cert: std::sync::RwLock::new(TlsKeyAndCert {
-                certified_key: self.key_and_cert.read().unwrap().certified_key.clone(),
+            key_and_cert: parking_lot::RwLock::new(TlsKeyAndCert {
+                certified_key: self.key_and_cert.read().certified_key.clone(),
             }),
             provider: self.provider.clone(),
         }
@@ -273,7 +271,7 @@ pub struct TlsListenerConnectionInner {
     pub local_addr: SipAddr,
     pub external: Option<SipAddr>,
     pub config: TlsConfig,
-    pub cert_resolver: std::sync::Mutex<Option<Arc<ReloadableCertResolver>>>,
+    pub cert_resolver: parking_lot::Mutex<Option<Arc<ReloadableCertResolver>>>,
 }
 
 #[derive(Clone)]
@@ -290,11 +288,11 @@ impl TlsListenerConnection {
         let inner = TlsListenerConnectionInner {
             local_addr,
             external: external.map(|addr| SipAddr {
-                r#type: Some(rsip::transport::Transport::Tls),
+                r#type: Some(crate::sip::transport::Transport::Tls),
                 addr: addr.into(),
             }),
             config,
-            cert_resolver: std::sync::Mutex::new(None),
+            cert_resolver: parking_lot::Mutex::new(None),
         };
         Ok(TlsListenerConnection {
             inner: Arc::new(inner),
@@ -307,7 +305,7 @@ impl TlsListenerConnection {
     ) -> Result<()> {
         let listener = TcpListener::bind(self.inner.local_addr.get_socketaddr()?).await?;
         let (acceptor, resolver) = Self::create_acceptor(&self.inner.config).await?;
-        *self.inner.cert_resolver.lock().unwrap() = Some(resolver);
+        *self.inner.cert_resolver.lock() = Some(resolver);
 
         tokio::spawn(async move {
             loop {
@@ -338,7 +336,7 @@ impl TlsListenerConnection {
 
                     // Create remote SIP address
                     let remote_sip_addr = SipAddr {
-                        r#type: Some(rsip::transport::Transport::Tls),
+                        r#type: Some(crate::sip::transport::Transport::Tls),
                         addr: remote_addr.into(),
                     };
                     // Create TLS connection
@@ -401,7 +399,7 @@ impl TlsListenerConnection {
 
     pub async fn reload_tls_config(&self, cert: Vec<u8>, key: Vec<u8>) -> Result<()> {
         let resolver = {
-            let guard = self.inner.cert_resolver.lock().unwrap();
+            let guard = self.inner.cert_resolver.lock();
             guard
                 .as_ref()
                 .ok_or_else(|| Error::Error("No cert resolver available".to_string()))?
@@ -508,19 +506,19 @@ impl TlsConnection {
         let domain_string = tls_config
             .and_then(|c| c.sni_hostname.clone())
             .unwrap_or_else(|| match &remote_addr.addr.host {
-                rsip::host_with_port::Host::Domain(domain) => domain.to_string(),
-                rsip::host_with_port::Host::IpAddr(ip) => ip.to_string(),
+                crate::sip::Host::Domain(domain) => domain.to_string(),
+                crate::sip::Host::IpAddr(ip) => ip.to_string(),
             });
 
         let connector = TlsConnector::from(Arc::new(client_config));
 
         let socket_addr = match &remote_addr.addr.host {
-            rsip::host_with_port::Host::Domain(domain) => {
-                let port = remote_addr.addr.port.as_ref().map_or(5061, |p| *p.value());
+            crate::sip::Host::Domain(domain) => {
+                let port = remote_addr.addr.port.as_ref().map_or(5061, |p| p.value());
                 format!("{}:{}", domain, port).parse()?
             }
-            rsip::host_with_port::Host::IpAddr(ip) => {
-                let port = remote_addr.addr.port.as_ref().map_or(5061, |p| *p.value());
+            crate::sip::Host::IpAddr(ip) => {
+                let port = remote_addr.addr.port.as_ref().map_or(5061, |p| p.value());
                 SocketAddr::new(*ip, port)
             }
         };
@@ -531,7 +529,7 @@ impl TlsConnection {
 
         let stream = TcpStream::connect(socket_addr).await?;
         let local_addr = SipAddr {
-            r#type: Some(rsip::transport::Transport::Tls),
+            r#type: Some(crate::sip::transport::Transport::Tls),
             addr: stream.local_addr()?.into(),
         };
 
@@ -562,7 +560,7 @@ impl TlsConnection {
         cancel_token: Option<CancellationToken>,
     ) -> Result<Self> {
         let local_addr = SipAddr {
-            r#type: Some(rsip::transport::Transport::Tls),
+            r#type: Some(crate::sip::transport::Transport::Tls),
             addr: stream.get_ref().0.local_addr()?.into(),
         };
 
@@ -596,7 +594,7 @@ impl TlsConnection {
         cancel_token: Option<CancellationToken>,
     ) -> Result<Self> {
         let local_addr = SipAddr {
-            r#type: Some(rsip::transport::Transport::Tls),
+            r#type: Some(crate::sip::transport::Transport::Tls),
             addr: stream.get_ref().0.local_addr()?.into(),
         };
 

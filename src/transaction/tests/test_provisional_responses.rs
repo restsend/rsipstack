@@ -4,16 +4,16 @@ use crate::transaction::{
     transaction::{Transaction, TransactionEvent},
     TransactionState,
 };
-use rsip::{headers::*, Response, SipMessage, StatusCode};
+use crate::sip::{headers::*, Response, SipMessage, StatusCode};
 
 #[tokio::test]
 async fn test_multiple_provisional_responses() -> crate::Result<()> {
     let endpoint = create_test_endpoint(Some("127.0.0.1:0")).await?;
 
     // Create INVITE request
-    let invite_req = rsip::Request {
-        method: rsip::Method::Invite,
-        uri: rsip::Uri::try_from("sip:test.example.com:5060").unwrap(),
+    let invite_req = crate::sip::Request {
+        method: crate::sip::Method::Invite,
+        uri: crate::sip::Uri::try_from("sip:test.example.com:5060").unwrap(),
         headers: vec![
             Via::new("SIP/2.0/UDP test.example.com:5060;branch=z9hG4bKnashds").into(),
             CSeq::new("1 INVITE").into(),
@@ -23,7 +23,7 @@ async fn test_multiple_provisional_responses() -> crate::Result<()> {
             MaxForwards::new("70").into(),
         ]
         .into(),
-        version: rsip::Version::V2,
+        version: crate::sip::Version::V2,
         body: Default::default(),
     };
     let key = TransactionKey::from_request(&invite_req, TransactionRole::Client)?;
@@ -37,7 +37,7 @@ async fn test_multiple_provisional_responses() -> crate::Result<()> {
 
     // 1. Send first 183 Session Progress (no body)
     let resp1 = Response {
-        version: rsip::Version::V2,
+        version: crate::sip::Version::V2,
         status_code: StatusCode::SessionProgress, // 183
         headers: vec![
             Via::new("SIP/2.0/UDP test.example.com:5060;branch=z9hG4bKnashds").into(),
@@ -71,7 +71,7 @@ async fn test_multiple_provisional_responses() -> crate::Result<()> {
 
     // 2. Send second 183 Session Progress (with body)
     let resp2 = Response {
-        version: rsip::Version::V2,
+        version: crate::sip::Version::V2,
         status_code: StatusCode::SessionProgress, // 183
         headers: vec![
             Via::new("SIP/2.0/UDP test.example.com:5060;branch=z9hG4bKnashds").into(),

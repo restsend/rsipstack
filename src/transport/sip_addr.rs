@@ -1,5 +1,6 @@
+use crate::sip::uri::ParamsExt;
+use crate::sip::{Host, HostWithPort, Param, Scheme, Transport, Uri};
 use crate::Result;
-use rsip::{host_with_port, HostWithPort, Transport};
 use std::{fmt, hash::Hash, net::SocketAddr};
 
 /// SIP Address
@@ -25,7 +26,7 @@ use std::{fmt, hash::Hash, net::SocketAddr};
 ///
 /// ```rust
 /// use rsipstack::transport::SipAddr;
-/// use rsip::transport::Transport;
+/// use rsipstack::sip::{HostWithPort, Transport};
 /// use std::net::SocketAddr;
 ///
 /// // Create from socket address
@@ -35,7 +36,7 @@ use std::{fmt, hash::Hash, net::SocketAddr};
 /// // Create with specific transport
 /// let sip_addr = SipAddr::new(
 ///     Transport::Tcp,
-///     rsip::HostWithPort::try_from("example.com:5060").unwrap()
+///     HostWithPort::try_from("example.com:5060").unwrap()
 /// );
 ///
 /// // Convert to socket address (for IP addresses)
@@ -57,11 +58,11 @@ use std::{fmt, hash::Hash, net::SocketAddr};
 ///
 /// SipAddr can be converted to/from:
 /// * `SocketAddr` (for IP addresses only)
-/// * `rsip::Uri` (SIP URI format)
-/// * `rsip::HostWithPort` (host/port only)
+/// * `rsipstack::sip::Uri` (SIP URI format)
+/// * `rsipstack::sip::HostWithPort` (host/port only)
 #[derive(Debug, Eq, PartialEq, Clone, Default)]
 pub struct SipAddr {
-    pub r#type: Option<rsip::transport::Transport>,
+    pub r#type: Option<Transport>,
     pub addr: HostWithPort,
 }
 
@@ -81,15 +82,15 @@ impl Hash for SipAddr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.r#type.hash(state);
         match self.addr.host {
-            host_with_port::Host::Domain(ref domain) => domain.hash(state),
-            host_with_port::Host::IpAddr(ref ip_addr) => ip_addr.hash(state),
+            Host::Domain(ref domain) => domain.hash(state),
+            Host::IpAddr(ref ip_addr) => ip_addr.hash(state),
         }
         self.addr.port.map(|port| port.value().hash(state));
     }
 }
 
 impl SipAddr {
-    pub fn new(transport: rsip::transport::Transport, addr: HostWithPort) -> Self {
+    pub fn new(transport: Transport, addr: HostWithPort) -> Self {
         SipAddr {
             r#type: Some(transport),
             addr,
@@ -98,11 +99,11 @@ impl SipAddr {
 
     pub fn get_socketaddr(&self) -> Result<SocketAddr> {
         match &self.addr.host {
-            host_with_port::Host::Domain(domain) => Err(crate::Error::Error(format!(
+            Host::Domain(domain) => Err(crate::Error::Error(format!(
                 "Cannot convert domain {} to SocketAddr",
                 domain
             ))),
-            host_with_port::Host::IpAddr(ip_addr) => {
+            Host::IpAddr(ip_addr) => {
                 let port = self.addr.port.map_or(5060, |p| p.value().to_owned());
                 Ok(SocketAddr::new(ip_addr.to_owned(), port))
             }
@@ -110,36 +111,34 @@ impl SipAddr {
     }
 }
 
-impl From<SipAddr> for rsip::HostWithPort {
+impl From<SipAddr> for HostWithPort {
     fn from(val: SipAddr) -> Self {
         val.addr
     }
 }
 
-impl From<SipAddr> for rsip::Uri {
+impl From<SipAddr> for Uri {
     fn from(val: SipAddr) -> Self {
         Self::from(&val)
     }
 }
 
-impl From<&SipAddr> for rsip::Uri {
+impl From<&SipAddr> for Uri {
     fn from(addr: &SipAddr) -> Self {
         let params = match addr.r#type {
-            Some(Transport::Tcp) => vec![rsip::Param::Transport(Transport::Tcp)],
-            Some(Transport::Tls) => vec![rsip::Param::Transport(Transport::Tls)],
-            Some(Transport::Ws) => vec![rsip::Param::Transport(Transport::Ws)],
-            Some(Transport::Wss) => vec![rsip::Param::Transport(Transport::Wss)],
-            Some(Transport::TlsSctp) => vec![rsip::Param::Transport(Transport::TlsSctp)],
-            Some(Transport::Sctp) => vec![rsip::Param::Transport(Transport::Sctp)],
+            Some(Transport::Tcp) => vec![Param::Transport(Transport::Tcp)],
+            Some(Transport::Tls) => vec![Param::Transport(Transport::Tls)],
+            Some(Transport::Ws) => vec![Param::Transport(Transport::Ws)],
+            Some(Transport::Wss) => vec![Param::Transport(Transport::Wss)],
+            Some(Transport::TlsSctp) => vec![Param::Transport(Transport::TlsSctp)],
+            Some(Transport::Sctp) => vec![Param::Transport(Transport::Sctp)],
             _ => vec![],
         };
         let scheme = match addr.r#type {
-            Some(rsip::transport::Transport::Wss)
-            | Some(rsip::transport::Transport::Tls)
-            | Some(rsip::transport::Transport::TlsSctp) => rsip::Scheme::Sips,
-            _ => rsip::Scheme::Sip,
+            Some(Transport::Wss) | Some(Transport::Tls) | Some(Transport::TlsSctp) => Scheme::Sips,
+            _ => Scheme::Sip,
         };
-        rsip::Uri {
+        Uri {
             scheme: Some(scheme),
             host_with_port: addr.addr.clone(),
             params,
@@ -161,8 +160,8 @@ impl From<SocketAddr> for SipAddr {
     }
 }
 
-impl From<rsip::host_with_port::HostWithPort> for SipAddr {
-    fn from(host_with_port: rsip::host_with_port::HostWithPort) -> Self {
+impl From<HostWithPort> for SipAddr {
+    fn from(host_with_port: HostWithPort) -> Self {
         SipAddr {
             r#type: None,
             addr: host_with_port,
@@ -170,10 +169,10 @@ impl From<rsip::host_with_port::HostWithPort> for SipAddr {
     }
 }
 
-impl TryFrom<&rsip::Uri> for SipAddr {
+impl TryFrom<&Uri> for SipAddr {
     type Error = crate::Error;
 
-    fn try_from(uri: &rsip::Uri) -> Result<Self> {
+    fn try_from(uri: &Uri) -> Result<Self> {
         let transport = uri.transport().cloned();
         Ok(SipAddr {
             r#type: transport,
@@ -182,10 +181,10 @@ impl TryFrom<&rsip::Uri> for SipAddr {
     }
 }
 
-impl TryFrom<rsip::Uri> for SipAddr {
+impl TryFrom<Uri> for SipAddr {
     type Error = crate::Error;
 
-    fn try_from(uri: rsip::Uri) -> Result<Self> {
+    fn try_from(uri: Uri) -> Result<Self> {
         let transport = uri.transport().cloned();
         Ok(SipAddr {
             r#type: transport,
@@ -194,10 +193,10 @@ impl TryFrom<rsip::Uri> for SipAddr {
     }
 }
 
-impl<'a> TryFrom<std::borrow::Cow<'a, rsip::Uri>> for SipAddr {
+impl<'a> TryFrom<std::borrow::Cow<'a, Uri>> for SipAddr {
     type Error = crate::Error;
 
-    fn try_from(uri: std::borrow::Cow<'a, rsip::Uri>) -> Result<Self> {
+    fn try_from(uri: std::borrow::Cow<'a, Uri>) -> Result<Self> {
         match uri {
             std::borrow::Cow::Owned(uri) => uri.try_into(),
             std::borrow::Cow::Borrowed(uri) => uri.try_into(),

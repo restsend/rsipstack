@@ -2,8 +2,8 @@ use crate::{
     transaction::{key::TransactionRole, transaction::Transaction},
     Error, Result,
 };
-use rsip::{
-    prelude::{HeadersExt, UntypedHeader},
+use crate::sip::{
+    prelude::HeadersExt,
     Request, Response,
 };
 
