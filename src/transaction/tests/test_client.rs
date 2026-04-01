@@ -248,6 +248,12 @@ Content-Length: 0\r\n\r\n";
     let invite = make_invite_request("sip:bob@example.com")?;
     let ack = endpoint.inner.make_ack(&invite, &response)?;
 
+    let expected_uri = Uri::try_from("sip:uas@192.0.2.55:5080")?;
+    assert_eq!(
+        ack.uri, expected_uri,
+        "lr=on must be treated as loose routing so ACK targets Contact",
+    );
+
     let routes: Vec<String> = ack
         .headers
         .iter()
@@ -262,6 +268,15 @@ Content-Length: 0\r\n\r\n";
             .iter()
             .any(|r| { r.contains("du=sip:1.2.3.4:5060") && r.contains("did=893.d6d1") }),
         "ACK Route headers must preserve du parameter values with colons and keep following params"
+    );
+
+    assert_eq!(
+        routes,
+        vec![
+            "<sip:4.5.6.7:32222;lr=on;ftag=d4nwJ0jF>".to_string(),
+            "<sip:2.2.2.2;lr=on;ftag=d4nwJ0jF;du=sip:1.2.3.4:5060;did=893.d6d1>".to_string(),
+        ],
+        "lr=on route set must be handled as loose routing and keep reversed Record-Route order",
     );
 
     Ok(())

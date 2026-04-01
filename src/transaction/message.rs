@@ -2,6 +2,7 @@ use super::{endpoint::EndpointInner, make_call_id};
 use crate::sip::{
     prelude::{HeadersExt, ToTypedHeader},
     typed::Route as TypedRoute,
+    uri::ParamsExt,
     Error, Header, Request, Response, StatusCode, UriWithParams,
 };
 use crate::sip::{CallId, Method};
@@ -297,11 +298,7 @@ impl EndpointInner {
                 }
                 [head, rest @ ..] => {
                     // loose routing
-                    if head
-                        .params
-                        .iter()
-                        .any(|param| matches!(param, crate::sip::Param::Lr))
-                    {
+                    if head.has_lr() {
                         request_uri = remote_target_uri;
                         route_set
                     } else {

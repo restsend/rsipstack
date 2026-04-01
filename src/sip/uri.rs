@@ -668,7 +668,12 @@ pub trait ParamsExt {
         })
     }
     fn has_lr(&self) -> bool {
-        self.params().iter().any(|p| matches!(p, Param::Lr))
+        self.params().iter().any(|p| {
+            matches!(p, Param::Lr)
+                || matches!(p, Param::Other(name, Some(value))
+                    if name.value().eq_ignore_ascii_case("lr")
+                        && value.value().eq_ignore_ascii_case("on"))
+        })
     }
     fn expires(&self) -> Option<&str> {
         self.params().iter().find_map(|p| {
@@ -826,7 +831,7 @@ impl ParamsExt for Uri {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_uri, Host, Param, Scheme};
+    use super::{parse_uri, Host, Param, ParamsExt, Scheme};
 
     #[test]
     fn uri_param_value_keeps_colons_and_following_params() {
@@ -897,6 +902,13 @@ mod tests {
         let uri = parse_uri("sip:proxy.restsend.com;lr").unwrap();
         assert!(matches!(uri.params.first(), Some(Param::Lr)));
         assert_eq!(uri.to_string(), "sip:proxy.restsend.com;lr");
+    }
+
+    #[test]
+    fn uri_lr_on_is_treated_as_loose_route() {
+        let uri = parse_uri("sip:proxy.restsend.com;lr=on").unwrap();
+        assert!(uri.has_lr());
+        assert_eq!(uri.to_string(), "sip:proxy.restsend.com;lr=on");
     }
 
     #[test]

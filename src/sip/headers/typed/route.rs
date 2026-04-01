@@ -1,5 +1,5 @@
 use super::parse_helpers::parse_display_uri_params_str;
-use crate::sip::{uri::Param, Error, Header, Uri};
+use crate::sip::{uri::Param, uri::ParamsExt, Error, Header, Uri};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Route {
@@ -62,7 +62,7 @@ impl Route {
     }
 
     pub fn has_lr(&self) -> bool {
-        self.uri.params.iter().any(|p| matches!(p, Param::Lr))
+        self.uri.has_lr()
     }
 
     pub fn has_ob(&self) -> bool {
@@ -182,6 +182,7 @@ mod tests {
 
     #[test]
     fn route_with_transport_param() {
+        use crate::sip::uri::Param;
         use crate::sip::Transport;
         let r = Route::parse("<sip:proxy.restsend.com;transport=tcp;lr>").unwrap();
         assert!(r.has_lr());
@@ -190,5 +191,12 @@ mod tests {
             .params
             .iter()
             .any(|p| matches!(p, Param::Transport(Transport::Tcp))));
+    }
+
+    #[test]
+    fn route_lr_on_is_treated_as_loose_route() {
+        let r = Route::parse("<sip:proxy.restsend.com;lr=on>").unwrap();
+        assert!(r.has_lr());
+        assert_eq!(r.uri.to_string(), "sip:proxy.restsend.com;lr=on");
     }
 }
