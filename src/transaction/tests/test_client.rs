@@ -231,6 +231,43 @@ Content-Length: 0\r\n\r\n";
 }
 
 #[tokio::test]
+async fn test_make_ack_preserves_du_param_with_colons_in_record_route() -> Result<()> {
+    let endpoint = super::create_test_endpoint(None).await?;
+
+    let raw_response = "SIP/2.0 200 OK\r\n\
+Via: SIP/2.0/UDP uac.example.com:5060;branch=z9hG4bK1\r\n\
+Record-Route: <sip:2.2.2.2;lr=on;ftag=d4nwJ0jF;du=sip:1.2.3.4:5060;did=893.d6d1>,<sip:4.5.6.7:32222;lr=on;ftag=d4nwJ0jF>\r\n\
+From: <sip:alice@example.com>;tag=from-tag\r\n\
+To: <sip:bob@example.com>;tag=to-tag\r\n\
+Call-ID: callid@example.com\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:uas@192.0.2.55:5080;transport=udp>\r\n\
+Content-Length: 0\r\n\r\n";
+
+    let response = Response::try_from(raw_response)?;
+    let invite = make_invite_request("sip:bob@example.com")?;
+    let ack = endpoint.inner.make_ack(&invite, &response)?;
+
+    let routes: Vec<String> = ack
+        .headers
+        .iter()
+        .filter_map(|header| match header {
+            Header::Route(route) => Some(route.value().to_string()),
+            _ => None,
+        })
+        .collect();
+
+    assert!(
+        routes
+            .iter()
+            .any(|r| { r.contains("du=sip:1.2.3.4:5060") && r.contains("did=893.d6d1") }),
+        "ACK Route headers must preserve du parameter values with colons and keep following params"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_make_ack_uses_contact_with_ob() -> Result<()> {
     let endpoint = super::create_test_endpoint(None).await?;
 
