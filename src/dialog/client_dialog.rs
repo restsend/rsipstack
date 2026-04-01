@@ -185,11 +185,8 @@ impl ClientInviteDialog {
     /// # Parameters
     /// * `reason` - Value of the `Reason` header (without the `Reason:` name).
     pub async fn bye_with_reason(&self, reason: String) -> Result<()> {
-        self.bye_with_headers(Some(vec![crate::sip::Header::Other(
-            "Reason".into(),
-            reason.into(),
-        )]))
-        .await
+        self.bye_with_headers(Some(vec![crate::sip::Header::Reason(reason.into())]))
+            .await
     }
 
     /// Hang up the call
@@ -230,11 +227,8 @@ impl ClientInviteDialog {
     /// # Parameters
     /// * `reason` - Value of the `Reason` header used for BYE.
     pub async fn hangup_with_reason(&self, reason: String) -> Result<()> {
-        self.hangup_with_headers(Some(vec![crate::sip::Header::Other(
-            "Reason".into(),
-            reason.into(),
-        )]))
-        .await
+        self.hangup_with_headers(Some(vec![crate::sip::Header::Reason(reason.into())]))
+            .await
     }
 
     /// Send a CANCEL request to cancel an ongoing INVITE
@@ -264,11 +258,7 @@ impl ClientInviteDialog {
             return Ok(());
         }
         debug!(id = %self.id(), "sending cancel request");
-            let mut cancel_request = self
-                .inner
-                .initial_request
-                .lock()
-                .clone();
+        let mut cancel_request = self.inner.initial_request.lock().clone();
         let invite_seq = cancel_request.cseq_header()?.seq()?;
         cancel_request
             .headers_mut()
@@ -324,7 +314,7 @@ impl ClientInviteDialog {
         let request =
             self.inner
                 .make_request(crate::sip::Method::Invite, None, None, None, headers, body)?;
-            let resp = self.inner.do_request(request.clone()).await;
+        let resp = self.inner.do_request(request.clone()).await;
         match resp {
             Ok(Some(ref resp)) => {
                 if resp.status_code == StatusCode::OK {
@@ -517,8 +507,8 @@ impl ClientInviteDialog {
         sub_state: &str,
     ) -> Result<Option<crate::sip::Response>> {
         let headers = vec![
-            crate::sip::Header::Other("Event".into(), "refer".into()),
-            crate::sip::Header::Other("Subscription-State".into(), sub_state.into()),
+            crate::sip::Header::Event("refer".into()),
+            crate::sip::Header::SubscriptionState(sub_state.into()),
             crate::sip::Header::ContentType("message/sipfrag".into()),
         ];
 
@@ -758,11 +748,7 @@ impl ClientInviteDialog {
                             self.inner.update_remote_tag("").ok();
                             // Update initial_request with the new invite request
                             {
-                                let mut req = self
-                                    .inner
-                                    .initial_request
-                                    .lock()
-                                     ;
+                                let mut req = self.inner.initial_request.lock();
                                 *req = tx.original.clone();
                             }
                             continue;
@@ -798,10 +784,7 @@ impl ClientInviteDialog {
                             self.inner.update_route_set_from_response(&resp);
                             // 200 response to INVITE always contains Contact header
                             let contact = resp.contact_header()?;
-                            self.inner
-                                .remote_contact
-                                .lock()
-                                .replace(contact.clone());
+                            self.inner.remote_contact.lock().replace(contact.clone());
 
                             let contact_uri = resp
                                 .typed_contact_headers()?

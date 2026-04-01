@@ -125,10 +125,7 @@ impl ServerInviteDialog {
     /// this dialog. This can be used to access the original request
     /// headers, body, and other information.
     pub fn initial_request(&self) -> Request {
-        self.inner
-            .initial_request
-            .lock()
-            .clone()
+        self.inner.initial_request.lock().clone()
     }
 
     pub fn ringing(&self, headers: Option<Vec<Header>>, body: Option<Vec<u8>>) -> Result<()> {
@@ -300,10 +297,7 @@ impl ServerInviteDialog {
         }
         debug!(id=%self.id(), ?code, ?reason, "rejecting dialog");
         let headers = if let Some(reason) = reason {
-            Some(vec![crate::sip::Header::Other(
-                "Reason".into(),
-                reason.into(),
-            )])
+            Some(vec![crate::sip::Header::Reason(reason.into())])
         } else {
             None
         };
@@ -384,11 +378,8 @@ impl ServerInviteDialog {
     /// # Parameters
     /// * `reason` - Value of the `Reason` header (without the `Reason:` name).
     pub async fn bye_with_reason(&self, reason: String) -> Result<()> {
-        self.bye_with_headers(Some(vec![crate::sip::Header::Other(
-            "Reason".into(),
-            reason.into(),
-        )]))
-        .await
+        self.bye_with_headers(Some(vec![crate::sip::Header::Reason(reason.into())]))
+            .await
     }
 
     /// Send a re-INVITE request to modify the session
@@ -592,8 +583,8 @@ impl ServerInviteDialog {
         sub_state: &str,
     ) -> Result<Option<crate::sip::Response>> {
         let headers = vec![
-            crate::sip::Header::Other("Event".into(), "refer".into()),
-            crate::sip::Header::Other("Subscription-State".into(), sub_state.into()),
+            crate::sip::Header::Event("refer".into()),
+            crate::sip::Header::SubscriptionState(sub_state.into()),
             crate::sip::Header::ContentType("message/sipfrag".into()),
         ];
 

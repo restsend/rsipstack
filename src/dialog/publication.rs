@@ -1,7 +1,7 @@
 use super::dialog::{DialogInnerRef, DialogState, TerminatedReason, TransactionHandle};
 use super::DialogId;
-use crate::Result;
 use crate::sip::{Header, Method, StatusCode, StatusCodeKind};
+use crate::Result;
 use parking_lot::Mutex;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -69,7 +69,10 @@ impl ClientPublicationDialog {
         self.close_with_headers(None).await
     }
 
-    pub async fn close_with_headers(&self, extra_headers: Option<Vec<crate::sip::Header>>) -> Result<()> {
+    pub async fn close_with_headers(
+        &self,
+        extra_headers: Option<Vec<crate::sip::Header>>,
+    ) -> Result<()> {
         let mut headers = extra_headers.unwrap_or_default();
         headers.push(Header::Expires(0.into()));
         if let Some(etag) = self.etag() {
@@ -100,11 +103,11 @@ impl ClientPublicationDialog {
         body: Option<Vec<u8>>,
     ) -> Result<Option<crate::sip::Response>> {
         let mut headers = headers.unwrap_or_default();
-        headers.push(crate::sip::Header::Other(
-            "Refer-To".into(),
+        headers.push(crate::sip::Header::ReferTo(
             format!("<{}>", refer_to).into(),
         ));
-        self.request(crate::sip::Method::Refer, Some(headers), body).await
+        self.request(crate::sip::Method::Refer, Some(headers), body)
+            .await
     }
 
     pub async fn message(
@@ -112,7 +115,8 @@ impl ClientPublicationDialog {
         headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
     ) -> Result<Option<crate::sip::Response>> {
-        self.request(crate::sip::Method::Message, headers, body).await
+        self.request(crate::sip::Method::Message, headers, body)
+            .await
     }
 
     pub async fn handle(
@@ -195,7 +199,10 @@ impl ServerPublicationDialog {
         self.close_with_headers(None).await
     }
 
-    pub async fn close_with_headers(&self, extra_headers: Option<Vec<crate::sip::Header>>) -> Result<()> {
+    pub async fn close_with_headers(
+        &self,
+        extra_headers: Option<Vec<crate::sip::Header>>,
+    ) -> Result<()> {
         let mut headers = extra_headers.unwrap_or_default();
         headers.push(Header::Expires(0.into()));
         if let Some(etag) = self.etag() {
@@ -229,11 +236,11 @@ impl ServerPublicationDialog {
         body: Option<Vec<u8>>,
     ) -> Result<Option<crate::sip::Response>> {
         let mut headers = headers.unwrap_or_default();
-        headers.push(crate::sip::Header::Other(
-            "Refer-To".into(),
+        headers.push(crate::sip::Header::ReferTo(
             format!("<{}>", refer_to).into(),
         ));
-        self.request(crate::sip::Method::Refer, Some(headers), body).await
+        self.request(crate::sip::Method::Refer, Some(headers), body)
+            .await
     }
 
     pub async fn message(
@@ -241,7 +248,8 @@ impl ServerPublicationDialog {
         headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
     ) -> Result<Option<crate::sip::Response>> {
-        self.request(crate::sip::Method::Message, headers, body).await
+        self.request(crate::sip::Method::Message, headers, body)
+            .await
     }
 
     pub async fn handle(

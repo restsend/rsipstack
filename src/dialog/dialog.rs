@@ -539,9 +539,9 @@ impl DialogInner {
         }
 
         let rack_value = format!("{} {} {}", rseq, cseq, method);
-        let mut headers = vec![Header::Other("RAck".into(), rack_value.into())];
+        let mut headers = vec![Header::RAck(rack_value.into())];
         if self.supports_100rel {
-            headers.push(Header::Other("Supported".into(), "100rel".into()));
+            headers.push(Header::Supported("100rel".into()));
         }
 
         let prack_request = self.make_request(
@@ -716,9 +716,7 @@ impl DialogInner {
             out.push(Header::Via(via.into()));
         }
 
-        out.push(Header::CallId(
-            self.id.lock().call_id.clone().into(),
-        ));
+        out.push(Header::CallId(self.id.lock().call_id.clone().into()));
 
         let to = self.to.lock().clone().to_string();
 
@@ -1305,68 +1303,36 @@ impl Dialog {
     }
     pub fn remote_contact(&self) -> Option<crate::sip::Uri> {
         match self {
-            Dialog::ServerInvite(d) => {
-                d.inner
-                    .remote_contact
-                    .lock()
-                    .as_ref()
-                    .and_then(|c| {
-                        crate::sip::typed::Contact::parse(c.value())
-                            .ok()
-                            .map(|c| c.uri)
-                    })
-            }
-            Dialog::ClientInvite(d) => {
-                d.inner
-                    .remote_contact
-                    .lock()
-                    .as_ref()
-                    .and_then(|c| {
-                        crate::sip::typed::Contact::parse(c.value())
-                            .ok()
-                            .map(|c| c.uri)
-                    })
-            }
-            Dialog::ServerSubscription(d) => d
-                .inner
-                .remote_contact
-                .lock()
-                .as_ref()
-                .and_then(|c| {
-                    crate::sip::typed::Contact::parse(c.value())
-                        .ok()
-                        .map(|c| c.uri)
-                }),
-            Dialog::ClientSubscription(d) => d
-                .inner
-                .remote_contact
-                .lock()
-                .as_ref()
-                .and_then(|c| {
-                    crate::sip::typed::Contact::parse(c.value())
-                        .ok()
-                        .map(|c| c.uri)
-                }),
-            Dialog::ServerPublication(d) => d
-                .inner
-                .remote_contact
-                .lock()
-                .as_ref()
-                .and_then(|c| {
-                    crate::sip::typed::Contact::parse(c.value())
-                        .ok()
-                        .map(|c| c.uri)
-                }),
-            Dialog::ClientPublication(d) => d
-                .inner
-                .remote_contact
-                .lock()
-                .as_ref()
-                .and_then(|c| {
-                    crate::sip::typed::Contact::parse(c.value())
-                        .ok()
-                        .map(|c| c.uri)
-                }),
+            Dialog::ServerInvite(d) => d.inner.remote_contact.lock().as_ref().and_then(|c| {
+                crate::sip::typed::Contact::parse(c.value())
+                    .ok()
+                    .map(|c| c.uri)
+            }),
+            Dialog::ClientInvite(d) => d.inner.remote_contact.lock().as_ref().and_then(|c| {
+                crate::sip::typed::Contact::parse(c.value())
+                    .ok()
+                    .map(|c| c.uri)
+            }),
+            Dialog::ServerSubscription(d) => d.inner.remote_contact.lock().as_ref().and_then(|c| {
+                crate::sip::typed::Contact::parse(c.value())
+                    .ok()
+                    .map(|c| c.uri)
+            }),
+            Dialog::ClientSubscription(d) => d.inner.remote_contact.lock().as_ref().and_then(|c| {
+                crate::sip::typed::Contact::parse(c.value())
+                    .ok()
+                    .map(|c| c.uri)
+            }),
+            Dialog::ServerPublication(d) => d.inner.remote_contact.lock().as_ref().and_then(|c| {
+                crate::sip::typed::Contact::parse(c.value())
+                    .ok()
+                    .map(|c| c.uri)
+            }),
+            Dialog::ClientPublication(d) => d.inner.remote_contact.lock().as_ref().and_then(|c| {
+                crate::sip::typed::Contact::parse(c.value())
+                    .ok()
+                    .map(|c| c.uri)
+            }),
         }
     }
 

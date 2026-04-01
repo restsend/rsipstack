@@ -428,6 +428,39 @@ impl Response {
     pub fn body_mut(&mut self) -> &mut Vec<u8> {
         &mut self.body
     }
+    pub fn reason_phrase(&self) -> Option<&str> {
+        self.headers.iter().find_map(|h| {
+            if let Header::Reason(r) = h {
+                Some(r.value())
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Get the received address from the Via header (including rport if present)
+    pub fn via_received(&self) -> Option<crate::sip::uri::HostWithPort> {
+        use crate::sip::HeadersExt;
+        self.via_header().ok().and_then(|via| {
+            via.typed().ok().and_then(|typed_via: crate::sip::typed::Via| {
+                let received = typed_via.params.iter().find_map(|p| {
+                    if let crate::sip::uri::Param::Received(r) = p {
+                        r.parse().ok().map(crate::sip::uri::Host::IpAddr)
+                    } else {
+                        None
+                    }
+                });
+                let rport = typed_via.params.iter().find_map(|p| {
+                    if let crate::sip::uri::Param::Rport(rport) = p {
+                        *rport
+                    } else {
+                        None
+                    }
+                });
+                received.map(|host| crate::sip::uri::HostWithPort { host, port: rport.map(crate::sip::transport::Port) })
+            })
+        })
+    }
 }
 
 impl HasHeaders for Response {

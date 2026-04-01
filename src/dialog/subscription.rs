@@ -1,8 +1,8 @@
 use super::dialog::{DialogInnerRef, DialogState, TerminatedReason, TransactionHandle};
 use super::DialogId;
+use crate::sip::{Header, Method, StatusCode};
 use crate::transaction::transaction::Transaction;
 use crate::Result;
-use crate::sip::{Header, Method, StatusCode};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
@@ -63,11 +63,11 @@ impl ClientSubscriptionDialog {
         body: Option<Vec<u8>>,
     ) -> Result<Option<crate::sip::Response>> {
         let mut headers = headers.unwrap_or_default();
-        headers.push(crate::sip::Header::Other(
-            "Refer-To".into(),
+        headers.push(crate::sip::Header::ReferTo(
             format!("<{}>", refer_to).into(),
         ));
-        self.request(crate::sip::Method::Refer, Some(headers), body).await
+        self.request(crate::sip::Method::Refer, Some(headers), body)
+            .await
     }
 
     pub async fn message(
@@ -75,7 +75,8 @@ impl ClientSubscriptionDialog {
         headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
     ) -> Result<Option<crate::sip::Response>> {
-        self.request(crate::sip::Method::Message, headers, body).await
+        self.request(crate::sip::Method::Message, headers, body)
+            .await
     }
 
     pub async fn handle(&mut self, tx: &mut Transaction) -> Result<()> {
@@ -197,11 +198,11 @@ impl ServerSubscriptionDialog {
         body: Option<Vec<u8>>,
     ) -> Result<Option<crate::sip::Response>> {
         let mut headers = headers.unwrap_or_default();
-        headers.push(crate::sip::Header::Other(
-            "Refer-To".into(),
+        headers.push(crate::sip::Header::ReferTo(
             format!("<{}>", refer_to).into(),
         ));
-        self.request(crate::sip::Method::Refer, Some(headers), body).await
+        self.request(crate::sip::Method::Refer, Some(headers), body)
+            .await
     }
 
     pub async fn message(
@@ -209,7 +210,8 @@ impl ServerSubscriptionDialog {
         headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
     ) -> Result<Option<crate::sip::Response>> {
-        self.request(crate::sip::Method::Message, headers, body).await
+        self.request(crate::sip::Method::Message, headers, body)
+            .await
     }
 
     pub async fn handle(&mut self, tx: &mut Transaction) -> Result<()> {

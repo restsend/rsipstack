@@ -493,6 +493,9 @@ impl Uri {
     pub fn user(&self) -> Option<&str> {
         self.auth.as_ref().map(|a| a.user.as_str())
     }
+    pub fn host(&self) -> &Host {
+        &self.host_with_port.host
+    }
 }
 
 impl TryFrom<&str> for Uri {
