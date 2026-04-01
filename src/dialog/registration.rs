@@ -3,7 +3,7 @@ use super::{
     DialogId,
 };
 use crate::sip::prelude::HeadersExt;
-use crate::sip::{Param, Response, SipMessage, StatusCode};
+use crate::sip::{Header, Param, Response, SipMessage, StatusCode};
 use crate::{
     transaction::{
         endpoint::EndpointInnerRef,
@@ -420,10 +420,9 @@ impl Registration {
         // RFC 3327 Path + RFC 5626 Outbound: tell the proxy to record
         // a Path header so INVITEs route through the correct edge node
         // (the one with our TCP connection).
-        request.headers.unique_push(rsip::Header::Other(
-            "Supported".into(),
-            "path, outbound".into(),
-        ));
+        request
+            .headers
+            .unique_push(Header::Supported("path, outbound".into()));
         if let Some(expires) = expires {
             request
                 .headers
@@ -439,12 +438,12 @@ impl Registration {
         if let Some(proxy) = &self.outbound_proxy {
             let mut dest = SipAddr::from(*proxy);
             // Inherit transport type from the request URI (e.g., TCP)
-            if let Some(rsip::Param::Transport(t)) = tx
+            if let Some(Param::Transport(t)) = tx
                 .original
                 .uri()
                 .params
                 .iter()
-                .find(|p| matches!(p, rsip::Param::Transport(_)))
+                .find(|p| matches!(p, Param::Transport(_)))
             {
                 dest.r#type = Some(t.clone());
             }

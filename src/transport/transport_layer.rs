@@ -186,26 +186,25 @@ impl TransportLayer {
     }
 
     pub fn get_addrs(&self) -> Vec<SipAddr> {
-        let mut addrs: Vec<SipAddr> = match self.inner.listens.read() {
-            Ok(listens) => listens.iter().map(|t| t.get_addr().to_owned()).collect(),
-            Err(e) => {
-                warn!(error = ?e, "Failed to read listens");
-                Vec::new()
-            }
-        };
+        let mut addrs: Vec<SipAddr> = self
+            .inner
+            .listens
+            .read()
+            .iter()
+            .map(|t| t.get_addr().to_owned())
+            .collect();
         // Also include local addresses from TCP/TLS client connections.
         // For connection-oriented transports, get_addr() returns the remote address
         // (used for lookup), but Via/Contact headers need the local address.
-        if let Ok(connections) = self.inner.connections.read() {
-            for conn in connections.values() {
-                match conn {
-                    SipConnection::Tcp(tcp) => {
-                        addrs.push(tcp.inner.local_addr.clone());
-                    }
-                    // TLS inner is private — skip for now
-                    SipConnection::Tls(_) => {}
-                    _ => {}
+        let connections = self.inner.connections.read();
+        for conn in connections.values() {
+            match conn {
+                SipConnection::Tcp(tcp) => {
+                    addrs.push(tcp.inner.local_addr.clone());
                 }
+                // TLS inner is private — skip for now
+                SipConnection::Tls(_) => {}
+                _ => {}
             }
         }
         addrs
