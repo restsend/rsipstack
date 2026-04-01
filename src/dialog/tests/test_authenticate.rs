@@ -9,9 +9,9 @@ use crate::transaction::{
     transaction::Transaction,
 };
 use crate::transport::TransportLayer;
-use rsip::headers::*;
-use rsip::prelude::{HeadersExt, ToTypedHeader};
-use rsip::{Request, Response, StatusCode};
+use crate::sip::headers::*;
+use crate::sip::prelude::{HeadersExt, ToTypedHeader};
+use crate::sip::{Request, Response, StatusCode};
 use tokio_util::sync::CancellationToken;
 
 async fn create_test_endpoint() -> crate::Result<crate::transaction::endpoint::Endpoint> {
@@ -26,8 +26,8 @@ async fn create_test_endpoint() -> crate::Result<crate::transaction::endpoint::E
 
 fn create_request_with_branch(branch: &str) -> Request {
     Request {
-        method: rsip::Method::Register,
-        uri: rsip::Uri::try_from("sip:example.com:5060").unwrap(),
+        method: crate::sip::Method::Register,
+        uri: crate::sip::Uri::try_from("sip:example.com:5060").unwrap(),
         headers: vec![
             Via::new(&format!(
                 "SIP/2.0/UDP alice.example.com:5060;branch={}",
@@ -41,7 +41,7 @@ fn create_request_with_branch(branch: &str) -> Request {
             MaxForwards::new("70").into(),
         ]
         .into(),
-        version: rsip::Version::V2,
+        version: crate::sip::Version::V2,
         body: vec![],
     }
 }
@@ -49,7 +49,7 @@ fn create_request_with_branch(branch: &str) -> Request {
 fn create_401_response() -> Response {
     Response {
         status_code: StatusCode::Unauthorized,
-        version: rsip::Version::V2,
+        version: crate::sip::Version::V2,
         headers: vec![
             Via::new("SIP/2.0/UDP alice.example.com:5060;branch=z9hG4bKnashds").into(),
             CSeq::new("1 REGISTER").into(),
@@ -83,10 +83,10 @@ async fn test_authenticate_via_header_branch_update() -> crate::Result<()> {
     let original_branch_param = original_via
         .params
         .iter()
-        .find(|p| matches!(p, rsip::Param::Branch(_)))
+        .find(|p| matches!(p, crate::sip::Param::Branch(_)))
         .expect("Original request should have branch parameter");
     let original_branch_value = match original_branch_param {
-        rsip::Param::Branch(b) => b.to_string(),
+        crate::sip::Param::Branch(b) => b.to_string(),
         _ => unreachable!(),
     };
     assert_eq!(original_branch_value, original_branch);
@@ -120,7 +120,7 @@ async fn test_authenticate_via_header_branch_update() -> crate::Result<()> {
     let old_branch_exists = new_via
         .params
         .iter()
-        .any(|p| matches!(p, rsip::Param::Branch(b) if b.to_string() == original_branch_value));
+        .any(|p| matches!(p, crate::sip::Param::Branch(b) if b.to_string() == original_branch_value));
     assert!(
         !old_branch_exists,
         "Old branch parameter should be removed from Via header"
@@ -130,10 +130,10 @@ async fn test_authenticate_via_header_branch_update() -> crate::Result<()> {
     let new_branch_param = new_via
         .params
         .iter()
-        .find(|p| matches!(p, rsip::Param::Branch(_)))
+        .find(|p| matches!(p, crate::sip::Param::Branch(_)))
         .expect("New request should have a new branch parameter");
     let new_branch_value = match new_branch_param {
-        rsip::Param::Branch(b) => b.to_string(),
+        crate::sip::Param::Branch(b) => b.to_string(),
         _ => unreachable!(),
     };
     assert_ne!(
@@ -147,7 +147,7 @@ async fn test_authenticate_via_header_branch_update() -> crate::Result<()> {
 
     // Verify rport parameter is added
     let has_rport = new_via.params.iter().any(
-        |p| matches!(p, rsip::Param::Other(key, _) if key.value().eq_ignore_ascii_case("rport")),
+        |p| matches!(p, crate::sip::Param::Rport(_)),
     );
     assert!(
         has_rport,
@@ -228,7 +228,7 @@ fn test_extract_digest_uri_raw() {
 #[test]
 fn test_compute_digest_case_sensitive_uri() {
     use crate::dialog::authenticate::compute_digest;
-    use rsip::headers::auth::Algorithm;
+    use crate::sip::headers::auth::Algorithm;
 
     // Compute digest with lowercase transport=tls
     let response_lower = compute_digest(
@@ -236,7 +236,7 @@ fn test_compute_digest_case_sensitive_uri() {
         "111",
         "pbx.e36",
         "K1KmT96onZZVMvBB",
-        &rsip::Method::Register,
+        &crate::sip::Method::Register,
         "sip:pbx.e36:5061;transport=tls",
         Algorithm::Md5,
         None,
@@ -248,7 +248,7 @@ fn test_compute_digest_case_sensitive_uri() {
         "111",
         "pbx.e36",
         "K1KmT96onZZVMvBB",
-        &rsip::Method::Register,
+        &crate::sip::Method::Register,
         "sip:pbx.e36:5061;transport=TLS",
         Algorithm::Md5,
         None,
@@ -266,7 +266,7 @@ fn test_compute_digest_case_sensitive_uri() {
         "111",
         "pbx.e36",
         "K1KmT96onZZVMvBB",
-        &rsip::Method::Register,
+        &crate::sip::Method::Register,
         "sip:pbx.e36:5061",
         Algorithm::Md5,
         None,
@@ -282,13 +282,11 @@ fn build_and_verify(
     password: &str,
     realm: &str,
     nonce: &str,
-    method: &rsip::Method,
+    method: &crate::sip::Method,
     uri_raw: &str,
-    algorithm: rsip::headers::auth::Algorithm,
+    algorithm: crate::sip::headers::auth::Algorithm,
 ) -> (bool, String) {
     use crate::dialog::authenticate::{compute_digest, verify_digest};
-    use rsip::headers::typed::tokenizers::AuthTokenizer;
-    use rsip::headers::typed::Tokenize;
 
     let response = compute_digest(
         username, password, realm, nonce, method, uri_raw, algorithm, None,
@@ -299,8 +297,7 @@ fn build_and_verify(
         username, realm, nonce, uri_raw, response, algorithm
     );
 
-    let tokenizer = AuthTokenizer::tokenize(&auth_header_value).unwrap();
-    let auth: rsip::typed::Authorization = tokenizer.try_into().unwrap();
+    let auth: crate::sip::typed::Authorization = crate::sip::typed::Authorization::parse(&auth_header_value).unwrap();
 
     let is_valid = verify_digest(&auth, password, method, &auth_header_value);
     (is_valid, auth_header_value)
@@ -314,9 +311,9 @@ fn test_verify_digest_lowercase_tls() {
         "111",
         "pbx.e36",
         "K1KmT96onZZVMvBB",
-        &rsip::Method::Register,
+        &crate::sip::Method::Register,
         "sip:pbx.e36:5061;transport=tls",
-        rsip::headers::auth::Algorithm::Md5,
+        crate::sip::headers::auth::Algorithm::Md5,
     );
     assert!(
         is_valid,
@@ -332,9 +329,9 @@ fn test_verify_digest_uppercase_tls() {
         "111",
         "pbx.e36",
         "K1KmT96onZZVMvBB",
-        &rsip::Method::Register,
+        &crate::sip::Method::Register,
         "sip:pbx.e36:5061;transport=TLS",
-        rsip::headers::auth::Algorithm::Md5,
+        crate::sip::headers::auth::Algorithm::Md5,
     );
     assert!(
         is_valid,
@@ -350,9 +347,9 @@ fn test_verify_digest_lowercase_udp() {
         "111",
         "pbx.e36",
         "MoLk0nzBonitjdoo",
-        &rsip::Method::Register,
+        &crate::sip::Method::Register,
         "sip:pbx.e36:5060;transport=udp",
-        rsip::headers::auth::Algorithm::Md5,
+        crate::sip::headers::auth::Algorithm::Md5,
     );
     assert!(
         is_valid,
@@ -367,9 +364,9 @@ fn test_verify_digest_uppercase_udp() {
         "111",
         "pbx.e36",
         "MoLk0nzBonitjdoo",
-        &rsip::Method::Register,
+        &crate::sip::Method::Register,
         "sip:pbx.e36:5060;transport=UDP",
-        rsip::headers::auth::Algorithm::Md5,
+        crate::sip::headers::auth::Algorithm::Md5,
     );
     assert!(
         is_valid,
@@ -384,9 +381,9 @@ fn test_verify_digest_lowercase_tcp() {
         "secret",
         "example.com",
         "nonce123",
-        &rsip::Method::Register,
+        &crate::sip::Method::Register,
         "sip:example.com:5060;transport=tcp",
-        rsip::headers::auth::Algorithm::Md5,
+        crate::sip::headers::auth::Algorithm::Md5,
     );
     assert!(
         is_valid,
@@ -402,9 +399,9 @@ fn test_verify_digest_no_transport() {
         "secret123",
         "example.com",
         "dcd98b7102dd2f0e8b11d0f600bfb0c093",
-        &rsip::Method::Register,
+        &crate::sip::Method::Register,
         "sip:example.com",
-        rsip::headers::auth::Algorithm::Md5,
+        crate::sip::headers::auth::Algorithm::Md5,
     );
     assert!(
         is_valid,
@@ -419,9 +416,9 @@ fn test_verify_digest_with_port_no_transport() {
         "secret123",
         "example.com",
         "nonce456",
-        &rsip::Method::Register,
+        &crate::sip::Method::Register,
         "sip:example.com:5060",
-        rsip::headers::auth::Algorithm::Md5,
+        crate::sip::headers::auth::Algorithm::Md5,
     );
     assert!(
         is_valid,
@@ -436,9 +433,9 @@ fn test_verify_digest_invite_method() {
         "secret",
         "example.com",
         "nonce789",
-        &rsip::Method::Invite,
+        &crate::sip::Method::Invite,
         "sip:bob@example.com:5060;transport=tls",
-        rsip::headers::auth::Algorithm::Md5,
+        crate::sip::headers::auth::Algorithm::Md5,
     );
     assert!(is_valid, "verify_digest should work with INVITE method");
 }
@@ -450,9 +447,9 @@ fn test_verify_digest_sips_uri() {
         "secret",
         "example.com",
         "nonce_sips",
-        &rsip::Method::Register,
+        &crate::sip::Method::Register,
         "sips:example.com",
-        rsip::headers::auth::Algorithm::Md5,
+        crate::sip::headers::auth::Algorithm::Md5,
     );
     assert!(is_valid, "verify_digest should work with SIPS URI");
 }
@@ -464,9 +461,9 @@ fn test_verify_digest_ip_address_uri() {
         "111",
         "192.168.201.31",
         "nonce_ip",
-        &rsip::Method::Register,
+        &crate::sip::Method::Register,
         "sip:192.168.201.31:5061;transport=tls",
-        rsip::headers::auth::Algorithm::Md5,
+        crate::sip::headers::auth::Algorithm::Md5,
     );
     assert!(is_valid, "verify_digest should work with IP address URI");
 }
@@ -474,9 +471,7 @@ fn test_verify_digest_ip_address_uri() {
 #[test]
 fn test_verify_digest_wrong_password_fails() {
     use crate::dialog::authenticate::{compute_digest, verify_digest};
-    use rsip::headers::auth::Algorithm;
-    use rsip::headers::typed::tokenizers::AuthTokenizer;
-    use rsip::headers::typed::Tokenize;
+    use crate::sip::headers::auth::Algorithm;
 
     let uri_raw = "sip:pbx.e36:5061;transport=tls";
     let response = compute_digest(
@@ -484,7 +479,7 @@ fn test_verify_digest_wrong_password_fails() {
         "111", // correct password
         "pbx.e36",
         "nonce123",
-        &rsip::Method::Register,
+        &crate::sip::Method::Register,
         uri_raw,
         Algorithm::Md5,
         None,
@@ -495,14 +490,13 @@ fn test_verify_digest_wrong_password_fails() {
         uri_raw, response
     );
 
-    let tokenizer = AuthTokenizer::tokenize(&auth_header_value).unwrap();
-    let auth: rsip::typed::Authorization = tokenizer.try_into().unwrap();
+    let auth: crate::sip::typed::Authorization = crate::sip::typed::Authorization::parse(&auth_header_value).unwrap();
 
     // Verify with wrong password should fail
     let is_valid = verify_digest(
         &auth,
         "wrong_password",
-        &rsip::Method::Register,
+        &crate::sip::Method::Register,
         &auth_header_value,
     );
     assert!(!is_valid, "verify_digest should fail with wrong password");
@@ -516,9 +510,9 @@ fn test_verify_digest_mixed_case_transport() {
         "secret",
         "example.com",
         "nonce_mixed",
-        &rsip::Method::Register,
+        &crate::sip::Method::Register,
         "sip:example.com:5060;transport=Tcp",
-        rsip::headers::auth::Algorithm::Md5,
+        crate::sip::headers::auth::Algorithm::Md5,
     );
     assert!(
         is_valid,
@@ -533,9 +527,9 @@ fn test_verify_digest_websocket_transport() {
         "webpass",
         "ws.example.com",
         "nonce_ws",
-        &rsip::Method::Register,
+        &crate::sip::Method::Register,
         "sip:ws.example.com;transport=ws",
-        rsip::headers::auth::Algorithm::Md5,
+        crate::sip::headers::auth::Algorithm::Md5,
     );
     assert!(
         is_valid,
@@ -550,9 +544,9 @@ fn test_verify_digest_with_user_in_uri() {
         "secret",
         "example.com",
         "nonce_user",
-        &rsip::Method::Register,
+        &crate::sip::Method::Register,
         "sip:alice@example.com:5060;transport=tls",
-        rsip::headers::auth::Algorithm::Md5,
+        crate::sip::headers::auth::Algorithm::Md5,
     );
     assert!(is_valid, "verify_digest should work with user@host URI");
 }
@@ -561,9 +555,7 @@ fn test_verify_digest_with_user_in_uri() {
 fn test_verify_digest_rsip_digest_generator_mismatch() {
     // Explicitly demonstrate the rsip DigestGenerator bug with lowercase transport
     use crate::dialog::authenticate::{compute_digest, verify_digest};
-    use rsip::headers::auth::Algorithm;
-    use rsip::headers::typed::tokenizers::AuthTokenizer;
-    use rsip::headers::typed::Tokenize;
+    use crate::sip::headers::auth::Algorithm;
 
     let uri_raw = "sip:pbx.e36:5061;transport=tls";
     let response = compute_digest(
@@ -571,7 +563,7 @@ fn test_verify_digest_rsip_digest_generator_mismatch() {
         "111",
         "pbx.e36",
         "K1KmT96onZZVMvBB",
-        &rsip::Method::Register,
+        &crate::sip::Method::Register,
         uri_raw,
         Algorithm::Md5,
         None,
@@ -582,8 +574,7 @@ fn test_verify_digest_rsip_digest_generator_mismatch() {
         response
     );
 
-    let tokenizer = AuthTokenizer::tokenize(&auth_header_value).unwrap();
-    let auth: rsip::typed::Authorization = tokenizer.try_into().unwrap();
+    let auth: crate::sip::typed::Authorization = crate::sip::typed::Authorization::parse(&auth_header_value).unwrap();
 
     // rsip's DigestGenerator normalizes URI → transport=TLS (uppercase)
     // This causes verification failure for devices using lowercase
@@ -593,7 +584,7 @@ fn test_verify_digest_rsip_digest_generator_mismatch() {
         "rsip normalizes transport to uppercase in parsed URI"
     );
 
-    let digest_gen = rsip::services::DigestGenerator::from(&auth, "111", &rsip::Method::Register);
+    let digest_gen = crate::sip::services::DigestGenerator::from(&auth, "111", &crate::sip::Method::Register);
     let rsip_response = digest_gen.compute();
     assert_ne!(
         rsip_response, response,
@@ -601,7 +592,7 @@ fn test_verify_digest_rsip_digest_generator_mismatch() {
     );
 
     // Our verify_digest uses raw URI from AuthTokenizer → works correctly
-    let is_valid = verify_digest(&auth, "111", &rsip::Method::Register, &auth_header_value);
+    let is_valid = verify_digest(&auth, "111", &crate::sip::Method::Register, &auth_header_value);
     assert!(
         is_valid,
         "verify_digest should succeed where rsip DigestGenerator fails"
@@ -611,9 +602,7 @@ fn test_verify_digest_rsip_digest_generator_mismatch() {
 #[test]
 fn test_verify_digest_with_qop_auth() {
     use crate::dialog::authenticate::{compute_digest, verify_digest};
-    use rsip::headers::auth::{Algorithm, AuthQop};
-    use rsip::headers::typed::tokenizers::AuthTokenizer;
-    use rsip::headers::typed::Tokenize;
+    use crate::sip::headers::auth::{Algorithm, AuthQop};
 
     let uri_raw = "sip:pbx.e36:5061;transport=tls";
     let qop = AuthQop::Auth {
@@ -625,7 +614,7 @@ fn test_verify_digest_with_qop_auth() {
         "111",
         "pbx.e36",
         "dcd98b7102dd2f0e8b11d0f600bfb0c093",
-        &rsip::Method::Register,
+        &crate::sip::Method::Register,
         uri_raw,
         Algorithm::Md5,
         Some(&qop),
@@ -636,10 +625,9 @@ fn test_verify_digest_with_qop_auth() {
         uri_raw, response
     );
 
-    let tokenizer = AuthTokenizer::tokenize(&auth_header_value).unwrap();
-    let auth: rsip::typed::Authorization = tokenizer.try_into().unwrap();
+    let auth: crate::sip::typed::Authorization = crate::sip::typed::Authorization::parse(&auth_header_value).unwrap();
 
-    let is_valid = verify_digest(&auth, "111", &rsip::Method::Register, &auth_header_value);
+    let is_valid = verify_digest(&auth, "111", &crate::sip::Method::Register, &auth_header_value);
     assert!(
         is_valid,
         "verify_digest should work with qop=auth and lowercase transport"
@@ -653,9 +641,7 @@ fn test_verify_digest_real_world_unify_tls() {
     // Authorization: Digest username="111",realm="pbx.e36",nonce="K1KmT96onZZVMvBB",
     //   uri="sip:pbx.e36:5061;transport=tls",response="...",algorithm=MD5
     use crate::dialog::authenticate::{compute_digest, verify_digest};
-    use rsip::headers::auth::Algorithm;
-    use rsip::headers::typed::tokenizers::AuthTokenizer;
-    use rsip::headers::typed::Tokenize;
+    use crate::sip::headers::auth::Algorithm;
 
     let username = "111";
     let password = "111";
@@ -668,7 +654,7 @@ fn test_verify_digest_real_world_unify_tls() {
         password,
         realm,
         nonce,
-        &rsip::Method::Register,
+        &crate::sip::Method::Register,
         uri_raw,
         Algorithm::Md5,
         None,
@@ -680,10 +666,9 @@ fn test_verify_digest_real_world_unify_tls() {
         username, realm, nonce, uri_raw, response
     );
 
-    let tokenizer = AuthTokenizer::tokenize(&auth_header_value).unwrap();
-    let auth: rsip::typed::Authorization = tokenizer.try_into().unwrap();
+    let auth: crate::sip::typed::Authorization = crate::sip::typed::Authorization::parse(&auth_header_value).unwrap();
 
-    let is_valid = verify_digest(&auth, password, &rsip::Method::Register, &auth_header_value);
+    let is_valid = verify_digest(&auth, password, &crate::sip::Method::Register, &auth_header_value);
     assert!(
         is_valid,
         "Real-world Unify TLS case should pass verification"
@@ -694,9 +679,7 @@ fn test_verify_digest_real_world_unify_tls() {
 fn test_verify_digest_real_world_unify_udp() {
     // Reproduce the exact scenario from GitHub issue #146 (UDP case)
     use crate::dialog::authenticate::{compute_digest, verify_digest};
-    use rsip::headers::auth::Algorithm;
-    use rsip::headers::typed::tokenizers::AuthTokenizer;
-    use rsip::headers::typed::Tokenize;
+    use crate::sip::headers::auth::Algorithm;
 
     let username = "111";
     let password = "111";
@@ -709,7 +692,7 @@ fn test_verify_digest_real_world_unify_udp() {
         password,
         realm,
         nonce,
-        &rsip::Method::Register,
+        &crate::sip::Method::Register,
         uri_raw,
         Algorithm::Md5,
         None,
@@ -720,10 +703,9 @@ fn test_verify_digest_real_world_unify_udp() {
         username, realm, nonce, uri_raw, response
     );
 
-    let tokenizer = AuthTokenizer::tokenize(&auth_header_value).unwrap();
-    let auth: rsip::typed::Authorization = tokenizer.try_into().unwrap();
+    let auth: crate::sip::typed::Authorization = crate::sip::typed::Authorization::parse(&auth_header_value).unwrap();
 
-    let is_valid = verify_digest(&auth, password, &rsip::Method::Register, &auth_header_value);
+    let is_valid = verify_digest(&auth, password, &crate::sip::Method::Register, &auth_header_value);
     assert!(
         is_valid,
         "Real-world Unify UDP case should pass verification"

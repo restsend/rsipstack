@@ -9,7 +9,7 @@ use crate::transaction::{
     transaction::Transaction,
 };
 use crate::transport::{udp::UdpConnection, TransportLayer};
-use rsip::{headers::*, Request};
+use crate::sip::{headers::*, Request};
 use tokio::sync::mpsc::unbounded_channel;
 use tokio_util::sync::CancellationToken;
 
@@ -27,8 +27,8 @@ async fn create_test_endpoint() -> crate::Result<crate::transaction::endpoint::E
 /// Test helper to create mock INVITE request
 fn create_invite_request(from_tag: &str, to_tag: &str, call_id: &str, branch: &str) -> Request {
     Request {
-        method: rsip::Method::Invite,
-        uri: rsip::Uri::try_from("sip:bob@example.com:5060").unwrap(),
+        method: crate::sip::Method::Invite,
+        uri: crate::sip::Uri::try_from("sip:bob@example.com:5060").unwrap(),
         headers: vec![
             Via::new(&format!(
                 "SIP/2.0/UDP alice.example.com:5060;branch={}",
@@ -43,7 +43,7 @@ fn create_invite_request(from_tag: &str, to_tag: &str, call_id: &str, branch: &s
             MaxForwards::new("70").into(),
         ]
         .into(),
-        version: rsip::Version::V2,
+        version: crate::sip::Version::V2,
         body: b"v=0\r\no=alice 2890844526 2890844527 IN IP4 host.atlanta.com\r\n".to_vec(),
     }
 }
@@ -94,7 +94,7 @@ async fn test_server_invite_dialog_creation() -> crate::Result<()> {
         &tx,
         state_sender,
         None,
-        Some(rsip::Uri::try_from("sip:bob@bob.example.com:5060")?),
+        Some(crate::sip::Uri::try_from("sip:bob@bob.example.com:5060")?),
     )?;
 
     // Dialog should be created and stored
@@ -131,7 +131,7 @@ async fn test_existing_server_invite_dialog_retrieval() -> crate::Result<()> {
         &tx1,
         state_sender.clone(),
         None,
-        Some(rsip::Uri::try_from("sip:bob@bob.example.com:5060")?),
+        Some(crate::sip::Uri::try_from("sip:bob@bob.example.com:5060")?),
     )?;
 
     let dialog_id = dialog1.id();
@@ -150,7 +150,7 @@ async fn test_existing_server_invite_dialog_retrieval() -> crate::Result<()> {
         &tx2,
         state_sender,
         None,
-        Some(rsip::Uri::try_from("sip:bob@bob.example.com:5060")?),
+        Some(crate::sip::Uri::try_from("sip:bob@bob.example.com:5060")?),
     )?;
 
     // Should be the same dialog
@@ -182,7 +182,7 @@ async fn test_dialog_retrieval_and_matching() -> crate::Result<()> {
         &tx,
         state_sender,
         None,
-        Some(rsip::Uri::try_from("sip:bob@bob.example.com:5060")?),
+        Some(crate::sip::Uri::try_from("sip:bob@bob.example.com:5060")?),
     )?;
 
     let dialog_id = dialog.id();
@@ -193,8 +193,8 @@ async fn test_dialog_retrieval_and_matching() -> crate::Result<()> {
 
     // Test request matching
     let bye_req = Request {
-        method: rsip::Method::Bye,
-        uri: rsip::Uri::try_from("sip:bob@example.com:5060")?,
+        method: crate::sip::Method::Bye,
+        uri: crate::sip::Uri::try_from("sip:bob@example.com:5060")?,
         headers: vec![
             Via::new("SIP/2.0/UDP alice.example.com:5060;branch=z9hG4bKbye").into(),
             CSeq::new("2 BYE").into(),
@@ -211,7 +211,7 @@ async fn test_dialog_retrieval_and_matching() -> crate::Result<()> {
             CallId::new(&dialog_id.call_id).into(),
         ]
         .into(),
-        version: rsip::Version::V2,
+        version: crate::sip::Version::V2,
         body: vec![],
     };
 
@@ -240,7 +240,7 @@ async fn test_dialog_removal() -> crate::Result<()> {
         &tx,
         state_sender,
         None,
-        Some(rsip::Uri::try_from("sip:bob@bob.example.com:5060")?),
+        Some(crate::sip::Uri::try_from("sip:bob@bob.example.com:5060")?),
     )?;
 
     let dialog_id = dialog.id();
@@ -276,7 +276,7 @@ async fn test_dialog_layer_with_swapped_tags() -> crate::Result<()> {
         &tx,
         state_sender,
         None,
-        Some(rsip::Uri::try_from("sip:bob@bob.example.com:5060")?),
+        Some(crate::sip::Uri::try_from("sip:bob@bob.example.com:5060")?),
     )?;
 
     let dialog_id = dialog.id();
@@ -322,7 +322,7 @@ async fn test_multiple_dialogs_management() -> crate::Result<()> {
             &tx,
             state_sender.clone(),
             None,
-            Some(rsip::Uri::try_from("sip:bob@bob.example.com:5060")?),
+            Some(crate::sip::Uri::try_from("sip:bob@bob.example.com:5060")?),
         )?;
     }
 
@@ -393,7 +393,7 @@ async fn test_dialog_error_cases() -> crate::Result<()> {
         &tx,
         state_sender,
         None,
-        Some(rsip::Uri::try_from("sip:bob@bob.example.com:5060")?),
+        Some(crate::sip::Uri::try_from("sip:bob@bob.example.com:5060")?),
     );
 
     assert!(result.is_err());

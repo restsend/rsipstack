@@ -1,8 +1,9 @@
 use super::dialog::{DialogInnerRef, DialogState, TerminatedReason, TransactionHandle};
 use super::DialogId;
 use crate::Result;
-use rsip::{Header, Method, StatusCode, StatusCodeKind};
-use std::sync::{Arc, Mutex};
+use crate::sip::{Header, Method, StatusCode, StatusCodeKind};
+use parking_lot::Mutex;
+use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
@@ -20,11 +21,11 @@ impl ClientPublicationDialog {
     }
 
     pub fn id(&self) -> DialogId {
-        self.inner.id.lock().unwrap().clone()
+        self.inner.id.lock().clone()
     }
 
     pub fn state(&self) -> DialogState {
-        self.inner.state.lock().unwrap().clone()
+        self.inner.state.lock().clone()
     }
 
     pub fn cancel_token(&self) -> &CancellationToken {
@@ -32,14 +33,14 @@ impl ClientPublicationDialog {
     }
 
     pub fn etag(&self) -> Option<String> {
-        self.etag.lock().unwrap().clone()
+        self.etag.lock().clone()
     }
 
     pub async fn publish(
         &self,
         headers: Option<Vec<Header>>,
         body: Option<Vec<u8>>,
-    ) -> Result<Option<rsip::Response>> {
+    ) -> Result<Option<crate::sip::Response>> {
         let mut headers = headers.unwrap_or_default();
         if let Some(etag) = self.etag() {
             headers.push(Header::Other("SIP-If-Match".into(), etag.into()));
@@ -56,7 +57,7 @@ impl ClientPublicationDialog {
                     }
                 }) {
                     if let Header::Other(_, value) = etag_header {
-                        *self.etag.lock().unwrap() = Some(value.to_string());
+                        *self.etag.lock() = Some(value.to_string());
                     }
                 }
             }
@@ -68,7 +69,7 @@ impl ClientPublicationDialog {
         self.close_with_headers(None).await
     }
 
-    pub async fn close_with_headers(&self, extra_headers: Option<Vec<rsip::Header>>) -> Result<()> {
+    pub async fn close_with_headers(&self, extra_headers: Option<Vec<crate::sip::Header>>) -> Result<()> {
         let mut headers = extra_headers.unwrap_or_default();
         headers.push(Header::Expires(0.into()));
         if let Some(etag) = self.etag() {
@@ -82,10 +83,10 @@ impl ClientPublicationDialog {
 
     pub async fn request(
         &self,
-        method: rsip::Method,
-        headers: Option<Vec<rsip::Header>>,
+        method: crate::sip::Method,
+        headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
-    ) -> Result<Option<rsip::Response>> {
+    ) -> Result<Option<crate::sip::Response>> {
         let request = self
             .inner
             .make_request(method, None, None, None, headers, body)?;
@@ -94,24 +95,24 @@ impl ClientPublicationDialog {
 
     pub async fn refer(
         &self,
-        refer_to: rsip::Uri,
-        headers: Option<Vec<rsip::Header>>,
+        refer_to: crate::sip::Uri,
+        headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
-    ) -> Result<Option<rsip::Response>> {
+    ) -> Result<Option<crate::sip::Response>> {
         let mut headers = headers.unwrap_or_default();
-        headers.push(rsip::Header::Other(
+        headers.push(crate::sip::Header::Other(
             "Refer-To".into(),
             format!("<{}>", refer_to).into(),
         ));
-        self.request(rsip::Method::Refer, Some(headers), body).await
+        self.request(crate::sip::Method::Refer, Some(headers), body).await
     }
 
     pub async fn message(
         &self,
-        headers: Option<Vec<rsip::Header>>,
+        headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
-    ) -> Result<Option<rsip::Response>> {
-        self.request(rsip::Method::Message, headers, body).await
+    ) -> Result<Option<crate::sip::Response>> {
+        self.request(crate::sip::Method::Message, headers, body).await
     }
 
     pub async fn handle(
@@ -148,11 +149,11 @@ impl ServerPublicationDialog {
     }
 
     pub fn id(&self) -> DialogId {
-        self.inner.id.lock().unwrap().clone()
+        self.inner.id.lock().clone()
     }
 
     pub fn state(&self) -> DialogState {
-        self.inner.state.lock().unwrap().clone()
+        self.inner.state.lock().clone()
     }
 
     pub fn cancel_token(&self) -> &CancellationToken {
@@ -160,7 +161,7 @@ impl ServerPublicationDialog {
     }
 
     pub fn etag(&self) -> Option<String> {
-        self.etag.lock().unwrap().clone()
+        self.etag.lock().clone()
     }
 
     pub fn accept(
@@ -173,13 +174,13 @@ impl ServerPublicationDialog {
         headers.push(Header::Other("SIP-ETag".into(), etag.clone().into()));
 
         let resp = self.inner.make_response(
-            &self.inner.initial_request.lock().unwrap(),
+            &self.inner.initial_request.lock(),
             StatusCode::OK,
             Some(headers),
             body,
         );
 
-        *self.etag.lock().unwrap() = Some(etag);
+        *self.etag.lock() = Some(etag);
 
         use crate::transaction::transaction::TransactionEvent;
         self.inner
@@ -194,7 +195,7 @@ impl ServerPublicationDialog {
         self.close_with_headers(None).await
     }
 
-    pub async fn close_with_headers(&self, extra_headers: Option<Vec<rsip::Header>>) -> Result<()> {
+    pub async fn close_with_headers(&self, extra_headers: Option<Vec<crate::sip::Header>>) -> Result<()> {
         let mut headers = extra_headers.unwrap_or_default();
         headers.push(Header::Expires(0.into()));
         if let Some(etag) = self.etag() {
@@ -208,10 +209,10 @@ impl ServerPublicationDialog {
 
     pub async fn request(
         &self,
-        method: rsip::Method,
-        headers: Option<Vec<rsip::Header>>,
+        method: crate::sip::Method,
+        headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
-    ) -> Result<Option<rsip::Response>> {
+    ) -> Result<Option<crate::sip::Response>> {
         if !self.inner.is_confirmed() {
             return Ok(None);
         }
@@ -223,24 +224,24 @@ impl ServerPublicationDialog {
 
     pub async fn refer(
         &self,
-        refer_to: rsip::Uri,
-        headers: Option<Vec<rsip::Header>>,
+        refer_to: crate::sip::Uri,
+        headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
-    ) -> Result<Option<rsip::Response>> {
+    ) -> Result<Option<crate::sip::Response>> {
         let mut headers = headers.unwrap_or_default();
-        headers.push(rsip::Header::Other(
+        headers.push(crate::sip::Header::Other(
             "Refer-To".into(),
             format!("<{}>", refer_to).into(),
         ));
-        self.request(rsip::Method::Refer, Some(headers), body).await
+        self.request(crate::sip::Method::Refer, Some(headers), body).await
     }
 
     pub async fn message(
         &self,
-        headers: Option<Vec<rsip::Header>>,
+        headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
-    ) -> Result<Option<rsip::Response>> {
-        self.request(rsip::Method::Message, headers, body).await
+    ) -> Result<Option<crate::sip::Response>> {
+        self.request(crate::sip::Method::Message, headers, body).await
     }
 
     pub async fn handle(

@@ -3,7 +3,7 @@ use crate::{
     transport::{udp::UdpConnection, TransportLayer},
     EndpointBuilder,
 };
-use rsip::headers::*;
+use crate::sip::headers::*;
 use std::time::Duration;
 use tokio::{select, time::sleep};
 use tokio_util::sync::CancellationToken;
@@ -39,11 +39,11 @@ async fn test_server_transaction() {
     let send_loop = async {
         sleep(Duration::from_millis(50)).await;
 
-        let register_req = rsip::message::Request {
-            method: rsip::method::Method::Register,
-            uri: rsip::Uri {
-                scheme: Some(rsip::Scheme::Sip),
-                host_with_port: rsip::HostWithPort::try_from(addr.addr.to_string())
+        let register_req = crate::sip::message::Request {
+            method: crate::sip::method::Method::Register,
+            uri: crate::sip::Uri {
+                scheme: Some(crate::sip::Scheme::Sip),
+                host_with_port: crate::sip::HostWithPort::try_from(addr.addr.to_string())
                     .expect("host_port parse")
                     .into(),
                 ..Default::default()
@@ -59,7 +59,7 @@ async fn test_server_transaction() {
                 CallId::new("1j9FpLxk3uxtm8tn@restsend.com").into(),
             ]
             .into(),
-            version: rsip::Version::V2,
+            version: crate::sip::Version::V2,
             body: Default::default(),
         };
 
@@ -77,11 +77,11 @@ async fn test_server_transaction() {
             .incoming_transactions()
             .expect("incoming_transactions");
         let mut tx = incoming.recv().await.expect("incoming");
-        assert_eq!(tx.original.method, rsip::method::Method::Register);
+        assert_eq!(tx.original.method, crate::sip::method::Method::Register);
         let headers = tx.original.headers.clone();
-        let done_response = rsip::Response {
-            status_code: rsip::StatusCode::OK,
-            version: rsip::Version::V2,
+        let done_response = crate::sip::Response {
+            status_code: crate::sip::StatusCode::OK,
+            version: crate::sip::Version::V2,
             headers,
             ..Default::default()
         };
@@ -91,9 +91,7 @@ async fn test_server_transaction() {
         assert!(tx
             .endpoint_inner
             .finished_transactions
-            .read()
-            .unwrap()
-            .contains_key(&tx.key));
+                .contains_key(&tx.key));
         sleep(Duration::from_secs(2)).await;
     };
 

@@ -2,7 +2,7 @@ use super::dialog::{DialogInnerRef, DialogState, TerminatedReason, TransactionHa
 use super::DialogId;
 use crate::transaction::transaction::Transaction;
 use crate::Result;
-use rsip::{Header, Method, StatusCode};
+use crate::sip::{Header, Method, StatusCode};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
@@ -12,11 +12,11 @@ pub struct ClientSubscriptionDialog {
 
 impl ClientSubscriptionDialog {
     pub fn id(&self) -> DialogId {
-        self.inner.id.lock().unwrap().clone()
+        self.inner.id.lock().clone()
     }
 
     pub fn state(&self) -> DialogState {
-        self.inner.state.lock().unwrap().clone()
+        self.inner.state.lock().clone()
     }
 
     pub fn cancel_token(&self) -> &CancellationToken {
@@ -27,7 +27,7 @@ impl ClientSubscriptionDialog {
         &self,
         headers: Option<Vec<Header>>,
         body: Option<Vec<u8>>,
-    ) -> Result<Option<rsip::Response>> {
+    ) -> Result<Option<crate::sip::Response>> {
         self.request(Method::Subscribe, headers, body).await
     }
 
@@ -46,10 +46,10 @@ impl ClientSubscriptionDialog {
 
     pub async fn request(
         &self,
-        method: rsip::Method,
-        headers: Option<Vec<rsip::Header>>,
+        method: crate::sip::Method,
+        headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
-    ) -> Result<Option<rsip::Response>> {
+    ) -> Result<Option<crate::sip::Response>> {
         let request = self
             .inner
             .make_request(method, None, None, None, headers, body)?;
@@ -58,24 +58,24 @@ impl ClientSubscriptionDialog {
 
     pub async fn refer(
         &self,
-        refer_to: rsip::Uri,
-        headers: Option<Vec<rsip::Header>>,
+        refer_to: crate::sip::Uri,
+        headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
-    ) -> Result<Option<rsip::Response>> {
+    ) -> Result<Option<crate::sip::Response>> {
         let mut headers = headers.unwrap_or_default();
-        headers.push(rsip::Header::Other(
+        headers.push(crate::sip::Header::Other(
             "Refer-To".into(),
             format!("<{}>", refer_to).into(),
         ));
-        self.request(rsip::Method::Refer, Some(headers), body).await
+        self.request(crate::sip::Method::Refer, Some(headers), body).await
     }
 
     pub async fn message(
         &self,
-        headers: Option<Vec<rsip::Header>>,
+        headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
-    ) -> Result<Option<rsip::Response>> {
-        self.request(rsip::Method::Message, headers, body).await
+    ) -> Result<Option<crate::sip::Response>> {
+        self.request(crate::sip::Method::Message, headers, body).await
     }
 
     pub async fn handle(&mut self, tx: &mut Transaction) -> Result<()> {
@@ -121,11 +121,11 @@ pub struct ServerSubscriptionDialog {
 
 impl ServerSubscriptionDialog {
     pub fn id(&self) -> DialogId {
-        self.inner.id.lock().unwrap().clone()
+        self.inner.id.lock().clone()
     }
 
     pub fn state(&self) -> DialogState {
-        self.inner.state.lock().unwrap().clone()
+        self.inner.state.lock().clone()
     }
 
     pub fn cancel_token(&self) -> &CancellationToken {
@@ -134,7 +134,7 @@ impl ServerSubscriptionDialog {
 
     pub fn accept(&self, headers: Option<Vec<Header>>, body: Option<Vec<u8>>) -> Result<()> {
         let resp = self.inner.make_response(
-            &self.inner.initial_request.lock().unwrap(),
+            &self.inner.initial_request.lock(),
             StatusCode::OK,
             headers,
             body,
@@ -152,13 +152,13 @@ impl ServerSubscriptionDialog {
         &self,
         headers: Option<Vec<Header>>,
         body: Option<Vec<u8>>,
-    ) -> Result<Option<rsip::Response>> {
+    ) -> Result<Option<crate::sip::Response>> {
         if !self.inner.is_confirmed() {
             return Ok(None);
         }
         let request =
             self.inner
-                .make_request(rsip::Method::Notify, None, None, None, headers, body)?;
+                .make_request(crate::sip::Method::Notify, None, None, None, headers, body)?;
         self.inner.do_request(request).await
     }
 
@@ -177,10 +177,10 @@ impl ServerSubscriptionDialog {
 
     pub async fn request(
         &self,
-        method: rsip::Method,
-        headers: Option<Vec<rsip::Header>>,
+        method: crate::sip::Method,
+        headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
-    ) -> Result<Option<rsip::Response>> {
+    ) -> Result<Option<crate::sip::Response>> {
         if !self.inner.is_confirmed() {
             return Ok(None);
         }
@@ -192,24 +192,24 @@ impl ServerSubscriptionDialog {
 
     pub async fn refer(
         &self,
-        refer_to: rsip::Uri,
-        headers: Option<Vec<rsip::Header>>,
+        refer_to: crate::sip::Uri,
+        headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
-    ) -> Result<Option<rsip::Response>> {
+    ) -> Result<Option<crate::sip::Response>> {
         let mut headers = headers.unwrap_or_default();
-        headers.push(rsip::Header::Other(
+        headers.push(crate::sip::Header::Other(
             "Refer-To".into(),
             format!("<{}>", refer_to).into(),
         ));
-        self.request(rsip::Method::Refer, Some(headers), body).await
+        self.request(crate::sip::Method::Refer, Some(headers), body).await
     }
 
     pub async fn message(
         &self,
-        headers: Option<Vec<rsip::Header>>,
+        headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
-    ) -> Result<Option<rsip::Response>> {
-        self.request(rsip::Method::Message, headers, body).await
+    ) -> Result<Option<crate::sip::Response>> {
+        self.request(crate::sip::Method::Message, headers, body).await
     }
 
     pub async fn handle(&mut self, tx: &mut Transaction) -> Result<()> {

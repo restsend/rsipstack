@@ -9,13 +9,13 @@ use crate::transaction::{
     transaction::Transaction,
     TransactionState, TransactionType,
 };
-use rsip::headers::*;
+use crate::sip::headers::*;
 
 /// Test helper to create a mock request
-fn create_test_request(method: rsip::Method, branch: &str) -> rsip::Request {
-    rsip::Request {
+fn create_test_request(method: crate::sip::Method, branch: &str) -> crate::sip::Request {
+    crate::sip::Request {
         method,
-        uri: rsip::Uri::try_from("sip:test.example.com:5060").unwrap(),
+        uri: crate::sip::Uri::try_from("sip:test.example.com:5060").unwrap(),
         headers: vec![
             Via::new(&format!(
                 "SIP/2.0/UDP test.example.com:5060;branch={}",
@@ -29,7 +29,7 @@ fn create_test_request(method: rsip::Method, branch: &str) -> rsip::Request {
             MaxForwards::new("70").into(),
         ]
         .into(),
-        version: rsip::Version::V2,
+        version: crate::sip::Version::V2,
         body: Default::default(),
     }
 }
@@ -39,7 +39,7 @@ async fn test_client_invite_transaction_creation() -> crate::Result<()> {
     let endpoint = create_test_endpoint(Some("127.0.0.1:0")).await?;
 
     // Create INVITE request
-    let invite_req = create_test_request(rsip::Method::Invite, "z9hG4bKnashds");
+    let invite_req = create_test_request(crate::sip::Method::Invite, "z9hG4bKnashds");
     let key = TransactionKey::from_request(&invite_req, TransactionRole::Client)?;
 
     let tx = Transaction::new_client(
@@ -61,7 +61,7 @@ async fn test_client_non_invite_transaction_creation() -> crate::Result<()> {
     let endpoint = create_test_endpoint(Some("127.0.0.1:0")).await?;
 
     // Create REGISTER request (non-INVITE)
-    let register_req = create_test_request(rsip::Method::Register, "z9hG4bKnashds");
+    let register_req = create_test_request(crate::sip::Method::Register, "z9hG4bKnashds");
     let key = TransactionKey::from_request(&register_req, TransactionRole::Client)?;
 
     let tx = Transaction::new_client(
@@ -83,7 +83,7 @@ async fn test_server_invite_transaction_creation() -> crate::Result<()> {
     let endpoint = create_test_endpoint(Some("127.0.0.1:0")).await?;
 
     // Create INVITE request for server
-    let invite_req = create_test_request(rsip::Method::Invite, "z9hG4bKnashds");
+    let invite_req = create_test_request(crate::sip::Method::Invite, "z9hG4bKnashds");
     let key = TransactionKey::from_request(&invite_req, TransactionRole::Server)?;
 
     let tx = Transaction::new_server(
@@ -105,7 +105,7 @@ async fn test_server_non_invite_transaction_creation() -> crate::Result<()> {
     let endpoint = create_test_endpoint(Some("127.0.0.1:0")).await?;
 
     // Create REGISTER request for server
-    let register_req = create_test_request(rsip::Method::Register, "z9hG4bKnashds");
+    let register_req = create_test_request(crate::sip::Method::Register, "z9hG4bKnashds");
     let key = TransactionKey::from_request(&register_req, TransactionRole::Server)?;
 
     let tx = Transaction::new_server(
@@ -125,7 +125,7 @@ async fn test_server_non_invite_transaction_creation() -> crate::Result<()> {
 #[tokio::test]
 async fn test_transaction_key_generation() -> crate::Result<()> {
     // Test transaction key generation for different roles
-    let invite_req = create_test_request(rsip::Method::Invite, "z9hG4bKnashds");
+    let invite_req = create_test_request(crate::sip::Method::Invite, "z9hG4bKnashds");
 
     let client_key = TransactionKey::from_request(&invite_req, TransactionRole::Client)?;
     let server_key = TransactionKey::from_request(&invite_req, TransactionRole::Server)?;
@@ -145,13 +145,13 @@ async fn test_transaction_types() -> crate::Result<()> {
     let endpoint = create_test_endpoint(Some("127.0.0.1:0")).await?;
 
     // Test INVITE transaction type
-    let invite_req = create_test_request(rsip::Method::Invite, "z9hG4bKnashds");
+    let invite_req = create_test_request(crate::sip::Method::Invite, "z9hG4bKnashds");
     let invite_key = TransactionKey::from_request(&invite_req, TransactionRole::Client)?;
     let invite_tx = Transaction::new_client(invite_key, invite_req, endpoint.inner.clone(), None);
     assert_eq!(invite_tx.transaction_type, TransactionType::ClientInvite);
 
     // Test non-INVITE transaction type
-    let register_req = create_test_request(rsip::Method::Register, "z9hG4bKnashds2");
+    let register_req = create_test_request(crate::sip::Method::Register, "z9hG4bKnashds2");
     let register_key = TransactionKey::from_request(&register_req, TransactionRole::Client)?;
     let register_tx =
         Transaction::new_client(register_key, register_req, endpoint.inner.clone(), None);

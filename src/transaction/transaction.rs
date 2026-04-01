@@ -2,15 +2,14 @@ use super::endpoint::EndpointInnerRef;
 use super::key::TransactionKey;
 use super::{SipConnection, TransactionState, TransactionTimer, TransactionType};
 use crate::dialog::DialogId;
-use crate::rsip_ext::destination_from_request;
+use crate::sip::{
+    ContentLength, HasHeaders, Header, HeadersExt, Method, Request, Response, SipMessage,
+    StatusCode, StatusCodeKind,
+};
 use crate::transaction::key::TransactionRole;
 use crate::transaction::make_tag;
 use crate::transport::SipAddr;
 use crate::{Error, Result};
-use rsip::headers::ContentLength;
-use rsip::message::HasHeaders;
-use rsip::prelude::HeadersExt;
-use rsip::{Header, Method, Request, Response, SipMessage, StatusCode, StatusCodeKind};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tracing::{debug, trace};
 
@@ -34,7 +33,7 @@ pub type TransactionEventSender = UnboundedSender<TransactionEvent>;
 ///
 /// ```rust,no_run
 /// use rsipstack::transaction::transaction::TransactionEvent;
-/// use rsip::SipMessage;
+/// use rsipstack::sip::SipMessage;
 ///
 /// # fn handle_event(event: TransactionEvent) {
 /// match event {
@@ -108,22 +107,22 @@ pub fn transaction_event_sender_noop() -> TransactionEventSender {
 ///     transaction::Transaction,
 ///     key::{TransactionKey, TransactionRole}
 /// };
-/// use rsip::SipMessage;
+/// use rsipstack::sip::SipMessage;
 ///
 /// # async fn example() -> rsipstack::Result<()> {
 /// # let endpoint_inner = todo!();
 /// # let connection = None;
 /// // Create a mock request
-/// let request = rsip::Request {
-///     method: rsip::Method::Register,
-///     uri: rsip::Uri::try_from("sip:example.com")?,
+/// let request = rsipstack::sip::Request {
+///     method: rsipstack::sip::Method::Register,
+///     uri: rsipstack::sip::Uri::try_from("sip:example.com")?,
 ///     headers: vec![
-///         rsip::Header::Via("SIP/2.0/UDP example.com:5060;branch=z9hG4bKnashds".into()),
-///         rsip::Header::CSeq("1 REGISTER".into()),
-///         rsip::Header::From("Alice <sip:alice@example.com>;tag=1928301774".into()),
-///         rsip::Header::CallId("a84b4c76e66710@pc33.atlanta.com".into()),
+///         rsipstack::sip::Header::Via("SIP/2.0/UDP example.com:5060;branch=z9hG4bKnashds".into()),
+///         rsipstack::sip::Header::CSeq("1 REGISTER".into()),
+///         rsipstack::sip::Header::From("Alice <sip:alice@example.com>;tag=1928301774".into()),
+///         rsipstack::sip::Header::CallId("a84b4c76e66710@pc33.atlanta.com".into()),
 ///     ].into(),
-///     version: rsip::Version::V2,
+///     version: rsipstack::sip::Version::V2,
 ///     body: Default::default(),
 /// };
 /// let key = TransactionKey::from_request(&request, TransactionRole::Client)?;
@@ -310,17 +309,17 @@ impl Transaction {
     pub async fn reply_with(
         &mut self,
         status_code: StatusCode,
-        headers: Vec<rsip::Header>,
+        headers: Vec<Header>,
         body: Option<Vec<u8>>,
     ) -> Result<()> {
         match status_code.kind() {
-            rsip::StatusCodeKind::Provisional => {}
+            StatusCodeKind::Provisional => {}
             _ => {
                 let to = self.original.to_header()?;
                 if to.tag()?.is_none() {
                     self.original
                         .headers
-                        .unique_push(to.clone().with_tag(make_tag())?.into());
+                        .unique_push(to.clone().with_tag(make_tag()).into());
                 }
             }
         }
@@ -347,8 +346,8 @@ impl Transaction {
         }
 
         let new_state = match response.status_code.kind() {
-            rsip::StatusCodeKind::Provisional => match response.status_code {
-                rsip::StatusCode::Trying => TransactionState::Trying,
+            StatusCodeKind::Provisional => match response.status_code {
+                StatusCode::Trying => TransactionState::Trying,
                 _ => TransactionState::Proceeding,
             },
             _ => match self.transaction_type {
@@ -479,15 +478,13 @@ impl Transaction {
         if let Some(resp) = self.last_response.as_ref() {
             if resp.status_code.kind() == StatusCodeKind::Successful {
                 // 2xx response, set destination from request
-                let target = match destination_from_request(&ack) {
-                    Some(target) => {
-                        if let Some(locator) = self.endpoint_inner.locator.as_ref() {
-                            Some(locator.locate(&target).await?)
-                        } else {
-                            target.try_into().ok()
-                        }
+                let target = {
+                    let target = ack.destination();
+                    if let Some(locator) = self.endpoint_inner.locator.as_ref() {
+                        Some(locator.locate(&target).await?)
+                    } else {
+                        (&target).try_into().ok()
                     }
-                    None => None,
                 };
                 match target {
                     Some(addr) => {
@@ -553,9 +550,9 @@ impl Transaction {
     }
 
     pub async fn send_trying(&mut self) -> Result<()> {
-        let response =
-            self.endpoint_inner
-                .make_response(&self.original, rsip::StatusCode::Trying, None);
+        let response = self
+            .endpoint_inner
+            .make_response(&self.original, StatusCode::Trying, None);
         self.respond(response).await
     }
 
@@ -657,7 +654,7 @@ impl Transaction {
         }
         let new_state = match resp.status_code.kind() {
             StatusCodeKind::Provisional => {
-                if resp.status_code == rsip::StatusCode::Trying {
+                if resp.status_code == StatusCode::Trying {
                     TransactionState::Trying
                 } else {
                     TransactionState::Proceeding
@@ -729,7 +726,7 @@ impl Transaction {
                     } else if let TransactionTimer::TimerB(_) = timer {
                         let timeout_response = self.endpoint_inner.make_response(
                             &self.original,
-                            rsip::StatusCode::RequestTimeout,
+                            StatusCode::RequestTimeout,
                             None,
                         );
                         self.inform_tu_response(timeout_response)?;
@@ -741,7 +738,7 @@ impl Transaction {
                     // Inform TU about timeout
                     let timeout_response = self.endpoint_inner.make_response(
                         &self.original,
-                        rsip::StatusCode::RequestTimeout,
+                        StatusCode::RequestTimeout,
                         None,
                     );
                     self.inform_tu_response(timeout_response)?;
@@ -873,10 +870,7 @@ impl Transaction {
                             let dialog_id = DialogId::try_from((resp, TransactionRole::Server))?;
                             self.endpoint_inner
                                 .waiting_ack
-                                .write()
-                                .as_mut()
-                                .map(|wa| wa.insert(dialog_id, self.key.clone()))
-                                .ok();
+                                .insert(dialog_id, self.key.clone());
                         }
                         _ => {}
                     }
@@ -961,10 +955,8 @@ impl Transaction {
                 Ok(dialog_id) => self
                     .endpoint_inner
                     .waiting_ack
-                    .write()
-                    .as_mut()
-                    .map(|wa| wa.remove(&dialog_id))
-                    .ok(),
+                    .remove(&dialog_id)
+                    .map(|_| ()),
                 Err(_) => None,
             },
             _ => None,

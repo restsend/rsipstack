@@ -32,7 +32,7 @@ impl UdpConnection {
     ) -> Self {
         UdpConnection {
             external: external.map(|addr| SipAddr {
-                r#type: Some(rsip::transport::Transport::Udp),
+                r#type: Some(crate::sip::transport::Transport::Udp),
                 addr: SipConnection::resolve_bind_address(addr).into(),
             }),
             inner: Arc::new(inner),
@@ -48,13 +48,13 @@ impl UdpConnection {
         let conn = UdpSocket::bind(local).await?;
 
         let addr = SipAddr {
-            r#type: Some(rsip::transport::Transport::Udp),
+            r#type: Some(crate::sip::transport::Transport::Udp),
             addr: SipConnection::resolve_bind_address(conn.local_addr()?).into(),
         };
 
         let t = UdpConnection {
             external: external.map(|addr| SipAddr {
-                r#type: Some(rsip::transport::Transport::Udp),
+                r#type: Some(crate::sip::transport::Transport::Udp),
                 addr: addr.into(),
             }),
             inner: Arc::new(UdpInner { addr, conn }),
@@ -134,7 +134,7 @@ impl UdpConnection {
                 }
             };
 
-            let msg = match rsip::SipMessage::try_from(undecoded) {
+            let msg = match crate::sip::SipMessage::try_from(undecoded) {
                 Ok(msg) => msg,
                 Err(e) => {
                     debug!(
@@ -150,7 +150,7 @@ impl UdpConnection {
             let msg = match SipConnection::update_msg_received(
                 msg,
                 addr,
-                rsip::transport::Transport::Udp,
+                crate::sip::transport::Transport::Udp,
             ) {
                 Ok(msg) => msg,
                 Err(e) => {
@@ -170,7 +170,7 @@ impl UdpConnection {
                 msg,
                 SipConnection::Udp(self.clone()),
                 SipAddr {
-                    r#type: Some(rsip::transport::Transport::Udp),
+                    r#type: Some(crate::sip::transport::Transport::Udp),
                     addr: addr.into(),
                 },
             ))?;
@@ -179,7 +179,7 @@ impl UdpConnection {
 
     pub async fn send(
         &self,
-        msg: rsip::SipMessage,
+        msg: crate::sip::SipMessage,
         destination: Option<&SipAddr>,
     ) -> crate::Result<()> {
         let destination = match destination {
@@ -216,7 +216,7 @@ impl UdpConnection {
         Ok((
             len,
             SipAddr {
-                r#type: Some(rsip::transport::Transport::Udp),
+                r#type: Some(crate::sip::transport::Transport::Udp),
                 addr: addr.into(),
             },
         ))

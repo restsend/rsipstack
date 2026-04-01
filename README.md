@@ -76,6 +76,7 @@ cargo run --example client -- --sip-server sip.example.com --user alice --passwo
 ### 1. Simple SIP Connection
 
 ```rust
+use rsipstack::sip::{HostWithPort, Transport};
 use rsipstack::transport::{udp::UdpConnection, SipAddr};
 use tokio_util::sync::CancellationToken;
 
@@ -90,8 +91,8 @@ let connection = UdpConnection::create_connection(
 
 // Prepare the remote target
 let target_addr = SipAddr::new(
-    rsip::transport::Transport::Udp,
-    rsip::HostWithPort::try_from("127.0.0.1:5060")?,
+    Transport::Udp,
+    HostWithPort::try_from("127.0.0.1:5060")?,
 );
 
 // Send raw SIP message
@@ -104,6 +105,7 @@ connection
 ### 2. Using Transport Listeners
 
 ```rust
+use rsipstack::sip::{HostWithPort, Transport};
 use rsipstack::transport::{
     SipAddr, TcpListenerConnection, TransportEvent, TransportLayer,
 };
@@ -115,8 +117,8 @@ let transport_layer = TransportLayer::new(cancel_token.clone());
 
 let tcp_listener = TcpListenerConnection::new(
     SipAddr::new(
-        rsip::transport::Transport::Tcp,
-        rsip::HostWithPort::try_from("0.0.0.0:5060")?,
+        Transport::Tcp,
+        HostWithPort::try_from("0.0.0.0:5060")?,
     ),
     None,
 )
@@ -160,6 +162,7 @@ To add TLS or WebSocket listeners, construct a `TlsListenerConnection` or
 ### 3. Using Endpoint and Transactions
 
 ```rust
+use rsipstack::sip::{Method, StatusCode};
 use rsipstack::{EndpointBuilder, transport::TransportLayer};
 use tokio_util::sync::CancellationToken;
 
@@ -186,11 +189,11 @@ let mut incoming = endpoint
 while let Some(transaction) = incoming.recv().await {
     // Process transaction based on method
     match transaction.original.method {
-        rsip::Method::Register => {
-            transaction.reply(rsip::StatusCode::OK).await?;
+        Method::Register => {
+            transaction.reply(StatusCode::OK).await?;
         }
-        rsip::Method::Options => {
-            transaction.reply(rsip::StatusCode::OK).await?;
+        Method::Options => {
+            transaction.reply(StatusCode::OK).await?;
         }
         // ... handle other methods
     }
@@ -237,21 +240,21 @@ let (invite_dialog, response) = dialog_layer.do_invite(invite_option, state_send
 ### 5. Implementing a Proxy
 
 ```rust
+use rsipstack::sip::{Method, StatusCode};
 use rsipstack::transaction::{Transaction, key::{TransactionKey, TransactionRole}};
-use rsipstack::rsip_ext::RsipHeadersExt;
-use rsip::prelude::HeadersExt;
+use rsipstack::sip::prelude::HeadersExt;
 use std::collections::HashMap;
 
 // Handle incoming requests
 while let Some(mut transaction) = incoming.recv().await {
     match transaction.original.method {
-        rsip::Method::Register => {
+        Method::Register => {
             // Store user registration
             let user = User::try_from(&transaction.original)?;
             users.insert(user.username.clone(), user);
-            transaction.reply(rsip::StatusCode::OK).await?;
+            transaction.reply(StatusCode::OK).await?;
         }
-        rsip::Method::Invite => {
+        Method::Invite => {
             // Route call to registered user  
             let callee = transaction.original.to_header()?.uri()?.auth
                 .map(|a| a.user)
@@ -272,7 +275,7 @@ while let Some(mut transaction) = incoming.recv().await {
                 forwarded_tx.destination = Some(target.destination.clone());
                 forwarded_tx.send().await?;
             } else {
-                transaction.reply(rsip::StatusCode::NotFound).await?;
+                transaction.reply(StatusCode::NotFound).await?;
             }
         }
         // ... handle other methods

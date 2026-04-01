@@ -19,7 +19,7 @@ pub const BRANCH_LEN: usize = 12;
 pub const CNONCE_LEN: usize = 8;
 pub const CALL_ID_LEN: usize = 22;
 pub struct IncomingRequest {
-    pub request: rsip::Request,
+    pub request: crate::sip::Request,
     pub connection: SipConnection,
     pub from: SipAddr,
 }
@@ -143,7 +143,7 @@ impl std::fmt::Display for TransactionState {
 ///
 /// ```rust
 /// use rsipstack::transaction::TransactionType;
-/// use rsip::Method;
+/// use rsipstack::sip::Method;
 ///
 /// fn get_transaction_type(method: &Method, is_client: bool) -> TransactionType {
 ///     match (method, is_client) {
@@ -211,16 +211,16 @@ impl std::fmt::Display for TransactionType {
 ///
 /// # fn example() -> rsipstack::Result<()> {
 /// // Create a mock request to generate a transaction key
-/// let request = rsip::Request {
-///     method: rsip::Method::Register,
-///     uri: rsip::Uri::try_from("sip:example.com")?,
+/// let request = rsipstack::sip::Request {
+///     method: rsipstack::sip::Method::Register,
+///     uri: rsipstack::sip::Uri::try_from("sip:example.com")?,
 ///     headers: vec![
-///         rsip::Header::Via("SIP/2.0/UDP example.com:5060;branch=z9hG4bKnashds".into()),
-///         rsip::Header::CSeq("1 REGISTER".into()),
-///         rsip::Header::From("Alice <sip:alice@example.com>;tag=1928301774".into()),
-///         rsip::Header::CallId("a84b4c76e66710@pc33.atlanta.com".into()),
+///         rsipstack::sip::Header::Via("SIP/2.0/UDP example.com:5060;branch=z9hG4bKnashds".into()),
+///         rsipstack::sip::Header::CSeq("1 REGISTER".into()),
+///         rsipstack::sip::Header::From("Alice <sip:alice@example.com>;tag=1928301774".into()),
+///         rsipstack::sip::Header::CallId("a84b4c76e66710@pc33.atlanta.com".into()),
 ///     ].into(),
-///     version: rsip::Version::V2,
+///     version: rsipstack::sip::Version::V2,
 ///     body: Default::default(),
 /// };
 /// let key = TransactionKey::from_request(&request, TransactionRole::Client)?;
@@ -288,11 +288,11 @@ impl std::fmt::Display for TransactionTimer {
     }
 }
 
-pub fn make_via_branch() -> rsip::Param {
-    rsip::Param::Branch(format!("z9hG4bK{}", random_text(BRANCH_LEN)).into())
+pub fn make_via_branch() -> crate::sip::Param {
+    crate::sip::Param::Branch(format!("z9hG4bK{}", random_text(BRANCH_LEN)).into())
 }
 
-pub fn make_call_id(domain: Option<&str>) -> rsip::headers::CallId {
+pub fn make_call_id(domain: Option<&str>) -> crate::sip::headers::CallId {
     format!(
         "{}@{}",
         random_text(CALL_ID_LEN),
@@ -301,7 +301,7 @@ pub fn make_call_id(domain: Option<&str>) -> rsip::headers::CallId {
     .into()
 }
 
-pub fn make_tag() -> rsip::param::Tag {
+pub fn make_tag() -> crate::sip::param::Tag {
     random_text(TO_TAG_LEN).into()
 }
 

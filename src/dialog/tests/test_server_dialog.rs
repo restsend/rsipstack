@@ -1,4 +1,4 @@
-use rsip::prelude::{HeadersExt, ToTypedHeader};
+use crate::sip::prelude::{HeadersExt, ToTypedHeader};
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use tokio::sync::mpsc::unbounded_channel;
@@ -36,21 +36,21 @@ async fn test_dialog_make_request() -> crate::Result<()> {
         endpoint.inner.clone(),
         state_sender,
         None,
-        Some(rsip::Uri::try_from("sip:alice@alice.example.com:5060")?),
+        Some(crate::sip::Uri::try_from("sip:alice@alice.example.com:5060")?),
         tu_sender,
     )
     .expect("Failed to create dialog inner");
 
     let bye = dialog_inner
-        .make_request(rsip::Method::Bye, None, None, None, None, None)
+        .make_request(crate::sip::Method::Bye, None, None, None, None, None)
         .expect("Failed to make request");
-    assert_eq!(bye.method, rsip::Method::Bye);
+    assert_eq!(bye.method, crate::sip::Method::Bye);
 
     assert!(bye
         .via_header()
         .expect("not via header")
         .typed()?
-        .received()?
+        .received()
         .is_none());
     assert!(
         bye.via_header().expect("not via header").typed()?.branch()
@@ -97,13 +97,13 @@ async fn test_accept_with_public_contact_preserves_contact_header() -> crate::Re
     };
 
     // Define the public address we want to use
-    let public_address = Some(rsip::HostWithPort {
+    let public_address = Some(crate::sip::HostWithPort {
         host: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1)).into(),
         port: Some(5060.into()),
     });
 
     // Define local address as fallback
-    let local_address: SipAddr = rsip::HostWithPort::try_from("127.0.0.1:5060")?.into();
+    let local_address: SipAddr = crate::sip::HostWithPort::try_from("127.0.0.1:5060")?.into();
 
     // Accept with public contact
     server_dialog.accept_with_public_contact(
@@ -123,7 +123,7 @@ async fn test_accept_with_public_contact_preserves_contact_header() -> crate::Re
     match event {
         TransactionEvent::Respond(response) => {
             // Verify status code is 200 OK
-            assert_eq!(response.status_code, rsip::StatusCode::OK);
+            assert_eq!(response.status_code, crate::sip::StatusCode::OK);
 
             // Extract and verify Contact header
             let contact_header = response
@@ -187,13 +187,13 @@ async fn test_server_dialog_bye_via() -> crate::Result<()> {
     let bye_req =
         server_dialog
             .inner
-            .make_request(rsip::Method::Bye, None, None, None, None, None)?;
+            .make_request(crate::sip::Method::Bye, None, None, None, None, None)?;
 
-    assert_eq!(bye_req.method, rsip::Method::Bye);
+    assert_eq!(bye_req.method, crate::sip::Method::Bye);
     let via = bye_req.via_header().expect("no via").typed()?;
 
     // The Via in BYE should NOT have received=172.0.0.1 (which was in the incoming INVITE)
-    assert!(via.received().expect("failed to get received").is_none());
+    assert!(via.received().is_none());
 
     // The host should be our local address (127.0.0.1) and NOT alice.example.com
     assert_eq!(via.uri.host_with_port.host.to_string(), "127.0.0.1");
@@ -235,13 +235,13 @@ async fn test_server_dialog_reinvite_via() -> crate::Result<()> {
     let reinvite_req =
         server_dialog
             .inner
-            .make_request(rsip::Method::Invite, None, None, None, None, None)?;
+            .make_request(crate::sip::Method::Invite, None, None, None, None, None)?;
 
-    assert_eq!(reinvite_req.method, rsip::Method::Invite);
+    assert_eq!(reinvite_req.method, crate::sip::Method::Invite);
     let via = reinvite_req.via_header().expect("no via").typed()?;
 
     // Should not have mirrored the "received" param
-    assert!(via.received().unwrap().is_none());
+    assert!(via.received().is_none());
     assert_eq!(via.uri.host_with_port.host.to_string(), "127.0.0.1");
 
     Ok(())

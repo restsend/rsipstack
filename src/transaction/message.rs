@@ -1,13 +1,12 @@
 use super::{endpoint::EndpointInner, make_call_id};
-use crate::{rsip_ext::extract_uri_from_contact, transaction::make_via_branch, Result};
-use rsip::{
-    common::uri::{UriWithParams, UriWithParamsList},
-    header,
-    headers::ContentLength,
-    prelude::{HeadersExt, ToTypedHeader, UntypedHeader as _},
+use crate::sip::{
+    prelude::{HeadersExt, ToTypedHeader},
     typed::Route as TypedRoute,
-    Error, Header, Request, Response, StatusCode,
+    Error, Header, Request, Response, StatusCode, UriWithParams,
 };
+use crate::sip::{CallId, Method};
+use crate::sip_header;
+use crate::{transaction::make_via_branch, Result};
 
 impl EndpointInner {
     /// Create a SIP request message
@@ -47,20 +46,20 @@ impl EndpointInner {
     /// # async fn example(endpoint: &EndpointInner) -> rsipstack::Result<()> {
     /// // Create an INVITE request
     /// let via = endpoint.get_via(None, None)?;
-    /// let from = rsip::typed::From {
+    /// let from = rsipstack::sip::typed::From {
     ///     display_name: None,
-    ///     uri: rsip::Uri::try_from("sip:alice@example.com")?,
-    ///     params: vec![rsip::Param::Tag("alice-tag".into())],
+    ///     uri: rsipstack::sip::Uri::try_from("sip:alice@example.com")?,
+    ///     params: vec![rsipstack::sip::Param::Tag("alice-tag".into())],
     /// };
-    /// let to = rsip::typed::To {
+    /// let to = rsipstack::sip::typed::To {
     ///     display_name: None,
-    ///     uri: rsip::Uri::try_from("sip:bob@example.com")?,
+    ///     uri: rsipstack::sip::Uri::try_from("sip:bob@example.com")?,
     ///     params: vec![],
     /// };
     ///
     /// let request = endpoint.make_request(
-    ///     rsip::Method::Invite,
-    ///     rsip::Uri::try_from("sip:bob@example.com")?,
+    ///     rsipstack::sip::Method::Invite,
+    ///     rsipstack::sip::Uri::try_from("sip:bob@example.com")?,
     ///     via,
     ///     from,
     ///     to,
@@ -93,30 +92,30 @@ impl EndpointInner {
     /// Additional headers can be added after creation using the headers API.
     pub fn make_request(
         &self,
-        method: rsip::Method,
-        req_uri: rsip::Uri,
-        via: rsip::typed::Via,
-        from: rsip::typed::From,
-        to: rsip::typed::To,
+        method: Method,
+        req_uri: crate::sip::Uri,
+        via: crate::sip::typed::Via,
+        from: crate::sip::typed::From,
+        to: crate::sip::typed::To,
         seq: u32,
-        call_id: Option<rsip::headers::CallId>,
-    ) -> rsip::Request {
+        call_id: Option<CallId>,
+    ) -> Request {
         let call_id = call_id.unwrap_or_else(|| make_call_id(self.option.callid_suffix.as_deref()));
         let headers = vec![
             Header::Via(via.into()),
             Header::CallId(call_id),
             Header::From(from.into()),
             Header::To(to.into()),
-            Header::CSeq(rsip::typed::CSeq { seq, method }.into()),
+            Header::CSeq(crate::sip::typed::CSeq { seq, method }.into()),
             Header::MaxForwards(70.into()),
             Header::UserAgent(self.user_agent.clone().into()),
         ];
-        rsip::Request {
+        Request {
             method,
             uri: req_uri,
             headers: headers.into(),
             body: vec![],
-            version: rsip::Version::V2,
+            version: crate::sip::Version::V2,
         }
     }
 
@@ -151,10 +150,10 @@ impl EndpointInner {
     ///
     /// ```rust,no_run
     /// # use rsipstack::transaction::endpoint::EndpointInner;
-    /// # fn example(endpoint: &EndpointInner, request: &rsip::Request, sdp_answer: String) {
+    /// # fn example(endpoint: &EndpointInner, request: &rsipstack::sip::Request, sdp_answer: String) {
     /// let response = endpoint.make_response(
     ///     &request,
-    ///     rsip::StatusCode::OK,
+    ///     rsipstack::sip::StatusCode::OK,
     ///     Some(sdp_answer.into_bytes())
     /// );
     /// # }
@@ -164,10 +163,10 @@ impl EndpointInner {
     ///
     /// ```rust,no_run
     /// # use rsipstack::transaction::endpoint::EndpointInner;
-    /// # fn example(endpoint: &EndpointInner, request: &rsip::Request) {
+    /// # fn example(endpoint: &EndpointInner, request: &rsipstack::sip::Request) {
     /// let response = endpoint.make_response(
     ///     &request,
-    ///     rsip::StatusCode::NotFound,
+    ///     rsipstack::sip::StatusCode::NotFound,
     ///     None
     /// );
     /// # }
@@ -177,10 +176,10 @@ impl EndpointInner {
     ///
     /// ```rust,no_run
     /// # use rsipstack::transaction::endpoint::EndpointInner;
-    /// # fn example(endpoint: &EndpointInner, request: &rsip::Request) {
+    /// # fn example(endpoint: &EndpointInner, request: &rsipstack::sip::Request) {
     /// let response = endpoint.make_response(
     ///     &request,
-    ///     rsip::StatusCode::Ringing,
+    ///     rsipstack::sip::StatusCode::Ringing,
     ///     None
     /// );
     /// # }
@@ -250,7 +249,7 @@ impl EndpointInner {
     pub fn make_ack(&self, invite: &Request, resp: &Response) -> Result<Request> {
         let mut headers = resp.headers.clone();
         let request_uri;
-        if resp.status_code.kind() != rsip::StatusCodeKind::Successful {
+        if resp.status_code.kind() != crate::sip::StatusCodeKind::Successful {
             // Non-2xx ACK stays in the original INVITE transaction.
             request_uri = invite.uri.clone();
             headers.extend(
@@ -263,7 +262,7 @@ impl EndpointInner {
             );
         } else {
             // 2xx ACK is a separate request built from the dialog remote target and route set.
-            if let Ok(top_most_via) = header!(
+            if let Ok(top_most_via) = sip_header!(
                 headers.iter_mut(),
                 Header::Via,
                 Error::missing_header("Via")
@@ -277,9 +276,11 @@ impl EndpointInner {
             let mut route_set: Vec<UriWithParams> = Vec::new();
             for header in resp.headers.iter() {
                 if let Header::RecordRoute(record_route) = header {
-                    let typed = record_route.typed()?;
-                    for uri in typed.uris() {
-                        route_set.push(uri.clone());
+                    for typed in
+                        crate::sip::typed::RecordRoute::parse_header_list(record_route.value())
+                            .unwrap_or_default()
+                    {
+                        route_set.push(typed.uri);
                     }
                 }
             }
@@ -287,14 +288,7 @@ impl EndpointInner {
 
             let contact = resp.contact_header()?;
 
-            // work around for rsip parsing bug
-            let remote_target_uri = if let Ok(typed_contact) = contact.typed() {
-                typed_contact.uri
-            } else {
-                let mut uri = extract_uri_from_contact(contact.value())?;
-                uri.headers.clear();
-                uri
-            };
+            let remote_target_uri = contact.typed()?.uri;
 
             let route_headers = match route_set.as_slice() {
                 [] => {
@@ -302,27 +296,23 @@ impl EndpointInner {
                     Vec::new()
                 }
                 [head, rest @ ..] => {
-                    // loose routing — also match ;lr=<value> (e.g. ;lr=on from Kamailio/Plivo)
+                    // loose routing
                     if head
-                        .uri
                         .params
                         .iter()
-                        .any(|param| matches!(param, rsip::Param::Lr) || matches!(param, rsip::Param::Other(name, _) if name.to_string().eq_ignore_ascii_case("lr")))
+                        .any(|param| matches!(param, crate::sip::Param::Lr))
                     {
                         request_uri = remote_target_uri;
                         route_set
                     } else {
                         // Strict routing promotes the first route URI into the Request-URI
                         // and appends the remote target as the last Route value.
-                        let mut request_uri_value = head.uri.clone();
+                        let mut request_uri_value = head.clone();
                         request_uri_value.headers.clear();
                         request_uri = request_uri_value;
 
                         let mut strict_routes = rest.to_vec();
-                        strict_routes.push(UriWithParams {
-                            uri: remote_target_uri.clone(),
-                            params: vec![],
-                        });
+                        strict_routes.push(remote_target_uri.clone());
 
                         strict_routes
                     }
@@ -334,7 +324,7 @@ impl EndpointInner {
                     .iter()
                     .cloned()
                     .map(|route| {
-                        let typed_route = TypedRoute::from(UriWithParamsList::from(vec![route]));
+                        let typed_route = TypedRoute::from(route);
                         Header::Route(typed_route.into())
                     })
                     .collect::<Vec<_>>(),
@@ -355,17 +345,17 @@ impl EndpointInner {
         headers.push(Header::MaxForwards(70.into()));
         headers.iter_mut().for_each(|h| {
             if let Header::CSeq(cseq) = h {
-                cseq.mut_method(rsip::Method::Ack).ok();
+                cseq.mut_method(crate::sip::Method::Ack).ok();
             }
         });
-        headers.push(Header::ContentLength(ContentLength::default())); // 0 because of vec![] below
+        headers.push(Header::ContentLength(0u32.into())); // 0 because of vec![] below
         headers.unique_push(Header::UserAgent(self.user_agent.clone().into()));
-        Ok(rsip::Request {
-            method: rsip::Method::Ack,
+        Ok(Request {
+            method: crate::sip::Method::Ack,
             uri: request_uri,
             headers: headers.into(),
             body: vec![],
-            version: rsip::Version::V2,
+            version: crate::sip::Version::V2,
         })
     }
 }

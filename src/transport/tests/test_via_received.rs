@@ -1,5 +1,5 @@
 use crate::transport::SipConnection;
-use rsip::{headers::*, prelude::HeadersExt, SipMessage, Transport};
+use crate::sip::{headers::*, prelude::HeadersExt, SipMessage, Transport};
 use std::net::SocketAddr;
 
 /// Test Via received parameter handling for different transport protocols
@@ -21,13 +21,11 @@ fn test_via_received_udp() {
                 typed_via
                     .params
                     .iter()
-                    .any(|p| matches!(p, rsip::Param::Received(_))),
+                    .any(|p| matches!(p, crate::sip::Param::Received(_))),
                 "UDP should add received parameter"
             );
             assert!(
-                typed_via.params.iter().any(|p| matches!(
-                    p, rsip::Param::Other(key, Some(_)) if key.value().eq_ignore_ascii_case("rport")
-                )),
+                typed_via.params.iter().any(|p| matches!(p, crate::sip::Param::Rport(Some(_)))),
                 "UDP should add rport parameter"
             );
         }
@@ -53,7 +51,7 @@ fn test_via_received_tcp() {
                 !typed_via
                     .params
                     .iter()
-                    .any(|p| matches!(p, rsip::Param::Received(_))),
+                    .any(|p| matches!(p, crate::sip::Param::Received(_))),
                 "TCP should not add received parameter when addresses match"
             );
         }
@@ -79,7 +77,7 @@ fn test_via_received_tcp_different_addr() {
                 typed_via
                     .params
                     .iter()
-                    .any(|p| matches!(p, rsip::Param::Received(_))),
+                    .any(|p| matches!(p, crate::sip::Param::Received(_))),
                 "TCP should add received parameter when addresses differ"
             );
         }
@@ -105,7 +103,7 @@ fn test_via_received_tls() {
                 typed_via
                     .params
                     .iter()
-                    .any(|p| matches!(p, rsip::Param::Received(_))),
+                    .any(|p| matches!(p, crate::sip::Param::Received(_))),
                 "TLS should add received parameter when host differs"
             );
         }
@@ -131,7 +129,7 @@ fn test_via_received_ws() {
                 typed_via
                     .params
                     .iter()
-                    .any(|p| matches!(p, rsip::Param::Received(_))),
+                    .any(|p| matches!(p, crate::sip::Param::Received(_))),
                 "WS should add received parameter when host differs"
             );
         }
@@ -141,10 +139,10 @@ fn test_via_received_ws() {
 
 #[test]
 fn test_via_response_not_modified() {
-    let response = rsip::message::Response {
-        status_code: rsip::StatusCode::try_from(200).unwrap(),
+    let response = crate::sip::message::Response {
+        status_code: crate::sip::StatusCode::try_from(200).unwrap(),
         headers: vec![Via::new("SIP/2.0/UDP 127.0.0.1:5060;branch=z9hG4bK-test").into()].into(),
-        version: rsip::Version::V2,
+        version: crate::sip::Version::V2,
         body: Default::default(),
     };
 
@@ -162,12 +160,12 @@ fn test_via_response_not_modified() {
     }
 }
 
-fn create_test_request(via_proto: &str) -> rsip::message::Request {
-    rsip::message::Request {
-        method: rsip::method::Method::Register,
-        uri: rsip::Uri {
-            scheme: Some(rsip::Scheme::Sip),
-            host_with_port: rsip::HostWithPort::try_from("example.com:5060")
+fn create_test_request(via_proto: &str) -> crate::sip::message::Request {
+    crate::sip::message::Request {
+        method: crate::sip::method::Method::Register,
+        uri: crate::sip::Uri {
+            scheme: Some(crate::sip::Scheme::Sip),
+            host_with_port: crate::sip::HostWithPort::try_from("example.com:5060")
                 .expect("host_port parse"),
             ..Default::default()
         },
@@ -175,7 +173,7 @@ fn create_test_request(via_proto: &str) -> rsip::message::Request {
             Via::new(&format!("{} 127.0.0.1:5060;branch=z9hG4bK-test", via_proto)).into(),
         ]
         .into(),
-        version: rsip::Version::V2,
+        version: crate::sip::Version::V2,
         body: Default::default(),
     }
 }

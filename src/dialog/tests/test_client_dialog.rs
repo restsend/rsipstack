@@ -1,19 +1,16 @@
+use crate::dialog::{
+    client_dialog::ClientInviteDialog,
+    dialog::{DialogInner, DialogState, TerminatedReason},
+    DialogId,
+};
+use crate::sip::{headers::*, prelude::HeadersExt, Request, Response, StatusCode, Uri};
 use crate::transaction::endpoint::TargetLocator;
 use crate::transaction::key::TransactionRole;
 use crate::transport::transport_layer::DomainResolver;
 use crate::transport::SipConnection;
 use crate::transport::{udp::UdpConnection, SipAddr, TransportLayer};
 use crate::EndpointBuilder;
-use crate::{
-    dialog::{
-        client_dialog::ClientInviteDialog,
-        dialog::{DialogInner, DialogState, TerminatedReason},
-        DialogId,
-    },
-    rsip_ext::{destination_from_request, RsipResponseExt},
-};
 use async_trait::async_trait;
-use rsip::{headers::*, prelude::HeadersExt, Request, Response, StatusCode, Uri};
 use std::sync::Arc;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::oneshot;
@@ -31,7 +28,7 @@ async fn create_test_endpoint() -> crate::Result<crate::transaction::endpoint::E
 
 fn create_invite_request(from_tag: &str, to_tag: &str, call_id: &str) -> Request {
     Request {
-        method: rsip::Method::Invite,
+        method: crate::sip::Method::Invite,
         uri: Uri::try_from("sip:bob@example.com:5060").unwrap(),
         headers: vec![
             Via::new("SIP/2.0/UDP alice.example.com:5060;branch=z9hG4bKnashds").into(),
@@ -43,7 +40,7 @@ fn create_invite_request(from_tag: &str, to_tag: &str, call_id: &str) -> Request
             MaxForwards::new("70").into(),
         ]
         .into(),
-        version: rsip::Version::V2,
+        version: crate::sip::Version::V2,
         body: b"v=0\r\no=alice 2890844526 2890844527 IN IP4 host.atlanta.com\r\n".to_vec(),
     }
 }
@@ -155,20 +152,20 @@ async fn test_client_dialog_state_transitions() -> crate::Result<()> {
     // Test state transitions manually (simulating what happens during invite flow)
 
     // Initial state should be Calling
-    let state = client_dialog.inner.state.lock().unwrap().clone();
+    let state = client_dialog.inner.state.lock().clone();
     assert!(matches!(state, DialogState::Calling(_)));
 
     // Transition to Trying (after sending INVITE)
     client_dialog
         .inner
         .transition(DialogState::Trying(dialog_id.clone()))?;
-    let state = client_dialog.inner.state.lock().unwrap().clone();
+    let state = client_dialog.inner.state.lock().clone();
     assert!(matches!(state, DialogState::Trying(_)));
 
     // Transition to Early (after receiving 1xx)
     let ringing_resp = Response {
         status_code: StatusCode::Ringing,
-        version: rsip::Version::V2,
+        version: crate::sip::Version::V2,
         headers: vec![
             Via::new("SIP/2.0/UDP alice.example.com:5060;branch=z9hG4bKnashds").into(),
             CSeq::new("1 INVITE").into(),
@@ -184,7 +181,7 @@ async fn test_client_dialog_state_transitions() -> crate::Result<()> {
     client_dialog
         .inner
         .transition(DialogState::Early(dialog_id.clone(), ringing_resp.clone()))?;
-    let state = client_dialog.inner.state.lock().unwrap().clone();
+    let state = client_dialog.inner.state.lock().clone();
     assert!(matches!(state, DialogState::Early(_, _)));
 
     let mut final_resp = ringing_resp.clone();
@@ -193,7 +190,7 @@ async fn test_client_dialog_state_transitions() -> crate::Result<()> {
     client_dialog
         .inner
         .transition(DialogState::Confirmed(dialog_id.clone(), final_resp))?;
-    let state = client_dialog.inner.state.lock().unwrap().clone();
+    let state = client_dialog.inner.state.lock().clone();
     assert!(matches!(state, DialogState::Confirmed(_, _)));
     assert!(client_dialog.inner.is_confirmed());
 
@@ -236,7 +233,7 @@ async fn test_client_dialog_termination_scenarios() -> crate::Result<()> {
         TerminatedReason::UasBusy,
     ))?;
 
-    let state = client_dialog_1.inner.state.lock().unwrap().clone();
+    let state = client_dialog_1.inner.state.lock().clone();
     assert!(matches!(
         state,
         DialogState::Terminated(_, TerminatedReason::UasBusy)
@@ -278,7 +275,7 @@ async fn test_client_dialog_termination_scenarios() -> crate::Result<()> {
         dialog_id_2.clone(),
         TerminatedReason::UacBye,
     ))?;
-    let state = client_dialog_2.inner.state.lock().unwrap().clone();
+    let state = client_dialog_2.inner.state.lock().clone();
     assert!(matches!(
         state,
         DialogState::Terminated(_, TerminatedReason::UacBye)
@@ -317,10 +314,10 @@ async fn test_make_request_preserves_remote_target_and_route_order() -> crate::R
     };
 
     let remote_target = Uri::try_from("sip:uas@192.0.2.55:5080;transport=tcp")?;
-    *client_dialog.inner.remote_uri.lock().unwrap() = remote_target.clone();
+    *client_dialog.inner.remote_uri.lock() = remote_target.clone();
 
     {
-        let mut route_set = client_dialog.inner.route_set.lock().unwrap();
+        let mut route_set = client_dialog.inner.route_set.lock();
         *route_set = vec![
             Route::from("<sip:proxy2.example.com:5070;transport=tcp;lr>"),
             Route::from("<sip:proxy1.example.com:5060;transport=tcp;lr>"),
@@ -330,7 +327,7 @@ async fn test_make_request_preserves_remote_target_and_route_order() -> crate::R
     let outbound_addr =
         SipAddr::try_from(&Uri::try_from("sip:uac.example.com:5060;transport=tcp")?)?;
     let request = client_dialog.inner.make_request(
-        rsip::Method::Bye,
+        crate::sip::Method::Bye,
         None,
         Some(outbound_addr),
         None,
@@ -360,11 +357,10 @@ async fn test_make_request_preserves_remote_target_and_route_order() -> crate::R
         ],
         "Route headers must match the stored route set order"
     );
-    let destination = destination_from_request(&request)
-        .expect("route-enabled request should resolve to a destination");
+    let destination = request.destination();
     let expected_destination = Uri::try_from("sip:proxy2.example.com:5070;transport=tcp;lr")?;
     assert_eq!(
-        &*destination, &expected_destination,
+        destination, expected_destination,
         "First Route entry must determine the transport destination"
     );
 
@@ -422,7 +418,7 @@ async fn test_route_set_updates_from_200_ok_response() -> crate::Result<()> {
 
     let success_resp = Response {
         status_code: StatusCode::OK,
-        version: rsip::Version::V2,
+        version: crate::sip::Version::V2,
         headers: headers.into(),
         body: vec![],
     };
@@ -434,7 +430,7 @@ async fn test_route_set_updates_from_200_ok_response() -> crate::Result<()> {
     let outbound_addr =
         SipAddr::try_from(&Uri::try_from("sip:uac.example.com:5060;transport=tcp")?)?;
     let bye_request = client_dialog.inner.make_request(
-        rsip::Method::Bye,
+        crate::sip::Method::Bye,
         None,
         Some(outbound_addr),
         None,
@@ -460,11 +456,10 @@ async fn test_route_set_updates_from_200_ok_response() -> crate::Result<()> {
         "Route set must be reversed compared to the Record-Route header order",
     );
 
-    let destination = destination_from_request(&bye_request)
-        .expect("route-enabled request should resolve to a destination");
+    let destination = bye_request.destination();
     let expected_destination = Uri::try_from("sip:edge2.example.net:5080;transport=tcp;lr")?;
     assert_eq!(
-        &*destination, &expected_destination,
+        destination, expected_destination,
         "First Route entry must determine the transport destination",
     );
 
@@ -518,7 +513,7 @@ async fn test_confirmed_dialog_bye_keeps_contact_uri_with_outbound_route() -> cr
 
     let success_resp = Response {
         status_code: StatusCode::OK,
-        version: rsip::Version::V2,
+        version: crate::sip::Version::V2,
         headers: headers.into(),
         body: vec![],
     };
@@ -526,11 +521,15 @@ async fn test_confirmed_dialog_bye_keeps_contact_uri_with_outbound_route() -> cr
     client_dialog
         .inner
         .update_route_set_from_response(&success_resp);
-    *client_dialog.inner.remote_uri.lock().unwrap() = success_resp.contact_uri()?;
+    *client_dialog.inner.remote_uri.lock() = success_resp
+        .typed_contact_headers()?
+        .first()
+        .map(|c| c.uri.clone())
+        .ok_or_else(|| crate::Error::Error("missing Contact header".to_string()))?;
 
     let outbound_addr = SipAddr::try_from(&Uri::try_from("sip:uac.example.com:5060")?)?;
     let bye_request = client_dialog.inner.make_request(
-        rsip::Method::Bye,
+        crate::sip::Method::Bye,
         None,
         Some(outbound_addr),
         None,
@@ -544,11 +543,10 @@ async fn test_confirmed_dialog_bye_keeps_contact_uri_with_outbound_route() -> cr
         "BYE Request-URI must preserve the Contact target learned from 200 OK",
     );
 
-    let destination = destination_from_request(&bye_request)
-        .expect("route-enabled BYE should resolve to a destination");
+    let destination = bye_request.destination();
     let expected_destination = Uri::try_from("sip:proxy.example.com:5060;lr")?;
     assert_eq!(
-        &*destination, &expected_destination,
+        destination, expected_destination,
         "Transport destination must still come from the Route set",
     );
 
@@ -613,11 +611,11 @@ async fn test_cancel_conforms_to_rfc3261_section_9_1() -> crate::Result<()> {
         socket.recv_from(&mut buf),
     )
     .await
-    .map_err(|_| rsip::Error::Unexpected("Timeout receiving INVITE".into()))??;
+    .map_err(|_| crate::sip::Error::Unexpected("Timeout receiving INVITE".into()))??;
 
     let invite_msg = std::str::from_utf8(&buf[..len]).unwrap();
-    let invite_req: Request = rsip::SipMessage::try_from(invite_msg)?.try_into()?;
-    assert_eq!(invite_req.method, rsip::Method::Invite);
+    let invite_req: Request = crate::sip::SipMessage::try_from(invite_msg)?.try_into()?;
+    assert_eq!(invite_req.method, crate::sip::Method::Invite);
 
     let dialog_clone = client_dialog.clone();
     tokio::spawn(async move { dialog_clone.cancel().await });
@@ -628,10 +626,10 @@ async fn test_cancel_conforms_to_rfc3261_section_9_1() -> crate::Result<()> {
         socket.recv_from(&mut buf),
     )
     .await
-    .map_err(|_| rsip::Error::Unexpected("Timeout receiving CANCEL".into()))??;
+    .map_err(|_| crate::sip::Error::Unexpected("Timeout receiving CANCEL".into()))??;
 
     let cancel_msg = std::str::from_utf8(&buf[..len]).unwrap();
-    let cancel_req: Request = rsip::SipMessage::try_from(cancel_msg)?.try_into()?;
+    let cancel_req: Request = crate::sip::SipMessage::try_from(cancel_msg)?.try_into()?;
     let cancel_vias = cancel_req
         .headers
         .iter()
@@ -644,7 +642,7 @@ async fn test_cancel_conforms_to_rfc3261_section_9_1() -> crate::Result<()> {
         })
         .collect::<Vec<_>>();
 
-    assert_eq!(cancel_req.method, rsip::Method::Cancel);
+    assert_eq!(cancel_req.method, crate::sip::Method::Cancel);
 
     assert_eq!(
         cancel_req.uri, invite_req.uri,
@@ -767,9 +765,9 @@ async fn test_ack_sent_to_domain_name_from_contact() -> crate::Result<()> {
 
     // ========== Create UAC endpoint with mock resolver ==========
     let domain_target_addr = SipAddr {
-        r#type: Some(rsip::Transport::Udp),
-        addr: rsip::HostWithPort {
-            host: rsip::Host::IpAddr("127.0.0.1".parse().unwrap()),
+        r#type: Some(crate::sip::Transport::Udp),
+        addr: crate::sip::HostWithPort {
+            host: crate::sip::Host::IpAddr("127.0.0.1".parse().unwrap()),
             port: Some(uas_port.into()),
         },
     };
@@ -822,7 +820,10 @@ async fn test_ack_sent_to_domain_name_from_contact() -> crate::Result<()> {
     // UAS handler - wait for INVITE, respond with 200 OK containing domain Contact
     tokio::spawn(async move {
         let mut invite_tx = uas_incoming.recv().await.expect("failed to get the INVITE");
-        assert!(matches!(invite_tx.original.method, rsip::Method::Invite));
+        assert!(matches!(
+            invite_tx.original.method,
+            crate::sip::Method::Invite
+        ));
 
         let contact_uri = Uri::try_from(format!(
             "sip:bob@uas.example.com:{};transport=udp",
@@ -837,8 +838,8 @@ async fn test_ack_sent_to_domain_name_from_contact() -> crate::Result<()> {
         dialog.accept(None, None).expect("accept failed");
 
         if let Some(msg) = invite_tx.receive().await {
-            if let rsip::SipMessage::Request(ack) = msg {
-                if ack.method == rsip::Method::Ack {
+            if let crate::sip::SipMessage::Request(ack) = msg {
+                if ack.method == crate::sip::Method::Ack {
                     let _ = ack_sender.send(ack);
                 }
             }
@@ -864,11 +865,15 @@ async fn test_ack_sent_to_domain_name_from_contact() -> crate::Result<()> {
         .expect("fail to receiving ACK");
 
     // Verify ACK Request-URI contains the domain from Contact header
-    assert_eq!(ack_req.method, rsip::Method::Ack, "Expected ACK request");
+    assert_eq!(
+        ack_req.method,
+        crate::sip::Method::Ack,
+        "Expected ACK request"
+    );
 
     assert_eq!(
         ack_req.uri.host_with_port.host,
-        rsip::Host::Domain("uas.example.com".into()),
+        crate::sip::Host::Domain("uas.example.com".into()),
         "ACK Request-URI host should be the domain from Contact header"
     );
 
@@ -898,8 +903,8 @@ struct WebSocketChannelLocator {
 
 #[async_trait]
 impl TargetLocator for WebSocketChannelLocator {
-    async fn locate(&self, uri: &rsip::Uri) -> crate::Result<SipAddr> {
-        if let rsip::Host::Domain(domain) = &uri.host_with_port.host {
+    async fn locate(&self, uri: &crate::sip::Uri) -> crate::Result<SipAddr> {
+        if let crate::sip::Host::Domain(domain) = &uri.host_with_port.host {
             if domain.to_string().contains(&self.contact) {
                 return Ok(self.ws_addr.clone());
             }
@@ -931,9 +936,9 @@ async fn test_ack_sent_to_websocket_channel_via_locator() -> crate::Result<()> {
 
     // websocket address register into locator
     let ws_addr = SipAddr {
-        r#type: Some(rsip::Transport::Ws),
-        addr: rsip::HostWithPort {
-            host: rsip::Host::IpAddr("127.0.0.1".parse().unwrap()),
+        r#type: Some(crate::sip::Transport::Ws),
+        addr: crate::sip::HostWithPort {
+            host: crate::sip::Host::IpAddr("127.0.0.1".parse().unwrap()),
             port: Some(8080.into()),
         },
     };
@@ -1009,23 +1014,24 @@ async fn test_ack_sent_to_websocket_channel_via_locator() -> crate::Result<()> {
             .unwrap()
             .unwrap();
 
-    let TransportEvent::Incoming(rsip::SipMessage::Request(invite_req), _, _) = invite_req else {
+    let TransportEvent::Incoming(crate::sip::SipMessage::Request(invite_req), _, _) = invite_req
+    else {
         panic!("Expected INVITE request");
     };
 
-    assert_eq!(invite_req.method, rsip::Method::Invite);
+    assert_eq!(invite_req.method, crate::sip::Method::Invite);
 
     // Build 200 OK with WebSocket Contact
-    let ws_contact = rsip::headers::Contact::new(&format!("<{}>", ws_contact_uri));
-    let to_with_tag: rsip::Header = invite_req
+    let ws_contact = crate::sip::headers::Contact::new(&format!("<{}>", ws_contact_uri));
+    let to_with_tag: crate::sip::Header = invite_req
         .to_header()?
         .clone()
-        .with_tag("uas-tag-123".into())?
+        .with_tag("uas-tag-123".into())
         .into();
 
     let ok_response = Response {
         status_code: StatusCode::OK,
-        version: rsip::Version::V2,
+        version: crate::sip::Version::V2,
         headers: vec![
             invite_req.via_header()?.clone().into(),
             invite_req.from_header()?.clone().into(),
@@ -1033,7 +1039,7 @@ async fn test_ack_sent_to_websocket_channel_via_locator() -> crate::Result<()> {
             invite_req.call_id_header()?.clone().into(),
             invite_req.cseq_header()?.clone().into(),
             ws_contact.into(),
-            rsip::headers::ContentLength::from(0u32).into(),
+            crate::sip::headers::ContentLength::from(0u32).into(),
         ]
         .into(),
         body: vec![],
@@ -1042,7 +1048,7 @@ async fn test_ack_sent_to_websocket_channel_via_locator() -> crate::Result<()> {
     // Send 200 OK back through the channel (simulating response from WebSocket peer)
     to_channel_tx
         .send(TransportEvent::Incoming(
-            rsip::SipMessage::Response(ok_response),
+            crate::sip::SipMessage::Response(ok_response),
             sip_conn.clone(),
             ws_addr.clone(),
         ))
@@ -1053,7 +1059,7 @@ async fn test_ack_sent_to_websocket_channel_via_locator() -> crate::Result<()> {
         .unwrap()
         .unwrap();
 
-    let TransportEvent::Incoming(rsip::SipMessage::Request(ack_req), _, _) = ack_event else {
+    let TransportEvent::Incoming(crate::sip::SipMessage::Request(ack_req), _, _) = ack_event else {
         panic!("Expected ACK request");
     };
 
@@ -1061,7 +1067,11 @@ async fn test_ack_sent_to_websocket_channel_via_locator() -> crate::Result<()> {
     uac_token.cancel();
     dialog_handle.abort();
 
-    assert_eq!(ack_req.method, rsip::Method::Ack, "Expected ACK request");
+    assert_eq!(
+        ack_req.method,
+        crate::sip::Method::Ack,
+        "Expected ACK request"
+    );
 
     // The Request-URI should match the Contact from the 200 OK
     assert!(
@@ -1076,11 +1086,10 @@ async fn test_ack_sent_to_websocket_channel_via_locator() -> crate::Result<()> {
     );
 
     // Verify transport parameter is ws
-    let has_ws_transport = ack_req
-        .uri
-        .params
-        .iter()
-        .any(|p| matches!(p, rsip::Param::Transport(t) if *t == rsip::Transport::Ws));
+    let has_ws_transport =
+        ack_req.uri.params.iter().any(
+            |p| matches!(p, crate::sip::Param::Transport(t) if *t == crate::sip::Transport::Ws),
+        );
     assert!(
         has_ws_transport,
         "ACK Request-URI should have transport=ws parameter"
@@ -1161,8 +1170,8 @@ async fn test_drop_unconfirmed_dialog_with_487_response() -> crate::Result<()> {
     .expect("recv failed");
 
     let invite_msg = std::str::from_utf8(&buf[..len]).unwrap();
-    let invite_req: Request = rsip::SipMessage::try_from(invite_msg)?.try_into()?;
-    assert_eq!(invite_req.method, rsip::Method::Invite);
+    let invite_req: Request = crate::sip::SipMessage::try_from(invite_msg)?.try_into()?;
+    assert_eq!(invite_req.method, crate::sip::Method::Invite);
 
     // Send 100 Trying to put dialog in Early state
     let trying_resp = format!(
@@ -1200,8 +1209,8 @@ async fn test_drop_unconfirmed_dialog_with_487_response() -> crate::Result<()> {
     .expect("recv failed");
 
     let cancel_msg = std::str::from_utf8(&buf[..len]).unwrap();
-    let cancel_req: Request = rsip::SipMessage::try_from(cancel_msg)?.try_into()?;
-    assert_eq!(cancel_req.method, rsip::Method::Cancel);
+    let cancel_req: Request = crate::sip::SipMessage::try_from(cancel_msg)?.try_into()?;
+    assert_eq!(cancel_req.method, crate::sip::Method::Cancel);
 
     // Send 200 OK to CANCEL
     let cancel_ok_resp = format!(
@@ -1252,15 +1261,19 @@ async fn test_drop_unconfirmed_dialog_with_487_response() -> crate::Result<()> {
         .expect("recv failed");
 
         let msg = std::str::from_utf8(&buf[..len]).unwrap();
-        let req: Request = rsip::SipMessage::try_from(msg)?.try_into()?;
-        if req.method == rsip::Method::Ack {
+        let req: Request = crate::sip::SipMessage::try_from(msg)?.try_into()?;
+        if req.method == crate::sip::Method::Ack {
             break req;
         }
         // Skip INVITE retransmissions
     };
 
     // Verify ACK was received and conforms to RFC 3261
-    assert_eq!(ack_req.method, rsip::Method::Ack, "Expected ACK for 487");
+    assert_eq!(
+        ack_req.method,
+        crate::sip::Method::Ack,
+        "Expected ACK for 487"
+    );
 
     // ACK must have same Call-ID as INVITE
     assert_eq!(
@@ -1382,8 +1395,8 @@ async fn test_drop_unconfirmed_dialog_without_final_response_impl() -> crate::Re
     .expect("recv failed");
 
     let invite_msg = std::str::from_utf8(&buf[..len]).unwrap();
-    let invite_req: Request = rsip::SipMessage::try_from(invite_msg)?.try_into()?;
-    assert_eq!(invite_req.method, rsip::Method::Invite);
+    let invite_req: Request = crate::sip::SipMessage::try_from(invite_msg)?.try_into()?;
+    assert_eq!(invite_req.method, crate::sip::Method::Invite);
 
     // Send 100 Trying to put dialog in Trying state
     let trying_resp = format!(
@@ -1421,8 +1434,8 @@ async fn test_drop_unconfirmed_dialog_without_final_response_impl() -> crate::Re
     .expect("recv failed");
 
     let cancel_msg = std::str::from_utf8(&buf[..len]).unwrap();
-    let cancel_req: Request = rsip::SipMessage::try_from(cancel_msg)?.try_into()?;
-    assert_eq!(cancel_req.method, rsip::Method::Cancel);
+    let cancel_req: Request = crate::sip::SipMessage::try_from(cancel_msg)?.try_into()?;
+    assert_eq!(cancel_req.method, crate::sip::Method::Cancel);
 
     // Send 200 OK to CANCEL only - deliberately don't send 487 to INVITE
     let cancel_ok_resp = format!(

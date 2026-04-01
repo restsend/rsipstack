@@ -1,9 +1,7 @@
+use parking_lot::{Condvar, Mutex, MutexGuard};
 use std::{
     collections::{BTreeMap, HashMap},
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Condvar, Mutex, MutexGuard,
-    },
+    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
 };
 
@@ -218,10 +216,7 @@ async fn wait_for_ready_async_wakes_on_new_timer() {
 
 impl<T> Timer<T> {
     fn lock_state(&self) -> MutexGuard<'_, TimerState<T>> {
-        match self.state.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        }
+        self.state.lock()
     }
 
     fn collect_ready(state: &mut TimerState<T>, now: Instant) -> Vec<T> {

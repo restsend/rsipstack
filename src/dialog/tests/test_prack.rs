@@ -7,8 +7,8 @@ use crate::transaction::{
 use crate::transport::{
     channel::ChannelConnection, connection::TransportEvent, SipAddr, SipConnection,
 };
-use rsip::headers::*;
-use rsip::{Header, Method, Request, SipMessage, StatusCode};
+use crate::sip::headers::*;
+use crate::sip::{Header, Method, Request, SipMessage, StatusCode};
 use std::convert::TryFrom;
 use std::sync::Arc;
 use tokio::sync::mpsc::unbounded_channel;
@@ -35,7 +35,7 @@ async fn server_dialog_handles_prack_request() -> crate::Result<()> {
         endpoint.inner.clone(),
         state_sender,
         None,
-        Some(rsip::Uri::try_from("sip:bob@bob.example.com:5060")?),
+        Some(crate::sip::Uri::try_from("sip:bob@bob.example.com:5060")?),
         tu_sender,
     )?;
 
@@ -46,7 +46,7 @@ async fn server_dialog_handles_prack_request() -> crate::Result<()> {
     // Build PRACK request
     let prack_request = Request {
         method: Method::PRack,
-        uri: rsip::Uri::try_from("sip:bob@example.com:5060")?,
+        uri: crate::sip::Uri::try_from("sip:bob@example.com:5060")?,
         headers: vec![
             Via::new("SIP/2.0/UDP 198.51.100.1:5060;branch=z9hG4bKprack01").into(),
             CSeq::new("2 PRACK").into(),
@@ -67,7 +67,7 @@ async fn server_dialog_handles_prack_request() -> crate::Result<()> {
             Header::ContentLength((0u32).into()),
         ]
         .into(),
-        version: rsip::Version::V2,
+        version: crate::sip::Version::V2,
         body: vec![],
     };
 
@@ -76,7 +76,7 @@ async fn server_dialog_handles_prack_request() -> crate::Result<()> {
     let (_, incoming_rx) = unbounded_channel();
     let (transport_tx, mut transport_rx) = unbounded_channel();
 
-    let sip_addr: SipAddr = rsip::HostWithPort::try_from("127.0.0.1:5060")?.into();
+    let sip_addr: SipAddr = crate::sip::HostWithPort::try_from("127.0.0.1:5060")?.into();
 
     let channel =
         ChannelConnection::create_connection(incoming_rx, transport_tx, sip_addr.clone(), None)
