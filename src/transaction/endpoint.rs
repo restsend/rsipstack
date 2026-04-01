@@ -477,19 +477,17 @@ impl EndpointInner {
                     crate::sip::StatusCode::CallTransactionDoesNotExist,
                     None,
                 );
+                let resp = if let Some(ref inspector) = self.message_inspector {
+                    inspector.before_send(resp.into(), None)
+                } else {
+                    resp.into()
+                };
 
                 let dest = if !connection.is_reliable() {
                     self.get_destination_from_request(&request).await
                 } else {
                     None
                 };
-
-                let resp = if let Some(ref inspector) = self.message_inspector {
-                    inspector.before_send(resp.into(), dest.as_ref())
-                } else {
-                    resp.into()
-                };
-
                 connection.send(resp, dest.as_ref()).await?;
                 return Ok(());
             }
@@ -558,14 +556,21 @@ impl EndpointInner {
                 .cloned()?,
         };
 
+        let transport = first_addr.r#type.unwrap_or_default();
+        let mut params = vec![
+            branch.unwrap_or_else(make_via_branch),
+            crate::sip::Param::Rport(None),
+        ];
+        // RFC 5923: alias parameter tells the proxy to reuse this TCP connection
+        // for sending requests back to us (essential for NAT traversal over TCP).
+        if transport == crate::sip::Transport::Tcp || transport == crate::sip::Transport::Tls {
+            params.push(crate::sip::Param::Other("alias".into(), None));
+        }
         let via = crate::sip::typed::Via {
             version: crate::sip::Version::V2,
-            transport: first_addr.r#type.unwrap_or_default(),
+            transport,
             uri: first_addr.addr.into(),
-            params: vec![
-                branch.unwrap_or_else(make_via_branch),
-                crate::sip::Param::Rport(None),
-            ],
+            params,
         };
         Ok(via)
     }
