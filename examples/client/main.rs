@@ -1,7 +1,7 @@
 use clap::Parser;
 use play_file::{build_rtp_conn, play_audio_file};
+use rsipstack::sip as rsip;
 use rsip::prelude::HeadersExt;
-use rsip::typed::MediaType;
 use rsipstack::dialog::dialog::{Dialog, DialogState, DialogStateReceiver, DialogStateSender};
 use rsipstack::dialog::dialog_layer::DialogLayer;
 use rsipstack::dialog::invitation::InviteOption;
@@ -533,7 +533,7 @@ async fn process_invite(opt: &MediaSessionOption, dialog: ServerInviteDialog) ->
     let mut seq = 1;
     let peer_addr = format!("{}:{}", peer_addr, peer_port);
     if opt.auto_answer {
-        let headers = vec![rsip::typed::ContentType(MediaType::Sdp(vec![])).into()];
+        let headers = vec![rsip::Header::ContentType("application/sdp".into())];
         dialog.ringing(Some(headers), Some(answer.clone().into()))?;
         let ringback_token = CancellationToken::new();
         timeout(
@@ -558,7 +558,7 @@ async fn process_invite(opt: &MediaSessionOption, dialog: ServerInviteDialog) ->
             peer_addr, peer_port, payload_type
         );
     } else {
-        let headers = vec![rsip::typed::ContentType(MediaType::Sdp(vec![])).into()];
+        let headers = vec![rsip::Header::ContentType("application/sdp".into())];
         dialog.ringing(Some(headers), Some(answer.clone().into()))?;
     }
 
@@ -619,7 +619,7 @@ async fn process_invite(opt: &MediaSessionOption, dialog: ServerInviteDialog) ->
                 if rejected {
                     return;
                 }
-                let headers = vec![rsip::typed::ContentType(MediaType::Sdp(vec![])).into()];
+                let headers = vec![rsip::Header::ContentType("application/sdp".into())];
                 match dialog.accept(Some(headers), Some(answer.clone().into())) {
                     Ok(_) => info!("Accepted call with answer SDP peer address: {} port: {} payload_type: {}", peer_addr, peer_port, payload_type),
                     Err(e) => {

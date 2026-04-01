@@ -10,12 +10,10 @@ use crate::transaction::make_tag;
 use crate::transaction::transaction::transaction_event_sender_noop;
 use crate::transaction::{endpoint::EndpointInnerRef, transaction::Transaction};
 use crate::Result;
-use rsip::prelude::HeadersExt;
+use crate::sip::prelude::HeadersExt;
+use dashmap::DashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::{
-    collections::HashMap,
-    sync::{Arc, RwLock},
-};
+use std::sync::Arc;
 use tracing::debug;
 
 /// Internal Dialog Layer State
@@ -36,7 +34,7 @@ use tracing::debug;
 /// * `dialogs` uses RwLock for concurrent read access with exclusive writes
 pub struct DialogLayerInner {
     pub(super) last_seq: AtomicU32,
-    pub(super) dialogs: RwLock<HashMap<String, Dialog>>,
+    pub(super) dialogs: DashMap<String, Dialog>,
 }
 pub type DialogLayerInnerRef = Arc<DialogLayerInner>;
 
@@ -143,7 +141,7 @@ impl DialogLayer {
             endpoint,
             inner: Arc::new(DialogLayerInner {
                 last_seq: AtomicU32::new(0),
-                dialogs: RwLock::new(HashMap::new()),
+                dialogs: DashMap::new(),
             }),
         }
     }
@@ -153,24 +151,22 @@ impl DialogLayer {
         tx: &Transaction,
         state_sender: DialogStateSender,
         credential: Option<Credential>,
-        local_contact: Option<rsip::Uri>,
+        local_contact: Option<crate::sip::Uri>,
     ) -> Result<ServerInviteDialog> {
         let mut id = DialogId::try_from(tx)?;
         if !id.local_tag.is_empty() {
             let dlg = self
                 .inner
                 .dialogs
-                .read()
-                .unwrap()
                 .get(&id.to_string())
-                .cloned();
+                .map(|d| d.clone());
             match dlg {
                 Some(Dialog::ServerInvite(dlg)) => return Ok(dlg),
                 _ => {
                     return Err(crate::Error::DialogError(
                         "the dialog not found".to_string(),
                         id,
-                        rsip::StatusCode::CallTransactionDoesNotExist,
+                        crate::sip::StatusCode::CallTransactionDoesNotExist,
                     ));
                 }
             }
@@ -195,15 +191,13 @@ impl DialogLayer {
             tx.tu_sender.clone(),
         )?;
 
-        *dlg_inner.remote_contact.lock().unwrap() = tx.original.contact_header().ok().cloned();
+        *dlg_inner.remote_contact.lock() = tx.original.contact_header().ok().cloned();
 
         let dialog = ServerInviteDialog {
             inner: Arc::new(dlg_inner),
         };
         self.inner
             .dialogs
-            .write()
-            .unwrap()
             .insert(id.to_string(), Dialog::ServerInvite(dialog.clone()));
         debug!(%id, "server invite dialog created");
         Ok(dialog)
@@ -214,24 +208,22 @@ impl DialogLayer {
         tx: &Transaction,
         state_sender: DialogStateSender,
         credential: Option<Credential>,
-        local_contact: Option<rsip::Uri>,
+        local_contact: Option<crate::sip::Uri>,
     ) -> Result<ServerSubscriptionDialog> {
         let mut id = DialogId::try_from(tx)?;
         if !id.local_tag.is_empty() {
             let dlg = self
                 .inner
                 .dialogs
-                .read()
-                .unwrap()
                 .get(&id.to_string())
-                .cloned();
+                .map(|d| d.clone());
             match dlg {
                 Some(Dialog::ServerSubscription(dlg)) => return Ok(dlg),
                 _ => {
                     return Err(crate::Error::DialogError(
                         "the dialog not found".to_string(),
                         id,
-                        rsip::StatusCode::CallTransactionDoesNotExist,
+                        crate::sip::StatusCode::CallTransactionDoesNotExist,
                     ));
                 }
             }
@@ -256,15 +248,13 @@ impl DialogLayer {
             tx.tu_sender.clone(),
         )?;
 
-        *dlg_inner.remote_contact.lock().unwrap() = tx.original.contact_header().ok().cloned();
+        *dlg_inner.remote_contact.lock() = tx.original.contact_header().ok().cloned();
 
         let dialog = ServerSubscriptionDialog {
             inner: Arc::new(dlg_inner),
         };
         self.inner
             .dialogs
-            .write()
-            .unwrap()
             .insert(id.to_string(), Dialog::ServerSubscription(dialog.clone()));
         debug!(%id, "server subscription dialog created");
         Ok(dialog)
@@ -275,24 +265,22 @@ impl DialogLayer {
         tx: &Transaction,
         state_sender: DialogStateSender,
         credential: Option<Credential>,
-        local_contact: Option<rsip::Uri>,
+        local_contact: Option<crate::sip::Uri>,
     ) -> Result<ServerPublicationDialog> {
         let mut id = DialogId::try_from(tx)?;
         if !id.local_tag.is_empty() {
             let dlg = self
                 .inner
                 .dialogs
-                .read()
-                .unwrap()
                 .get(&id.to_string())
-                .cloned();
+                .map(|d| d.clone());
             match dlg {
                 Some(Dialog::ServerPublication(dlg)) => return Ok(dlg),
                 _ => {
                     return Err(crate::Error::DialogError(
                         "the dialog not found".to_string(),
                         id,
-                        rsip::StatusCode::CallTransactionDoesNotExist,
+                        crate::sip::StatusCode::CallTransactionDoesNotExist,
                     ));
                 }
             }
@@ -317,13 +305,11 @@ impl DialogLayer {
             tx.tu_sender.clone(),
         )?;
 
-        *dlg_inner.remote_contact.lock().unwrap() = tx.original.contact_header().ok().cloned();
+        *dlg_inner.remote_contact.lock() = tx.original.contact_header().ok().cloned();
 
         let dialog = ServerPublicationDialog::new(Arc::new(dlg_inner));
         self.inner
             .dialogs
-            .write()
-            .unwrap()
             .insert(id.to_string(), Dialog::ServerPublication(dialog.clone()));
         debug!(%id, "server publication dialog created");
         Ok(dialog)
@@ -334,10 +320,10 @@ impl DialogLayer {
         call_id: String,
         from_tag: String,
         to_tag: String,
-        initial_request: rsip::Request,
+        initial_request: crate::sip::Request,
         state_sender: DialogStateSender,
         credential: Option<Credential>,
-        local_contact: Option<rsip::Uri>,
+        local_contact: Option<crate::sip::Uri>,
     ) -> Result<ClientPublicationDialog> {
         let id = DialogId {
             call_id,
@@ -373,8 +359,6 @@ impl DialogLayer {
         let dialog = ClientPublicationDialog::new(Arc::new(dlg_inner));
         self.inner
             .dialogs
-            .write()
-            .unwrap()
             .insert(id.to_string(), Dialog::ClientPublication(dialog.clone()));
         Ok(dialog)
     }
@@ -384,10 +368,10 @@ impl DialogLayer {
         call_id: String,
         from_tag: String,
         to_tag: String,
-        initial_request: rsip::Request,
+        initial_request: crate::sip::Request,
         state_sender: DialogStateSender,
         credential: Option<Credential>,
-        local_contact: Option<rsip::Uri>,
+        local_contact: Option<crate::sip::Uri>,
     ) -> Result<ClientSubscriptionDialog> {
         let id = DialogId {
             call_id,
@@ -425,8 +409,6 @@ impl DialogLayer {
         };
         self.inner
             .dialogs
-            .write()
-            .unwrap()
             .insert(id.to_string(), Dialog::ClientSubscription(dialog.clone()));
         Ok(dialog)
     }
@@ -437,16 +419,14 @@ impl DialogLayer {
     }
 
     pub fn len(&self) -> usize {
-        self.inner.dialogs.read().unwrap().len()
+        self.inner.dialogs.len()
     }
 
     pub fn all_dialog_ids(&self) -> Vec<String> {
         self.inner
             .dialogs
-            .read()
-            .unwrap()
-            .keys()
-            .cloned()
+            .iter()
+            .map(|e| e.key().clone())
             .collect::<Vec<_>>()
     }
 
@@ -455,13 +435,7 @@ impl DialogLayer {
     }
 
     pub fn get_dialog_with(&self, id: &String) -> Option<Dialog> {
-        match self.inner.dialogs.read() {
-            Ok(dialogs) => match dialogs.get(id) {
-                Some(dialog) => Some(dialog.clone()),
-                None => None,
-            },
-            Err(_) => None,
-        }
+        self.inner.dialogs.get(id).map(|d| d.clone())
     }
     /// Returns all client-side INVITE dialogs (UAC) that share the given Call-ID.
     ///
@@ -472,17 +446,10 @@ impl DialogLayer {
     ///
     /// The returned vector may be empty if no matching client dialogs are found.
     pub fn get_client_dialog_by_call_id(&self, call_id: &str) -> Vec<ClientInviteDialog> {
-        let dialogs = match self.inner.dialogs.read() {
-            Ok(guard) => guard,
-            Err(_) => {
-                // If the lock is poisoned, we conservatively return an empty list.
-                return Vec::new();
-            }
-        };
-
-        dialogs
-            .values()
-            .filter_map(|dlg| match dlg {
+        self.inner
+            .dialogs
+            .iter()
+            .filter_map(|e| match e.value() {
                 Dialog::ClientInvite(client_dlg) if client_dlg.id().call_id == call_id => {
                     Some(client_dlg.clone())
                 }
@@ -527,7 +494,7 @@ impl DialogLayer {
 
         let key = dialog.id().to_string();
 
-        self.inner.dialogs.write().unwrap().insert(key, dialog);
+        self.inner.dialogs.insert(key, dialog);
 
         Ok(true)
     }
@@ -536,10 +503,8 @@ impl DialogLayer {
         debug!(%id, "remove dialog");
         self.inner
             .dialogs
-            .write()
-            .unwrap()
             .remove(&id.to_string())
-            .map(|d| d.on_remove());
+            .map(|(_, d)| d.on_remove());
     }
 
     pub fn match_dialog(&self, tx: &Transaction) -> Option<Dialog> {
@@ -554,8 +519,8 @@ impl DialogLayer {
     pub fn build_local_contact(
         &self,
         username: Option<String>,
-        params: Option<Vec<rsip::Param>>,
-    ) -> Result<rsip::Uri> {
+        params: Option<Vec<crate::sip::Param>>,
+    ) -> Result<crate::sip::Uri> {
         let addr = self
             .endpoint
             .transport_layer
@@ -564,21 +529,21 @@ impl DialogLayer {
             .ok_or(crate::Error::EndpointError("not sipaddrs".to_string()))?
             .clone();
 
-        let scheme = if matches!(addr.r#type, Some(rsip::Transport::Tls)) {
-            rsip::Scheme::Sips
+        let scheme = if matches!(addr.r#type, Some(crate::sip::Transport::Tls)) {
+            crate::sip::Scheme::Sips
         } else {
-            rsip::Scheme::Sip
+            crate::sip::Scheme::Sip
         };
 
         let mut params = params.unwrap_or_default();
-        if !matches!(addr.r#type, Some(rsip::Transport::Udp) | None) {
-            addr.r#type.map(|t| params.push(rsip::Param::Transport(t)));
+        if !matches!(addr.r#type, Some(crate::sip::Transport::Udp) | None) {
+            addr.r#type.map(|t| params.push(crate::sip::Param::Transport(t)));
         }
-        let auth = username.map(|user| rsip::Auth {
+        let auth = username.map(|user| crate::sip::Auth {
             user,
             password: None,
         });
-        Ok(rsip::Uri {
+        Ok(crate::sip::Uri {
             scheme: Some(scheme),
             auth,
             host_with_port: addr.addr.clone().into(),

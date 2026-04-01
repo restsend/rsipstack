@@ -1,4 +1,4 @@
-use rsip::headers::*;
+use crate::sip::headers::*;
 use std::{sync::Arc, time::Duration};
 use tokio::{select, time::sleep};
 
@@ -63,15 +63,15 @@ async fn test_endpoint_recvrequests() {
         )
         .await
         .expect("create_connection");
-        let register_req = rsip::message::Request {
-            method: rsip::method::Method::Register,
-            uri: rsip::Uri {
-                scheme: Some(rsip::Scheme::Sips),
-                auth: Some(rsip::Auth {
+        let register_req = crate::sip::message::Request {
+            method: crate::sip::method::Method::Register,
+            uri: crate::sip::Uri {
+                scheme: Some(crate::sip::Scheme::Sips),
+                auth: Some(crate::sip::Auth {
                     user: "bob".to_string(),
                     password: None,
                 }),
-                host_with_port: rsip::HostWithPort::try_from("restsend.com")
+                host_with_port: crate::sip::HostWithPort::try_from("restsend.com")
                     .expect("host_port parse")
                     .into(),
                 ..Default::default()
@@ -83,7 +83,7 @@ async fn test_endpoint_recvrequests() {
                 CallId::new("1j9FpLxk3uxtm8tn@restsend.com").into(),
             ]
             .into(),
-            version: rsip::Version::V2,
+            version: crate::sip::Version::V2,
             body: Default::default(),
         };
         let buf: String = register_req.try_into().expect("try_into");
@@ -107,7 +107,7 @@ async fn test_endpoint_recvrequests() {
         }
         _ = endpoint.serve()=> {}
         req = incoming_loop => {
-            assert_eq!(req.method, rsip::method::Method::Register);
+            assert_eq!(req.method, crate::sip::method::Method::Register);
             assert_eq!(req.uri.to_string(), "sips:bob@restsend.com");
         }
     }

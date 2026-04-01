@@ -1,4 +1,5 @@
 use crate::{get_first_non_loopback_interface, MediaSessionOption};
+use rsipstack::sip as rsip;
 use rsipstack::transport::udp::UdpConnection;
 use rsipstack::Result;
 use rsipstack::{transport::SipAddr, Error};

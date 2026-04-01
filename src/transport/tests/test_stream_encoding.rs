@@ -3,8 +3,8 @@ use crate::transport::{
     stream::SipCodec,
 };
 use bytes::BytesMut;
-use rsip::{
-    prelude::{HeadersExt, UntypedHeader},
+use crate::sip::{
+    prelude::HeadersExt,
     SipMessage,
 };
 use tokio_util::codec::{Decoder, Encoder};
@@ -33,7 +33,7 @@ fn test_sip_codec_single_message() {
     let msg = result.unwrap();
     match msg {
         crate::transport::stream::SipCodecType::Message(SipMessage::Request(req)) => {
-            assert_eq!(req.method, rsip::Method::Register);
+            assert_eq!(req.method, crate::sip::Method::Register);
         }
         _ => panic!("Expected request message"),
     }
@@ -85,7 +85,7 @@ fn test_sip_codec_fragmented_message() {
     let msg = result.unwrap();
     match msg {
         crate::transport::stream::SipCodecType::Message(SipMessage::Request(req)) => {
-            assert_eq!(req.method, rsip::Method::Register);
+            assert_eq!(req.method, crate::sip::Method::Register);
         }
         _ => panic!("Expected request message"),
     }

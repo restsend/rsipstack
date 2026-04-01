@@ -84,9 +84,9 @@
 //!
 //! // Send an INVITE
 //! let invite_option = InviteOption {
-//!     caller: rsip::Uri::try_from("sip:alice@example.com")?,
-//!     callee: rsip::Uri::try_from("sip:bob@example.com")?,
-//!     contact: rsip::Uri::try_from("sip:alice@myhost.com:5060")?,
+//!     caller: rsipstack::sip::Uri::try_from("sip:alice@example.com")?,
+//!     callee: rsipstack::sip::Uri::try_from("sip:bob@example.com")?,
+//!     contact: rsipstack::sip::Uri::try_from("sip:alice@myhost.com:5060")?,
 //!     content_type: Some("application/sdp".to_string()),
 //!     offer: Some(sdp_body),
 //!     ..Default::default()
@@ -237,6 +237,7 @@ pub mod resolver;
 pub mod transaction;
 pub mod transport;
 pub use transaction::EndpointBuilder;
-pub mod rsip_ext;
+pub mod sip;
+pub use sip as rsip;
 
 pub const VERSION: &str = concat!("rsipstack/", env!("CARGO_PKG_VERSION"));

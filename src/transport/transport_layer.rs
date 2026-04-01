@@ -2,13 +2,15 @@ use super::tls::{TlsConfig, TlsConnection};
 use super::websocket::WebSocketConnection;
 use super::{connection::TransportSender, sip_addr::SipAddr, tcp::TcpConnection, SipConnection};
 use crate::resolver::SipResolver;
+use crate::sip::{Host, HostWithPort, Transport};
 use crate::transaction::key::TransactionKey;
 use crate::transport::connection::TransportReceiver;
 use crate::{transport::TransportEvent, Result};
 use async_trait::async_trait;
 use std::net::IpAddr;
-use std::sync::{Mutex, RwLock};
-use std::{collections::HashMap, sync::Arc};
+use parking_lot::{Mutex, RwLock};
+use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::select;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -50,7 +52,7 @@ impl DefaultDomainResolver {
 
     pub async fn resolve_with_lookup(&self, target: &SipAddr) -> Result<SipAddr> {
         let domain = match &target.addr.host {
-            rsip::Host::Domain(domain) => domain,
+            Host::Domain(domain) => domain,
             _ => {
                 return Err(crate::Error::DnsResolutionError(target.addr.to_string()));
             }
@@ -58,9 +60,9 @@ impl DefaultDomainResolver {
 
         // Use new SipResolver
         let secure = match target.r#type {
-            Some(rsip::Transport::Tls)
-            | Some(rsip::Transport::Wss)
-            | Some(rsip::Transport::TlsSctp) => true,
+            Some(Transport::Tls)
+            | Some(Transport::Wss)
+            | Some(Transport::TlsSctp) => true,
             _ => false,
         };
 
@@ -78,8 +80,8 @@ impl DefaultDomainResolver {
         if let Some(first) = addrs.first() {
             return Ok(SipAddr {
                 r#type: Some(first.transport),
-                addr: rsip::HostWithPort {
-                    host: rsip::Host::IpAddr(first.addr.ip()),
+                addr: HostWithPort {
+                    host: Host::IpAddr(first.addr.ip()),
                     port: Some(first.addr.port().into()),
                 },
             });
@@ -172,15 +174,7 @@ impl TransportLayer {
     }
 
     pub async fn serve_listens(&self) -> Result<()> {
-        let listens = match self.inner.listens.read() {
-            Ok(listens) => listens.clone(),
-            Err(e) => {
-                return Err(crate::Error::Error(format!(
-                    "Failed to read listens: {:?}",
-                    e
-                )));
-            }
-        };
+        let listens = self.inner.listens.read().clone();
         for transport in listens {
             let addr = transport.get_addr().clone();
             match TransportLayerInner::serve_listener(self.inner.clone(), transport).await {
@@ -245,25 +239,11 @@ impl TransportLayer {
 
 impl TransportLayerInner {
     pub(super) fn set_whitelist(&self, whitelist: Option<TransportWhitelistRef>) {
-        match self.whitelist.write() {
-            Ok(mut guard) => {
-                *guard = whitelist;
-            }
-            Err(e) => {
-                warn!(error = ?e, "Failed to update whitelist");
-            }
-        }
+        *self.whitelist.write() = whitelist;
     }
 
     pub(crate) async fn is_whitelisted(&self, ip: IpAddr) -> bool {
-        let whitelist = match self.whitelist.read() {
-            Ok(guard) => guard.clone(),
-            Err(e) => {
-                warn!(error = ?e, "Failed to read whitelist");
-                return true;
-            }
-        };
-
+        let whitelist = self.whitelist.read().clone();
         match whitelist {
             Some(whitelist) => whitelist.allow(ip).await,
             None => true,
@@ -271,69 +251,30 @@ impl TransportLayerInner {
     }
 
     fn set_tls_config(&self, tls_config: Option<TlsConfig>) {
-        match self.tls_config.write() {
-            Ok(mut guard) => {
-                *guard = tls_config;
-            }
-            Err(e) => {
-                warn!(error = ?e, "Failed to update tls config");
-            }
-        }
+        *self.tls_config.write() = tls_config;
     }
 
     fn tls_config(&self) -> Option<TlsConfig> {
-        match self.tls_config.read() {
-            Ok(guard) => guard.clone(),
-            Err(e) => {
-                warn!(error = ?e, "Failed to read tls config");
-                None
-            }
-        }
+        self.tls_config.read().clone()
     }
 
     pub fn add_listener(&self, connection: SipConnection) {
-        match self.listens.write() {
-            Ok(mut listens) => {
-                listens.push(connection);
-            }
-            Err(e) => {
-                warn!(error = ?e, "Failed to write listens");
-            }
-        }
+        self.listens.write().push(connection);
     }
 
     pub(super) fn del_listener(&self, addr: &SipAddr) {
-        match self.listens.write() {
-            Ok(mut listens) => {
-                listens.retain(|t| t.get_addr() != addr);
-            }
-            Err(e) => {
-                warn!(error = ?e, %addr, "Failed to write listens");
-            }
-        }
+        self.listens.write().retain(|t| t.get_addr() != addr);
     }
 
     pub(super) fn add_connection(&self, connection: SipConnection) {
-        match self.connections.write() {
-            Ok(mut connections) => {
-                connections.insert(connection.get_addr().to_owned(), connection.clone());
-                self.serve_connection(connection);
-            }
-            Err(e) => {
-                warn!(error = ?e, "Failed to write connections");
-            }
-        }
+        let mut connections = self.connections.write();
+        connections.insert(connection.get_addr().to_owned(), connection.clone());
+        drop(connections);
+        self.serve_connection(connection);
     }
 
     pub(super) fn del_connection(&self, addr: &SipAddr) {
-        match self.connections.write() {
-            Ok(mut connections) => {
-                connections.remove(addr);
-            }
-            Err(e) => {
-                warn!(error = ?e, %addr, "Failed to write connections");
-            }
-        }
+        self.connections.write().remove(addr);
     }
 
     async fn lookup(
@@ -347,46 +288,38 @@ impl TransportLayerInner {
 
         // Capture the original domain name before DNS resolution for TLS SNI
         let original_domain = match &target.addr.host {
-            rsip::Host::Domain(domain) => Some(domain.to_string()),
+            Host::Domain(domain) => Some(domain.to_string()),
             _ => None,
         };
 
-        let target = if matches!(target.addr.host, rsip::Host::Domain(_)) {
+        let target = if matches!(target.addr.host, Host::Domain(_)) {
             &self.domain_resolver.resolve(target).await?
         } else {
             target
         };
 
         debug!(?key, src = %destination, %target, "lookup target");
-        match self.connections.read() {
-            Ok(connections) => {
-                if let Some(transport) = connections.get(&target) {
-                    return Ok((transport.clone(), target.clone()));
-                }
-            }
-            Err(e) => {
-                warn!(error = ?e, "Failed to read connections");
-                return Err(crate::Error::Error(format!(
-                    "Failed to read connections: {:?}",
-                    e
-                )));
+        {
+            let connections = self.connections.read();
+            if let Some(transport) = connections.get(&target) {
+                return Ok((transport.clone(), target.clone()));
             }
         }
         match target.r#type {
             Some(
-                rsip::transport::Transport::Tcp
-                | rsip::transport::Transport::Tls
-                | rsip::transport::Transport::Ws
-                | rsip::transport::Transport::Wss,
+                Transport::Tcp
+                | Transport::Tls
+                | Transport::Ws
+                | Transport::Wss,
             ) => {
                 let sip_connection = match target.r#type {
-                    Some(rsip::transport::Transport::Tcp) => {
+                    Some(Transport::Tcp) => {
                         let connection =
                             TcpConnection::connect(target, Some(self.cancel_token.child_token()))
                                 .await?;
                         SipConnection::Tcp(connection)
                     }
-                    Some(rsip::transport::Transport::Tls) => {
+                    Some(Transport::Tls) => {
                         // Build effective TLS config with SNI from the original domain
                         let mut effective_config = tls_config.clone().unwrap_or_default();
                         if effective_config.sni_hostname.is_none() {
@@ -401,7 +334,7 @@ impl TransportLayerInner {
                         .await?;
                         SipConnection::Tls(connection)
                     }
-                    Some(rsip::transport::Transport::Ws | rsip::transport::Transport::Wss) => {
+                    Some(Transport::Ws | Transport::Wss) => {
                         let connection = WebSocketConnection::connect(
                             target,
                             Some(self.cancel_token.child_token()),
@@ -422,20 +355,11 @@ impl TransportLayerInner {
             _ => {}
         }
 
-        let listens = match self.listens.read() {
-            Ok(listens) => listens,
-            Err(e) => {
-                warn!(error = ?e, "Failed to read listens");
-                return Err(crate::Error::Error(format!(
-                    "Failed to read listens: {:?}",
-                    e
-                )));
-            }
-        };
+        let listens = self.listens.read();
         let mut first_udp = None;
         for transport in listens.iter() {
             let addr = transport.get_addr();
-            if addr.r#type == Some(rsip::transport::Transport::Udp) && first_udp.is_none() {
+            if addr.r#type == Some(Transport::Udp) && first_udp.is_none() {
                 first_udp = Some(transport.clone());
             }
             if addr == target {
@@ -523,16 +447,17 @@ mod tests {
         transport::{udp::UdpConnection, SipAddr},
         Result,
     };
-    use rsip::Transport;
+    use crate::sip::{Host, HostWithPort, Transport};
+    use crate::sip::uri::ParamsExt;
 
     #[tokio::test]
     async fn test_lookup() -> Result<()> {
         let mut tl = super::TransportLayer::new(tokio_util::sync::CancellationToken::new());
 
         let first_uri = SipAddr {
-            r#type: Some(rsip::transport::Transport::Udp),
-            addr: rsip::HostWithPort {
-                host: rsip::Host::IpAddr("127.0.0.1".parse()?),
+            r#type: Some(Transport::Udp),
+            addr: HostWithPort {
+                host: Host::IpAddr("127.0.0.1".parse()?),
                 port: Some(5060.into()),
             },
         };
@@ -586,14 +511,14 @@ mod tests {
         let resolver = SipResolver::default();
 
         for item in check_list {
-            let uri = rsip::uri::Uri::try_from(item.0)?;
+            let uri = crate::sip::uri::Uri::try_from(item.0)?;
             let domain = match &uri.host_with_port.host {
-                rsip::Host::Domain(d) => d.clone(),
-                rsip::Host::IpAddr(ip) => rsip::Domain::from(ip.to_string()),
+                crate::sip::Host::Domain(d) => d.clone(),
+                crate::sip::Host::IpAddr(ip) => crate::sip::Domain::from(ip.to_string()),
             };
 
             let secure = match uri.scheme {
-                Some(rsip::Scheme::Sips) => true,
+                Some(crate::sip::Scheme::Sips) => true,
                 _ => false,
             };
 

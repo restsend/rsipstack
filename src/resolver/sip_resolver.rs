@@ -1,6 +1,6 @@
 use hickory_resolver::TokioResolver;
 use rand::RngExt;
-use rsip::{Domain, Port, Transport};
+use crate::sip::{Domain, Port, Transport};
 use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::str::FromStr;
@@ -276,7 +276,7 @@ fn order_srv_records(mut records: Vec<SrvRecord>) -> Vec<SrvRecord> {
 mod tests {
     use super::*;
     use std::collections::HashMap;
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     struct MockDns {
         srv: Mutex<HashMap<String, Vec<SrvRecord>>>,
@@ -292,7 +292,7 @@ mod tests {
         }
 
         fn add_srv(&self, name: &str, target: &str, port: u16, priority: u16, weight: u16) {
-            let mut map = self.srv.lock().unwrap();
+            let mut map = self.srv.lock();
             map.entry(name.to_string()).or_default().push(SrvRecord {
                 target: target.to_string(),
                 port,
@@ -302,7 +302,7 @@ mod tests {
         }
 
         fn add_a(&self, name: &str, ip: IpAddr) {
-            let mut map = self.a.lock().unwrap();
+            let mut map = self.a.lock();
             map.entry(name.to_string()).or_default().push(ip);
         }
     }
@@ -310,7 +310,7 @@ mod tests {
     #[async_trait::async_trait]
     impl LookupSource for MockDns {
         async fn lookup_srv(&self, name: &str) -> Result<Vec<SrvRecord>, String> {
-            let map = self.srv.lock().unwrap();
+            let map = self.srv.lock();
             if let Some(recs) = map.get(name) {
                 Ok(recs.clone())
             } else {
@@ -319,7 +319,7 @@ mod tests {
         }
 
         async fn lookup_a_aaaa(&self, name: &str) -> Result<Vec<IpAddr>, String> {
-            let map = self.a.lock().unwrap();
+            let map = self.a.lock();
             if let Some(ips) = map.get(name) {
                 Ok(ips.clone())
             } else {

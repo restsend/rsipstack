@@ -2,18 +2,18 @@ use super::{
     authenticate::{handle_client_authenticate, Credential},
     DialogId,
 };
+use crate::sip::prelude::HeadersExt;
+use crate::sip::{Param, Response, SipMessage, StatusCode};
 use crate::{
-    rsip_ext::RsipResponseExt,
     transaction::{
         endpoint::EndpointInnerRef,
         key::{TransactionKey, TransactionRole},
         make_call_id, make_tag,
         transaction::Transaction,
     },
-    transport::SipAddr,
+    transport::{SipAddr, SipConnection},
     Result,
 };
-use rsip::{Param, Response, SipMessage, StatusCode};
 use tracing::debug;
 
 /// SIP Registration Client
@@ -56,10 +56,10 @@ use tracing::debug;
 /// };
 ///
 /// let mut registration = Registration::new(endpoint.inner.clone(), Some(credential));
-/// let server = rsip::Uri::try_from("sip:sip.example.com").unwrap();
+/// let server = rsipstack::sip::Uri::try_from("sip:sip.example.com").unwrap();
 /// let response = registration.register(server.clone(), None).await?;
 ///
-/// if response.status_code == rsip::StatusCode::OK {
+/// if response.status_code == rsipstack::sip::StatusCode::OK {
 ///     println!("Registration successful");
 ///     println!("Expires in: {} seconds", registration.expires());
 /// }
@@ -77,12 +77,12 @@ use tracing::debug;
 /// # async fn example() -> rsipstack::Result<()> {
 /// # let endpoint: Endpoint = todo!();
 /// # let credential: Credential = todo!();
-/// # let server = rsip::Uri::try_from("sip:sip.example.com").unwrap();
+/// # let server = rsipstack::sip::Uri::try_from("sip:sip.example.com").unwrap();
 /// let mut registration = Registration::new(endpoint.inner.clone(), Some(credential));
 ///
 /// loop {
 ///     match registration.register(server.clone(), None).await {
-///         Ok(response) if response.status_code == rsip::StatusCode::OK => {
+///         Ok(response) if response.status_code == rsipstack::sip::StatusCode::OK => {
 ///             let expires = registration.expires();
 ///             println!("Registered for {} seconds", expires);
 ///
@@ -112,11 +112,11 @@ pub struct Registration {
     pub last_seq: u32,
     pub endpoint: EndpointInnerRef,
     pub credential: Option<Credential>,
-    pub contact: Option<rsip::typed::Contact>,
-    pub allow: rsip::headers::Allow,
+    pub contact: Option<crate::sip::typed::Contact>,
+    pub allow: crate::sip::headers::Allow,
     /// Public address detected by the server (IP and port)
-    pub public_address: Option<rsip::HostWithPort>,
-    pub call_id: rsip::headers::CallId,
+    pub public_address: Option<crate::sip::HostWithPort>,
+    pub call_id: crate::sip::headers::CallId,
     /// Outbound proxy — override transport destination while keeping the
     /// domain in SIP headers. Used for NAT traversal with load-balanced
     /// proxy clusters where DNS may resolve to different IPs.
@@ -166,7 +166,7 @@ impl Registration {
             endpoint,
             credential,
             contact: None,
-            allow: Default::default(),
+            allow: crate::sip::headers::Allow::new(""),
             public_address: None,
             call_id,
             outbound_proxy: None,
@@ -202,7 +202,7 @@ impl Registration {
     /// }
     /// # }
     /// ```
-    pub fn discovered_public_address(&self) -> Option<rsip::HostWithPort> {
+    pub fn discovered_public_address(&self) -> Option<crate::sip::HostWithPort> {
         self.public_address.clone()
     }
 
@@ -235,7 +235,6 @@ impl Registration {
         self.contact
             .as_ref()
             .and_then(|c| c.expires())
-            .map(|e| e.seconds().unwrap_or(50))
             .unwrap_or(50)
     }
 
@@ -277,21 +276,21 @@ impl Registration {
     ///
     /// ```rust,no_run
     /// # use rsipstack::dialog::registration::Registration;
-    /// # use rsip::prelude::HeadersExt;
+    /// # use rsipstack::sip::prelude::HeadersExt;
     /// # async fn example() -> rsipstack::Result<()> {
     /// # let mut registration: Registration = todo!();
-    /// let server = rsip::Uri::try_from("sip:sip.example.com").unwrap();
+    /// let server = rsipstack::sip::Uri::try_from("sip:sip.example.com").unwrap();
     /// let response = registration.register(server, None).await?;
     ///
     /// match response.status_code {
-    ///     rsip::StatusCode::OK => {
+    ///     rsipstack::sip::StatusCode::OK => {
     ///         println!("Registration successful");
     ///         // Extract registration details from response
     ///         if let Ok(_contact) = response.contact_header() {
     ///             println!("Registration confirmed");
     ///         }
     ///     },
-    ///     rsip::StatusCode::Forbidden => {
+    ///     rsipstack::sip::StatusCode::Forbidden => {
     ///         println!("Registration forbidden");
     ///     },
     ///     _ => {
@@ -309,7 +308,7 @@ impl Registration {
     /// # use rsipstack::Error;
     /// # async fn example() {
     /// # let mut registration: Registration = todo!();
-    /// # let server = rsip::Uri::try_from("sip:sip.example.com").unwrap();
+    /// # let server = rsipstack::sip::Uri::try_from("sip:sip.example.com").unwrap();
     /// match registration.register(server, None).await {
     ///     Ok(response) => {
     ///         // Handle response based on status code
@@ -347,23 +346,27 @@ impl Registration {
     /// If you want to use a specific Contact header, you can set it manually
     /// before calling this method.
     ///
-    pub async fn register(&mut self, server: rsip::Uri, expires: Option<u32>) -> Result<Response> {
+    pub async fn register(
+        &mut self,
+        server: crate::sip::Uri,
+        expires: Option<u32>,
+    ) -> Result<Response> {
         self.last_seq += 1;
 
-        let mut to = rsip::typed::To {
+        let mut to = crate::sip::typed::To {
             display_name: None,
             uri: server.clone(),
             params: vec![],
         };
 
         if let Some(cred) = &self.credential {
-            to.uri.auth = Some(rsip::auth::Auth {
+            to.uri.auth = Some(crate::sip::Auth {
                 user: cred.username.clone(),
                 password: None,
             });
         }
 
-        let from = rsip::typed::From {
+        let from = crate::sip::typed::From {
             display_name: None,
             uri: to.uri.clone(),
             params: vec![],
@@ -382,11 +385,11 @@ impl Registration {
                 .public_address
                 .clone()
                 .unwrap_or_else(|| via.uri.host_with_port.clone());
-            rsip::typed::Contact {
+            crate::sip::typed::Contact {
                 display_name: None,
-                uri: rsip::Uri {
+                uri: crate::sip::Uri {
                     auth: to.uri.auth.clone(),
-                    scheme: Some(rsip::Scheme::Sip),
+                    scheme: Some(crate::sip::Scheme::Sip),
                     host_with_port: contact_host_with_port,
                     params: vec![],
                     headers: vec![],
@@ -400,7 +403,7 @@ impl Registration {
         }
 
         let mut request = self.endpoint.make_request(
-            rsip::Method::Register,
+            crate::sip::Method::Register,
             server,
             via,
             from,
@@ -424,7 +427,7 @@ impl Registration {
         if let Some(expires) = expires {
             request
                 .headers
-                .unique_push(rsip::headers::Expires::from(expires).into());
+                .unique_push(crate::sip::headers::Expires::from(expires).into());
         }
 
         let key = TransactionKey::from_request(&request, TransactionRole::Client)?;
@@ -458,7 +461,11 @@ impl Registration {
                         continue;
                     }
                     StatusCode::ProxyAuthenticationRequired | StatusCode::Unauthorized => {
-                        let received = resp.via_received();
+                        let received = resp.via_header().ok().and_then(|via| {
+                            SipConnection::parse_target_from_via(via)
+                                .ok()
+                                .map(|(_, host_with_port)| host_with_port)
+                        });
                         if self.public_address != received {
                             debug!(
                                 old = ?self.public_address,
@@ -492,9 +499,9 @@ impl Registration {
                             // handle_client_authenticate clones tx.original which has
                             // the stale Contact from the initial REGISTER.
                             if let Some(ref pa) = self.public_address {
-                                let new_contact_uri = rsip::Uri {
+                                let new_contact_uri = crate::sip::Uri {
                                     auth: contact_for_retry.uri.auth.clone(),
-                                    scheme: Some(rsip::Scheme::Sip),
+                                    scheme: Some(crate::sip::Scheme::Sip),
                                     host_with_port: pa.clone(),
                                     // Preserve URI params (e.g., transport=tcp) from original Contact
                                     params: contact_for_retry.uri.params.clone(),
@@ -504,7 +511,7 @@ impl Registration {
                                 new_contact.uri = new_contact_uri;
                                 tx.original
                                     .headers
-                                    .retain(|h| !matches!(h, rsip::Header::Contact(_)));
+                                    .retain(|h| !matches!(h, crate::sip::Header::Contact(_)));
                                 tx.original.headers.unique_push(new_contact.into());
                             }
 
@@ -518,7 +525,11 @@ impl Registration {
                     }
                     StatusCode::OK => {
                         // Check if server indicated our public IP in Via header
-                        let received = resp.via_received();
+                        let received = resp.via_header().ok().and_then(|via| {
+                            SipConnection::parse_target_from_via(via)
+                                .ok()
+                                .map(|(_, host_with_port)| host_with_port)
+                        });
 
                         // Do NOT adopt the Contact from the 200 OK response.
                         // The response may contain Contact bindings from OTHER
@@ -584,7 +595,7 @@ impl Registration {
     /// # let local_addr: SipAddr = todo!();
     /// let contact = Registration::create_nat_aware_contact(
     ///     "alice",
-    ///     Some(rsip::HostWithPort {
+    ///     Some(rsipstack::sip::HostWithPort {
     ///         host: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1)).into(),
     ///         port: Some(5060.into()),
     ///     }),
@@ -594,23 +605,23 @@ impl Registration {
     /// ```
     pub fn create_nat_aware_contact(
         username: &str,
-        public_address: Option<rsip::HostWithPort>,
+        public_address: Option<crate::sip::HostWithPort>,
         local_address: &SipAddr,
-    ) -> rsip::typed::Contact {
+    ) -> crate::sip::typed::Contact {
         let contact_host_with_port = public_address.unwrap_or_else(|| local_address.clone().into());
         let params = vec![];
 
         // Don't add 'ob' parameter as it may confuse some SIP proxies
         // and prevent proper ACK routing
         // if public_address.is_some() {
-        //     params.push(Param::Other("ob".into(), None));
+        //     params.push(Param::Ob);
         // }
 
-        rsip::typed::Contact {
+        crate::sip::typed::Contact {
             display_name: None,
-            uri: rsip::Uri {
-                scheme: Some(rsip::Scheme::Sip),
-                auth: Some(rsip::Auth {
+            uri: crate::sip::Uri {
+                scheme: Some(crate::sip::Scheme::Sip),
+                auth: Some(crate::sip::Auth {
                     user: username.to_string(),
                     password: None,
                 }),

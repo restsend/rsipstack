@@ -29,7 +29,7 @@ pub(super) async fn create_test_endpoint(addr: Option<&str>) -> Result<Endpoint>
 #[cfg(test)]
 mod tests {
     use crate::{
-        rsip_ext::extract_uri_from_contact,
+        sip::typed::Contact,
         transaction::{make_via_branch, random_text},
     };
     #[test]
@@ -44,18 +44,18 @@ mod tests {
     #[test]
     fn test_linphone_contact() {
         let line = "sip:bob@localhost;transport=udp";
-        let contact_uri = extract_uri_from_contact(line).expect("failed to parse contact");
+        let contact_uri = Contact::parse(line).expect("failed to parse contact").uri;
         assert_eq!(contact_uri.to_string(), "sip:bob@localhost");
 
         let line = "<sip:bob@localhost;transport=udp>;expires=3600;+org.linphone.specs=\"lime\"";
-        let contact_uri = extract_uri_from_contact(line).expect("failed to parse contact");
+        let contact_uri = Contact::parse(line).expect("failed to parse contact").uri;
         assert_eq!(contact_uri.to_string(), "sip:bob@localhost");
 
         let line = "<sip:bob@restsend.com;transport=udp>;message-expires=2419200;+sip.instance=\"<urn:uuid:12345-81fa-4fe3-aa6c-17bffdbcf619>\"";
-        let contact_uri = extract_uri_from_contact(line).expect("failed to parse contact");
+        let contact_uri = Contact::parse(line).expect("failed to parse contact").uri;
         assert_eq!(contact_uri.to_string(), "sip:bob@restsend.com");
         let line = "<sip:linphone@domain.com;gr=urn:uuid:c8651907-f0b2-0027-bdbd-ce4ed05c9ef4>;+org.linphone.specs=\"ephemeral/1.1,groupchat/1.1,lime\"";
-        let contact_uri = extract_uri_from_contact(line).expect("failed to parse contact");
+        let contact_uri = Contact::parse(line).expect("failed to parse contact").uri;
         assert_eq!(
             contact_uri.to_string(),
             "sip:linphone@domain.com;gr=urn:uuid:c8651907-f0b2-0027-bdbd-ce4ed05c9ef4"

@@ -1,6 +1,8 @@
 use super::dialog::DialogInnerRef;
 use super::DialogId;
-use crate::rsip_ext::RsipResponseExt;
+use crate::sip::prelude::HasHeaders;
+use crate::sip::{prelude::HeadersExt, Header};
+use crate::sip::{Response, SipMessage, StatusCode};
 use crate::transaction::transaction::Transaction;
 use crate::Result;
 use crate::{
@@ -11,9 +13,6 @@ use crate::{
     },
     transaction::key::TransactionRole,
 };
-use rsip::prelude::HasHeaders;
-use rsip::{prelude::HeadersExt, Header};
-use rsip::{Response, SipMessage, StatusCode};
 use std::sync::atomic::Ordering;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, trace};
@@ -74,12 +73,12 @@ use tracing::{debug, info, trace};
 /// # let new_sdp = vec![];
 /// // Modify session with re-INVITE
 /// let headers = vec![
-///     rsip::Header::ContentType("application/sdp".into())
+///     rsipstack::sip::Header::ContentType("application/sdp".into())
 /// ];
 /// let response = dialog.reinvite(Some(headers), Some(new_sdp)).await?;
 ///
 /// if let Some(resp) = response {
-///     if resp.status_code == rsip::StatusCode::OK {
+///     if resp.status_code == rsipstack::sip::StatusCode::OK {
 ///         println!("Session modified successfully");
 ///     }
 /// }
@@ -102,11 +101,11 @@ impl ClientInviteDialog {
     /// Returns the unique DialogId that identifies this dialog instance.
     /// The DialogId consists of Call-ID, from-tag, and to-tag.
     pub fn id(&self) -> DialogId {
-        self.inner.id.lock().unwrap().clone()
+        self.inner.id.lock().clone()
     }
 
     pub fn state(&self) -> DialogState {
-        self.inner.state.lock().unwrap().clone()
+        self.inner.state.lock().clone()
     }
 
     pub fn from_inner(inner: DialogInnerRef) -> Self {
@@ -156,14 +155,14 @@ impl ClientInviteDialog {
     /// # Returns
     /// * `Ok(())` - BYE was sent successfully or dialog is not confirmed.
     /// * `Err(Error)` - Failed to build/send BYE request.
-    pub async fn bye_with_headers(&self, headers: Option<Vec<rsip::Header>>) -> Result<()> {
+    pub async fn bye_with_headers(&self, headers: Option<Vec<crate::sip::Header>>) -> Result<()> {
         if !self.inner.is_confirmed() {
             return Ok(());
         }
 
         let request =
             self.inner
-                .make_request(rsip::Method::Bye, None, None, None, headers, None)?;
+                .make_request(crate::sip::Method::Bye, None, None, None, headers, None)?;
 
         if let Err(e) = self.inner.do_request(request).await {
             info!(error = %e, "bye error");
@@ -186,11 +185,8 @@ impl ClientInviteDialog {
     /// # Parameters
     /// * `reason` - Value of the `Reason` header (without the `Reason:` name).
     pub async fn bye_with_reason(&self, reason: String) -> Result<()> {
-        self.bye_with_headers(Some(vec![rsip::Header::Other(
-            "Reason".into(),
-            reason.into(),
-        )]))
-        .await
+        self.bye_with_headers(Some(vec![crate::sip::Header::Reason(reason.into())]))
+            .await
     }
 
     /// Hang up the call
@@ -212,7 +208,10 @@ impl ClientInviteDialog {
     ///
     /// # Parameters
     /// * `headers` - Optional extra SIP headers to include when BYE is used.
-    pub async fn hangup_with_headers(&self, headers: Option<Vec<rsip::Header>>) -> Result<()> {
+    pub async fn hangup_with_headers(
+        &self,
+        headers: Option<Vec<crate::sip::Header>>,
+    ) -> Result<()> {
         if self.inner.can_cancel() {
             self.cancel().await
         } else {
@@ -228,11 +227,8 @@ impl ClientInviteDialog {
     /// # Parameters
     /// * `reason` - Value of the `Reason` header used for BYE.
     pub async fn hangup_with_reason(&self, reason: String) -> Result<()> {
-        self.hangup_with_headers(Some(vec![rsip::Header::Other(
-            "Reason".into(),
-            reason.into(),
-        )]))
-        .await
+        self.hangup_with_headers(Some(vec![crate::sip::Header::Reason(reason.into())]))
+            .await
     }
 
     /// Send a CANCEL request to cancel an ongoing INVITE
@@ -262,22 +258,17 @@ impl ClientInviteDialog {
             return Ok(());
         }
         debug!(id = %self.id(), "sending cancel request");
-        let mut cancel_request = self
-            .inner
-            .initial_request
-            .lock()
-            .expect("cancel mutext poisoned")
-            .clone();
+        let mut cancel_request = self.inner.initial_request.lock().clone();
         let invite_seq = cancel_request.cseq_header()?.seq()?;
         cancel_request
             .headers_mut()
             .retain(|h| !matches!(h, Header::ContentLength(_) | Header::ContentType(_)));
 
-        cancel_request.method = rsip::Method::Cancel;
+        cancel_request.method = crate::sip::Method::Cancel;
         cancel_request
             .cseq_header_mut()?
             .mut_seq(invite_seq)?
-            .mut_method(rsip::Method::Cancel)?;
+            .mut_method(crate::sip::Method::Cancel)?;
         cancel_request.body = vec![];
         self.inner.do_request(cancel_request).await?;
         Ok(())
@@ -313,16 +304,16 @@ impl ClientInviteDialog {
     /// ```
     pub async fn reinvite(
         &self,
-        headers: Option<Vec<rsip::Header>>,
+        headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
-    ) -> Result<Option<rsip::Response>> {
+    ) -> Result<Option<crate::sip::Response>> {
         if !self.inner.is_confirmed() {
             return Ok(None);
         }
         debug!(id = %self.id(), ?body, "sending re-invite request");
         let request =
             self.inner
-                .make_request(rsip::Method::Invite, None, None, None, headers, body)?;
+                .make_request(crate::sip::Method::Invite, None, None, None, headers, body)?;
         let resp = self.inner.do_request(request.clone()).await;
         match resp {
             Ok(Some(ref resp)) => {
@@ -367,16 +358,16 @@ impl ClientInviteDialog {
     /// ```
     pub async fn update(
         &self,
-        headers: Option<Vec<rsip::Header>>,
+        headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
-    ) -> Result<Option<rsip::Response>> {
+    ) -> Result<Option<crate::sip::Response>> {
         if !self.inner.is_confirmed() {
             return Ok(None);
         }
         debug!(id = %self.id(), ?body, "sending update request");
         let request =
             self.inner
-                .make_request(rsip::Method::Update, None, None, None, headers, body)?;
+                .make_request(crate::sip::Method::Update, None, None, None, headers, body)?;
         self.inner.do_request(request.clone()).await
     }
 
@@ -406,7 +397,7 @@ impl ClientInviteDialog {
     /// // Send DTMF tone
     /// let dtmf_body = b"Signal=1\r\nDuration=100\r\n";
     /// let headers = vec![
-    ///     rsip::Header::ContentType("application/dtmf-relay".into())
+    ///     rsipstack::sip::Header::ContentType("application/dtmf-relay".into())
     /// ];
     /// let response = dialog.info(Some(headers), Some(dtmf_body.to_vec())).await?;
     /// # Ok(())
@@ -414,31 +405,36 @@ impl ClientInviteDialog {
     /// ```
     pub async fn info(
         &self,
-        headers: Option<Vec<rsip::Header>>,
+        headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
-    ) -> Result<Option<rsip::Response>> {
+    ) -> Result<Option<crate::sip::Response>> {
         if !self.inner.is_confirmed() {
             return Ok(None);
         }
         debug!(id = %self.id(), ?body, "sending info request");
         let request =
             self.inner
-                .make_request(rsip::Method::Info, None, None, None, headers, body)?;
+                .make_request(crate::sip::Method::Info, None, None, None, headers, body)?;
         self.inner.do_request(request.clone()).await
     }
 
     pub async fn options(
         &self,
-        headers: Option<Vec<rsip::Header>>,
+        headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
-    ) -> Result<Option<rsip::Response>> {
+    ) -> Result<Option<crate::sip::Response>> {
         if !self.inner.is_confirmed() {
             return Ok(None);
         }
         debug!(id = %self.id(), ?body, "sending option request");
-        let request =
-            self.inner
-                .make_request(rsip::Method::Options, None, None, None, headers, body)?;
+        let request = self.inner.make_request(
+            crate::sip::Method::Options,
+            None,
+            None,
+            None,
+            headers,
+            body,
+        )?;
         self.inner.do_request(request.clone()).await
     }
 
@@ -448,10 +444,10 @@ impl ClientInviteDialog {
     /// It automatically handles CSeq increment, Call-ID, From/To tags, and Route set.
     pub async fn request(
         &self,
-        method: rsip::Method,
-        headers: Option<Vec<rsip::Header>>,
+        method: crate::sip::Method,
+        headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
-    ) -> Result<Option<rsip::Response>> {
+    ) -> Result<Option<crate::sip::Response>> {
         if !self.inner.is_confirmed() {
             return Ok(None);
         }
@@ -465,10 +461,11 @@ impl ClientInviteDialog {
     /// Send a NOTIFY request
     pub async fn notify(
         &self,
-        headers: Option<Vec<rsip::Header>>,
+        headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
-    ) -> Result<Option<rsip::Response>> {
-        self.request(rsip::Method::Notify, headers, body).await
+    ) -> Result<Option<crate::sip::Response>> {
+        self.request(crate::sip::Method::Notify, headers, body)
+            .await
     }
 
     /// Send a REFER request
@@ -482,16 +479,17 @@ impl ClientInviteDialog {
     /// * `body` - Optional message body
     pub async fn refer(
         &self,
-        refer_to: rsip::Uri,
-        headers: Option<Vec<rsip::Header>>,
+        refer_to: crate::sip::Uri,
+        headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
-    ) -> Result<Option<rsip::Response>> {
+    ) -> Result<Option<crate::sip::Response>> {
         let mut headers = headers.unwrap_or_default();
-        headers.push(rsip::Header::Other(
+        headers.push(crate::sip::Header::Other(
             "Refer-To".into(),
             format!("<{}>", refer_to).into(),
         ));
-        self.request(rsip::Method::Refer, Some(headers), body).await
+        self.request(crate::sip::Method::Refer, Some(headers), body)
+            .await
     }
 
     /// Send a REFER progress notification (RFC 3515)
@@ -505,13 +503,13 @@ impl ClientInviteDialog {
     /// * `sub_state` - The subscription state (e.g., "active", "terminated;reason=noresource")
     pub async fn notify_refer(
         &self,
-        status: rsip::StatusCode,
+        status: crate::sip::StatusCode,
         sub_state: &str,
-    ) -> Result<Option<rsip::Response>> {
+    ) -> Result<Option<crate::sip::Response>> {
         let headers = vec![
-            rsip::Header::Other("Event".into(), "refer".into()),
-            rsip::Header::Other("Subscription-State".into(), sub_state.into()),
-            rsip::Header::ContentType("message/sipfrag".into()),
+            crate::sip::Header::Event("refer".into()),
+            crate::sip::Header::SubscriptionState(sub_state.into()),
+            crate::sip::Header::ContentType("message/sipfrag".into()),
         ];
 
         let body = format!("SIP/2.0 {} {:?}", u16::from(status.clone()), status).into_bytes();
@@ -533,10 +531,11 @@ impl ClientInviteDialog {
     /// Sends an instant message within the dialog.
     pub async fn message(
         &self,
-        headers: Option<Vec<rsip::Header>>,
+        headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
-    ) -> Result<Option<rsip::Response>> {
-        self.request(rsip::Method::Message, headers, body).await
+    ) -> Result<Option<crate::sip::Response>> {
+        self.request(crate::sip::Method::Message, headers, body)
+            .await
     }
 
     /// Handle incoming transaction for this dialog
@@ -565,7 +564,7 @@ impl ClientInviteDialog {
         trace!(
             id = %self.id(),
             method = %tx.original.method,
-            state = %self.inner.state.lock().unwrap(),
+            state = %self.inner.state.lock(),
             "handle request"
         );
 
@@ -578,7 +577,8 @@ impl ClientInviteDialog {
                 cseq = %cseq,
                 "received old request"
             );
-            tx.reply(rsip::StatusCode::ServerInternalError).await?;
+            tx.reply(crate::sip::StatusCode::ServerInternalError)
+                .await?;
             return Ok(());
         }
 
@@ -589,21 +589,21 @@ impl ClientInviteDialog {
 
         if self.inner.is_confirmed() {
             match tx.original.method {
-                rsip::Method::Invite => return self.handle_reinvite(tx).await,
-                rsip::Method::Bye => return self.handle_bye(tx).await,
-                rsip::Method::Info => return self.handle_info(tx).await,
-                rsip::Method::Options => return self.handle_options(tx).await,
-                rsip::Method::Update => return self.handle_update(tx).await,
-                rsip::Method::Refer => return self.handle_refer(tx).await,
-                rsip::Method::Message => return self.handle_message(tx).await,
-                rsip::Method::Notify => return self.handle_notify(tx).await,
+                crate::sip::Method::Invite => return self.handle_reinvite(tx).await,
+                crate::sip::Method::Bye => return self.handle_bye(tx).await,
+                crate::sip::Method::Info => return self.handle_info(tx).await,
+                crate::sip::Method::Options => return self.handle_options(tx).await,
+                crate::sip::Method::Update => return self.handle_update(tx).await,
+                crate::sip::Method::Refer => return self.handle_refer(tx).await,
+                crate::sip::Method::Message => return self.handle_message(tx).await,
+                crate::sip::Method::Notify => return self.handle_notify(tx).await,
                 _ => {
                     debug!(id = %self.id(), method = ?tx.original.method, "invalid request method");
-                    tx.reply(rsip::StatusCode::MethodNotAllowed).await?;
+                    tx.reply(crate::sip::StatusCode::MethodNotAllowed).await?;
                     return Err(crate::Error::DialogError(
                         "invalid request".to_string(),
                         self.id(),
-                        rsip::StatusCode::MethodNotAllowed,
+                        crate::sip::StatusCode::MethodNotAllowed,
                     ));
                 }
             }
@@ -621,7 +621,7 @@ impl ClientInviteDialog {
         debug!(id = %self.id(), uri = %tx.original.uri, "received bye");
         self.inner
             .transition(DialogState::Terminated(self.id(), TerminatedReason::UasBye))?;
-        tx.reply(rsip::StatusCode::OK).await?;
+        tx.reply(crate::sip::StatusCode::OK).await?;
         Ok(())
     }
 
@@ -660,7 +660,7 @@ impl ClientInviteDialog {
         // wait for ACK
         while let Some(msg) = tx.receive().await {
             match msg {
-                SipMessage::Request(req) if req.method == rsip::Method::Ack => {
+                SipMessage::Request(req) if req.method == crate::sip::Method::Ack => {
                     debug!(id = %self.id(), "received ACK for re-INVITE");
                     break;
                 }
@@ -716,7 +716,7 @@ impl ClientInviteDialog {
                         continue;
                     }
 
-                    if matches!(status.kind(), rsip::StatusCodeKind::Provisional) {
+                    if matches!(status.kind(), crate::sip::StatusCodeKind::Provisional) {
                         self.inner.handle_provisional_response(&resp).await?;
                         self.inner.transition(DialogState::Early(self.id(), resp))?;
                         continue;
@@ -748,11 +748,7 @@ impl ClientInviteDialog {
                             self.inner.update_remote_tag("").ok();
                             // Update initial_request with the new invite request
                             {
-                                let mut req = self
-                                    .inner
-                                    .initial_request
-                                    .lock()
-                                    .expect("update initial request mutex poisoned");
+                                let mut req = self.inner.initial_request.lock();
                                 *req = tx.original.clone();
                             }
                             continue;
@@ -788,13 +784,16 @@ impl ClientInviteDialog {
                             self.inner.update_route_set_from_response(&resp);
                             // 200 response to INVITE always contains Contact header
                             let contact = resp.contact_header()?;
-                            self.inner
-                                .remote_contact
-                                .lock()
-                                .unwrap()
-                                .replace(contact.clone());
+                            self.inner.remote_contact.lock().replace(contact.clone());
 
-                            *self.inner.remote_uri.lock().unwrap() = resp.contact_uri()?;
+                            let contact_uri = resp
+                                .typed_contact_headers()?
+                                .first()
+                                .map(|c| c.uri.clone())
+                                .ok_or_else(|| {
+                                    crate::Error::Error("missing Contact header".to_string())
+                                })?;
+                            *self.inner.remote_uri.lock() = contact_uri;
                             self.inner
                                 .transition(DialogState::Confirmed(dialog_id.clone(), resp))?;
                         }

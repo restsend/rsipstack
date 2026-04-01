@@ -1,10 +1,9 @@
 use crate::{dialog::DialogId, transaction::key::TransactionKey, transport::SipAddr};
-use thiserror::Error as ThisError;
 
-#[derive(Debug, ThisError)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("SIP message error: {0}")]
-    SipMessageError(#[from] rsip::Error),
+    SipMessageError(#[from] crate::sip::Error),
 
     #[error("DNS resolution error: {0}")]
     DnsResolutionError(String),
@@ -19,7 +18,7 @@ pub enum Error {
     EndpointError(String),
 
     #[error("Dialog error:{2}({0})")]
-    DialogError(String, DialogId, rsip::StatusCode),
+    DialogError(String, DialogId, crate::sip::StatusCode),
 
     #[error("I/O error: {0}")]
     IoError(#[from] std::io::Error),

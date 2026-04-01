@@ -9,7 +9,7 @@ use crate::{
     Result,
 };
 use futures_util::{SinkExt, StreamExt};
-use rsip::SipMessage;
+use crate::sip::SipMessage;
 use std::{fmt, net::SocketAddr, sync::Arc};
 use tokio::{net::TcpListener, sync::Mutex};
 use tokio_tungstenite::{
@@ -51,9 +51,9 @@ impl WebSocketListenerConnection {
         is_secure: bool,
     ) -> Result<Self> {
         let transport_type = if is_secure {
-            rsip::transport::Transport::Wss
+            crate::sip::transport::Transport::Wss
         } else {
-            rsip::transport::Transport::Ws
+            crate::sip::transport::Transport::Ws
         };
 
         let inner = WebSocketListenerConnectionInner {
@@ -75,9 +75,9 @@ impl WebSocketListenerConnection {
     ) -> Result<()> {
         let listener = TcpListener::bind(self.inner.local_addr.get_socketaddr()?).await?;
         let transport_type = if self.inner.is_secure {
-            rsip::transport::Transport::Wss
+            crate::sip::transport::Transport::Wss
         } else {
-            rsip::transport::Transport::Ws
+            crate::sip::transport::Transport::Ws
         };
 
         debug!(local = %self.inner.local_addr, "Starting WebSocket listener");
@@ -198,16 +198,16 @@ impl WebSocketConnection {
         cancel_token: Option<CancellationToken>,
     ) -> Result<Self> {
         let scheme = match remote.r#type {
-            Some(rsip::transport::Transport::Wss) => "wss",
+            Some(crate::sip::transport::Transport::Wss) => "wss",
             _ => "ws",
         };
 
         let host = match &remote.addr.host {
-            rsip::host_with_port::Host::Domain(domain) => domain.to_string(),
-            rsip::host_with_port::Host::IpAddr(ip) => ip.to_string(),
+            crate::sip::Host::Domain(domain) => domain.to_string(),
+            crate::sip::Host::IpAddr(ip) => ip.to_string(),
         };
 
-        let port = remote.addr.port.as_ref().map_or(5060, |p| *p.value());
+        let port = remote.addr.port.as_ref().map_or(5060, |p| p.value());
 
         let url = format!("{}://{}:{}/", scheme, host, port);
         let mut request = url.into_client_request()?;
@@ -355,7 +355,7 @@ impl StreamConnection for WebSocketConnection {
 impl fmt::Display for WebSocketConnection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let transport = match self.inner.remote_addr.r#type {
-            Some(rsip::transport::Transport::Wss) => "WSS",
+            Some(crate::sip::transport::Transport::Wss) => "WSS",
             _ => "WS",
         };
         write!(f, "{} {}", transport, self.inner.remote_addr)
