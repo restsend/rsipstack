@@ -194,13 +194,29 @@ impl TransportLayer {
     }
 
     pub fn get_addrs(&self) -> Vec<SipAddr> {
-        match self.inner.listens.read() {
+        let mut addrs: Vec<SipAddr> = match self.inner.listens.read() {
             Ok(listens) => listens.iter().map(|t| t.get_addr().to_owned()).collect(),
             Err(e) => {
                 warn!(error = ?e, "Failed to read listens");
                 Vec::new()
             }
+        };
+        // Also include local addresses from TCP/TLS client connections.
+        // For connection-oriented transports, get_addr() returns the remote address
+        // (used for lookup), but Via/Contact headers need the local address.
+        if let Ok(connections) = self.inner.connections.read() {
+            for conn in connections.values() {
+                match conn {
+                    SipConnection::Tcp(tcp) => {
+                        addrs.push(tcp.inner.local_addr.clone());
+                    }
+                    // TLS inner is private — skip for now
+                    SipConnection::Tls(_) => {}
+                    _ => {}
+                }
+            }
         }
+        addrs
     }
 
     /// Set an async whitelist callback invoked on incoming packets/connections.
@@ -468,9 +484,12 @@ impl TransportLayerInner {
     pub fn serve_connection(&self, transport: SipConnection) {
         let sub_token = self.cancel_token.child_token();
         let sender_clone = self.transport_tx.clone();
+        info!(addr=%transport.get_addr(), "serve_connection: starting serve_loop");
         tokio::spawn(async move {
             match sender_clone.send(TransportEvent::New(transport.clone())) {
-                Ok(()) => {}
+                Ok(()) => {
+                    info!(addr=%transport.get_addr(), "serve_connection: New event sent");
+                }
                 Err(e) => {
                     warn!(addr=%transport.get_addr(), error = ?e, "Error sending new connection event");
                     return;
