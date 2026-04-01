@@ -3,13 +3,13 @@
 //! This module contains tests for dialog management and lifecycle
 
 use crate::dialog::{dialog_layer::DialogLayer, DialogId};
+use crate::sip::{headers::*, Request};
 use crate::transaction::{
     endpoint::EndpointBuilder,
     key::{TransactionKey, TransactionRole},
     transaction::Transaction,
 };
 use crate::transport::{udp::UdpConnection, TransportLayer};
-use crate::sip::{headers::*, Request};
 use tokio::sync::mpsc::unbounded_channel;
 use tokio_util::sync::CancellationToken;
 

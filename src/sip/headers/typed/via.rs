@@ -1,5 +1,5 @@
-use crate::sip::{Error, Header, Transport, Version, Uri, uri::Param};
-use crate::sip::uri::{Branch, Received, HostWithPort};
+use crate::sip::uri::{Branch, HostWithPort, Received};
+use crate::sip::{uri::Param, Error, Header, Transport, Uri, Version};
 use std::net::IpAddr;
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Via {
@@ -13,9 +13,16 @@ impl Via {
     pub fn parse(s: &str) -> Result<Self, Error> {
         let s = s.trim();
         let mut slashes = s.splitn(3, '/');
-        let _proto = slashes.next().ok_or_else(|| Error::ParseError("Via: missing protocol".into()))?;
-        let _ver = slashes.next().ok_or_else(|| Error::ParseError("Via: missing version".into()))?;
-        let rest = slashes.next().ok_or_else(|| Error::ParseError("Via: missing transport+host".into()))?.trim();
+        let _proto = slashes
+            .next()
+            .ok_or_else(|| Error::ParseError("Via: missing protocol".into()))?;
+        let _ver = slashes
+            .next()
+            .ok_or_else(|| Error::ParseError("Via: missing version".into()))?;
+        let rest = slashes
+            .next()
+            .ok_or_else(|| Error::ParseError("Via: missing transport+host".into()))?
+            .trim();
 
         let (transport_str, addr_and_params) = rest
             .split_once(|c: char| c.is_whitespace())
@@ -107,7 +114,9 @@ impl std::fmt::Display for Via {
 }
 
 impl std::convert::From<Via> for String {
-    fn from(v: Via) -> String { v.to_string() }
+    fn from(v: Via) -> String {
+        v.to_string()
+    }
 }
 
 impl std::convert::From<Via> for Header {
@@ -148,14 +157,18 @@ mod tests {
 
     #[test]
     fn via_rport_with_value() {
-        let v = Via::parse("SIP/2.0/UDP ua.restsend.com:5060;branch=z9hG4bKtest;rport=51372;received=192.0.2.1").unwrap();
+        let v = Via::parse(
+            "SIP/2.0/UDP ua.restsend.com:5060;branch=z9hG4bKtest;rport=51372;received=192.0.2.1",
+        )
+        .unwrap();
         assert_eq!(v.rport(), Some(Some(51372)));
         assert!(v.to_string().contains(";rport=51372"));
     }
 
     #[test]
     fn via_received() {
-        let v = Via::parse("SIP/2.0/UDP ua.restsend.com;branch=z9hG4bKtest;received=10.0.0.5").unwrap();
+        let v =
+            Via::parse("SIP/2.0/UDP ua.restsend.com;branch=z9hG4bKtest;received=10.0.0.5").unwrap();
         let rcvd = v.received().unwrap().unwrap();
         assert_eq!(rcvd.to_string(), "10.0.0.5");
     }

@@ -1,5 +1,6 @@
 use clap::Parser;
 use futures::future::{self, Future};
+use parking_lot::Mutex;
 use rsipstack::dialog::dialog::{
     Dialog, DialogState, DialogStateReceiver, DialogStateSender, TerminatedReason,
 };
@@ -13,7 +14,6 @@ use rsipstack::{
     transport::{udp::UdpConnection, TransportLayer},
     EndpointBuilder, Error,
 };
-use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::{
@@ -273,10 +273,7 @@ async fn process_dialog_state(
                 None => {}
             },
             DialogState::Confirmed(id, _) => {
-                stats
-                    .active_calls
-                    .lock()
-                    .insert(id, Instant::now());
+                stats.active_calls.lock().insert(id, Instant::now());
             }
             DialogState::Terminated(id, status) => {
                 match status {

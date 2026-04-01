@@ -20,7 +20,10 @@ async fn test_tcp_listener_connection_api() -> Result<()> {
     );
 
     // Test that we can get the address
-    assert_eq!(bound_addr.r#type, Some(crate::sip::transport::Transport::Tcp));
+    assert_eq!(
+        bound_addr.r#type,
+        Some(crate::sip::transport::Transport::Tcp)
+    );
     assert_eq!(bound_addr.addr.host.to_string(), "127.0.0.1");
 
     Ok(())
@@ -44,7 +47,10 @@ async fn test_websocket_listener_connection_api() -> Result<()> {
     );
 
     // Test that we can get the address
-    assert_eq!(bound_addr.r#type, Some(crate::sip::transport::Transport::Ws));
+    assert_eq!(
+        bound_addr.r#type,
+        Some(crate::sip::transport::Transport::Ws)
+    );
     assert_eq!(bound_addr.addr.host.to_string(), "127.0.0.1");
 
     Ok(())

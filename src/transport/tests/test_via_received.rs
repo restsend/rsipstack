@@ -1,5 +1,5 @@
-use crate::transport::SipConnection;
 use crate::sip::{headers::*, prelude::HeadersExt, SipMessage, Transport};
+use crate::transport::SipConnection;
 use std::net::SocketAddr;
 
 /// Test Via received parameter handling for different transport protocols
@@ -25,7 +25,10 @@ fn test_via_received_udp() {
                 "UDP should add received parameter"
             );
             assert!(
-                typed_via.params.iter().any(|p| matches!(p, crate::sip::Param::Rport(Some(_)))),
+                typed_via
+                    .params
+                    .iter()
+                    .any(|p| matches!(p, crate::sip::Param::Rport(Some(_)))),
                 "UDP should add rport parameter"
             );
         }

@@ -1,5 +1,8 @@
-use crate::sip::{Error, Header, Uri, uri::{Param, Tag}};
 use super::parse_helpers::parse_display_uri_params_str;
+use crate::sip::{
+    uri::{Param, Tag},
+    Error, Header, Uri,
+};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct To {
@@ -11,7 +14,11 @@ pub struct To {
 impl To {
     pub fn parse(s: &str) -> Result<Self, Error> {
         let (display_name, uri, params) = parse_display_uri_params_str(s)?;
-        Ok(To { display_name, uri, params })
+        Ok(To {
+            display_name,
+            uri,
+            params,
+        })
     }
 
     pub fn tag(&self) -> Option<&Tag> {
@@ -22,7 +29,8 @@ impl To {
     }
 
     pub fn with_tag(mut self, tag: Tag) -> Self {
-        self.params.retain(|p| !matches!(p, crate::sip::uri::Param::Tag(_)));
+        self.params
+            .retain(|p| !matches!(p, crate::sip::uri::Param::Tag(_)));
         self.params.push(crate::sip::uri::Param::Tag(tag));
         self
     }
@@ -48,12 +56,18 @@ impl std::fmt::Display for To {
 
 impl std::convert::From<Uri> for To {
     fn from(uri: Uri) -> Self {
-        Self { display_name: None, uri, params: vec![] }
+        Self {
+            display_name: None,
+            uri,
+            params: vec![],
+        }
     }
 }
 
 impl std::convert::From<To> for String {
-    fn from(s: To) -> String { s.to_string() }
+    fn from(s: To) -> String {
+        s.to_string()
+    }
 }
 
 impl std::convert::From<To> for Header {

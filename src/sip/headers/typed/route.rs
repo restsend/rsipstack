@@ -1,5 +1,5 @@
-use crate::sip::{Error, Header, Uri, uri::Param};
 use super::parse_helpers::parse_display_uri_params_str;
+use crate::sip::{uri::Param, Error, Header, Uri};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Route {
@@ -15,26 +15,43 @@ fn split_route_values(s: &str) -> Vec<String> {
     let mut in_quotes = false;
     for ch in s.chars() {
         match ch {
-            '"' => { in_quotes = !in_quotes; current.push(ch); }
-            '<' if !in_quotes => { angle_depth += 1; current.push(ch); }
-            '>' if !in_quotes => { angle_depth = angle_depth.saturating_sub(1); current.push(ch); }
+            '"' => {
+                in_quotes = !in_quotes;
+                current.push(ch);
+            }
+            '<' if !in_quotes => {
+                angle_depth += 1;
+                current.push(ch);
+            }
+            '>' if !in_quotes => {
+                angle_depth = angle_depth.saturating_sub(1);
+                current.push(ch);
+            }
             ',' if !in_quotes && angle_depth == 0 => {
                 let v = current.trim().to_string();
-                if !v.is_empty() { values.push(v); }
+                if !v.is_empty() {
+                    values.push(v);
+                }
                 current.clear();
             }
             _ => current.push(ch),
         }
     }
     let v = current.trim().to_string();
-    if !v.is_empty() { values.push(v); }
+    if !v.is_empty() {
+        values.push(v);
+    }
     values
 }
 
 impl Route {
     pub fn parse(s: &str) -> Result<Self, Error> {
         let (display_name, uri, params) = parse_display_uri_params_str(s)?;
-        Ok(Route { display_name, uri, params })
+        Ok(Route {
+            display_name,
+            uri,
+            params,
+        })
     }
 
     pub fn parse_header_list(s: &str) -> Result<Vec<Self>, Error> {
@@ -68,12 +85,18 @@ impl std::fmt::Display for Route {
 
 impl std::convert::From<Uri> for Route {
     fn from(uri: Uri) -> Self {
-        Self { display_name: None, uri, params: vec![] }
+        Self {
+            display_name: None,
+            uri,
+            params: vec![],
+        }
     }
 }
 
 impl std::convert::From<Route> for String {
-    fn from(r: Route) -> String { r.to_string() }
+    fn from(r: Route) -> String {
+        r.to_string()
+    }
 }
 
 impl std::convert::From<Route> for Header {
@@ -113,9 +136,9 @@ mod tests {
 
     #[test]
     fn route_multi_uri() {
-        let routes = Route::parse_header_list(
-            "<sip:proxy1.restsend.com;lr>, <sip:proxy2.restsend.com;lr>"
-        ).unwrap();
+        let routes =
+            Route::parse_header_list("<sip:proxy1.restsend.com;lr>, <sip:proxy2.restsend.com;lr>")
+                .unwrap();
         assert_eq!(routes.len(), 2);
         assert_eq!(routes[0].uri.to_string(), "sip:proxy1.restsend.com;lr");
         assert_eq!(routes[1].uri.to_string(), "sip:proxy2.restsend.com;lr");
@@ -126,8 +149,9 @@ mod tests {
     #[test]
     fn route_multi_uri_three() {
         let routes = Route::parse_header_list(
-            "<sip:a.restsend.com;lr>, <sip:b.restsend.com;ob>, <sip:c.restsend.com;lr;ob>"
-        ).unwrap();
+            "<sip:a.restsend.com;lr>, <sip:b.restsend.com;ob>, <sip:c.restsend.com;lr;ob>",
+        )
+        .unwrap();
         assert_eq!(routes.len(), 3);
         assert!(routes[0].has_lr());
         assert!(routes[1].has_ob());
@@ -140,7 +164,9 @@ mod tests {
         assert!(r.has_lr());
         let du = r.uri.params.iter().find_map(|p| {
             if let Param::Other(n, Some(v)) = p {
-                if n.value().eq_ignore_ascii_case("du") { return Some(v.value()); }
+                if n.value().eq_ignore_ascii_case("du") {
+                    return Some(v.value());
+                }
             }
             None
         });
@@ -159,7 +185,10 @@ mod tests {
         use crate::sip::Transport;
         let r = Route::parse("<sip:proxy.restsend.com;transport=tcp;lr>").unwrap();
         assert!(r.has_lr());
-        assert!(r.uri.params.iter().any(|p| matches!(p, Param::Transport(Transport::Tcp))));
+        assert!(r
+            .uri
+            .params
+            .iter()
+            .any(|p| matches!(p, Param::Transport(Transport::Tcp))));
     }
 }
-

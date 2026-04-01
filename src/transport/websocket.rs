@@ -1,3 +1,4 @@
+use crate::sip::SipMessage;
 use crate::{
     transport::{
         connection::{TransportSender, KEEPALIVE_REQUEST, KEEPALIVE_RESPONSE},
@@ -9,7 +10,6 @@ use crate::{
     Result,
 };
 use futures_util::{SinkExt, StreamExt};
-use crate::sip::SipMessage;
 use std::{fmt, net::SocketAddr, sync::Arc};
 use tokio::{net::TcpListener, sync::Mutex};
 use tokio_tungstenite::{

@@ -1,10 +1,7 @@
+use crate::sip::{prelude::HeadersExt, Request, Response};
 use crate::{
     transaction::{key::TransactionRole, transaction::Transaction},
     Error, Result,
-};
-use crate::sip::{
-    prelude::HeadersExt,
-    Request, Response,
 };
 
 pub mod authenticate;

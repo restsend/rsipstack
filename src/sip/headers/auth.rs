@@ -9,7 +9,9 @@ pub enum Algorithm {
 }
 
 impl Default for Algorithm {
-    fn default() -> Self { Self::Sha256 }
+    fn default() -> Self {
+        Self::Sha256
+    }
 }
 
 impl std::fmt::Display for Algorithm {
@@ -42,7 +44,10 @@ impl std::convert::TryFrom<&str> for Algorithm {
             s if s.eq_ignore_ascii_case("sha256-sess") => Ok(Self::Sha256Sess),
             s if s.eq_ignore_ascii_case("sha512") => Ok(Self::Sha512),
             s if s.eq_ignore_ascii_case("sha512-sess") => Ok(Self::Sha512Sess),
-            s => Err(crate::sip::Error::ParseError(format!("invalid Algorithm: {}", s))),
+            s => Err(crate::sip::Error::ParseError(format!(
+                "invalid Algorithm: {}",
+                s
+            ))),
         }
     }
 }

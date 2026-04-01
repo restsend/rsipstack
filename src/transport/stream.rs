@@ -1,3 +1,4 @@
+use crate::sip::SipMessage;
 use crate::{
     transport::{
         connection::{TransportSender, KEEPALIVE_REQUEST, KEEPALIVE_RESPONSE},
@@ -6,7 +7,6 @@ use crate::{
     Result,
 };
 use bytes::{Buf, BytesMut};
-use crate::sip::SipMessage;
 use tokio::{
     io::{AsyncRead, AsyncWrite, AsyncWriteExt},
     sync::Mutex,

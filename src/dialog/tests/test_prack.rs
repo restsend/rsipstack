@@ -1,5 +1,7 @@
 use super::test_dialog_states::{create_invite_request, create_test_endpoint};
 use crate::dialog::{dialog::DialogInner, server_dialog::ServerInviteDialog, DialogId};
+use crate::sip::headers::*;
+use crate::sip::{Header, Method, Request, SipMessage, StatusCode};
 use crate::transaction::{
     key::{TransactionKey, TransactionRole},
     transaction::Transaction,
@@ -7,8 +9,6 @@ use crate::transaction::{
 use crate::transport::{
     channel::ChannelConnection, connection::TransportEvent, SipAddr, SipConnection,
 };
-use crate::sip::headers::*;
-use crate::sip::{Header, Method, Request, SipMessage, StatusCode};
 use std::convert::TryFrom;
 use std::sync::Arc;
 use tokio::sync::mpsc::unbounded_channel;

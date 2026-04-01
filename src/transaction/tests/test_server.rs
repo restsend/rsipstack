@@ -1,9 +1,9 @@
+use crate::sip::headers::*;
 use crate::transport::SipConnection;
 use crate::{
     transport::{udp::UdpConnection, TransportLayer},
     EndpointBuilder,
 };
-use crate::sip::headers::*;
 use std::time::Duration;
 use tokio::{select, time::sleep};
 use tokio_util::sync::CancellationToken;
@@ -91,7 +91,7 @@ async fn test_server_transaction() {
         assert!(tx
             .endpoint_inner
             .finished_transactions
-                .contains_key(&tx.key));
+            .contains_key(&tx.key));
         sleep(Duration::from_secs(2)).await;
     };
 

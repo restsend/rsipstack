@@ -15,8 +15,9 @@ impl<'a> super::Tokenize<'a> for AuthTokenizer<'a> {
 impl<'a> AuthTokenizer<'a> {
     pub fn parse(s: &'a str) -> Result<Self, Error> {
         let s = s.trim();
-        let (scheme, rest) = split_token(s)
-            .ok_or_else(|| Error::TokenizeError(format!("auth header: missing scheme in {:?}", s)))?;
+        let (scheme, rest) = split_token(s).ok_or_else(|| {
+            Error::TokenizeError(format!("auth header: missing scheme in {:?}", s))
+        })?;
         let rest = rest.trim_start_matches(',').trim();
         let params = parse_auth_params(rest)?;
         Ok(AuthTokenizer { scheme, params })
@@ -31,7 +32,9 @@ where
     let mut rest = s.trim();
     while !rest.is_empty() {
         rest = rest.trim_start_matches(|c: char| c == ',' || c.is_whitespace());
-        if rest.is_empty() { break; }
+        if rest.is_empty() {
+            break;
+        }
         let eq = rest.find('=').ok_or_else(|| {
             Error::TokenizeError(format!("auth param: expected '=' in {:?}", rest))
         })?;
@@ -56,9 +59,9 @@ fn parse_quoted(s: &str) -> Result<(&str, &str), Error> {
         return Err(Error::TokenizeError("expected '\"'".into()));
     }
     let s = &s[1..]; // skip opening quote
-    let close = s.find('"').ok_or_else(|| {
-        Error::TokenizeError(format!("auth param: unclosed quote in {:?}", s))
-    })?;
+    let close = s
+        .find('"')
+        .ok_or_else(|| Error::TokenizeError(format!("auth param: unclosed quote in {:?}", s)))?;
     let value = &s[..close];
     let after = &s[close + 1..]; // skip closing quote
     Ok((value, after))
@@ -86,8 +89,14 @@ impl<'a> CseqTokenizer<'a> {
     pub fn parse(s: &'a str) -> Result<Self, Error> {
         let s = s.trim();
         let mut parts = s.splitn(2, |c: char| c.is_whitespace());
-        let seq = parts.next().ok_or_else(|| Error::TokenizeError("CSeq: missing seq".into()))?.trim();
-        let method = parts.next().ok_or_else(|| Error::TokenizeError("CSeq: missing method".into()))?.trim();
+        let seq = parts
+            .next()
+            .ok_or_else(|| Error::TokenizeError("CSeq: missing seq".into()))?
+            .trim();
+        let method = parts
+            .next()
+            .ok_or_else(|| Error::TokenizeError("CSeq: missing method".into()))?
+            .trim();
         Ok(CseqTokenizer { seq, method })
     }
 }

@@ -1,4 +1,4 @@
-use crate::sip::{Error, Header, Uri, uri::Param};
+use crate::sip::{uri::Param, Error, Header, Uri};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Contact {
@@ -48,15 +48,27 @@ impl Contact {
         };
 
         let mut uri = crate::sip::parse_uri(uri_part)?;
-        uri.params.retain(|param| !matches!(param, crate::sip::uri::Param::Transport(crate::sip::Transport::Udp)));
+        uri.params.retain(|param| {
+            !matches!(
+                param,
+                crate::sip::uri::Param::Transport(crate::sip::Transport::Udp)
+            )
+        });
         uri.headers.clear();
         let params = parse_contact_header_params(header_params_part)?;
-        Ok(Contact { display_name, uri, params })
+        Ok(Contact {
+            display_name,
+            uri,
+            params,
+        })
     }
 
     pub fn parse_header_list(line: &str) -> Result<Vec<Self>, Error> {
         let values = split_contact_header_values(line)?;
-        values.into_iter().map(|value| Self::parse(&value)).collect()
+        values
+            .into_iter()
+            .map(|value| Self::parse(&value))
+            .collect()
     }
 
     pub fn expires(&self) -> Option<u32> {
@@ -94,12 +106,18 @@ impl std::fmt::Display for Contact {
 
 impl std::convert::From<Uri> for Contact {
     fn from(uri: Uri) -> Self {
-        Self { display_name: None, uri, params: vec![] }
+        Self {
+            display_name: None,
+            uri,
+            params: vec![],
+        }
     }
 }
 
 impl std::convert::From<Contact> for String {
-    fn from(c: Contact) -> String { c.to_string() }
+    fn from(c: Contact) -> String {
+        c.to_string()
+    }
 }
 
 impl std::convert::From<Contact> for Header {

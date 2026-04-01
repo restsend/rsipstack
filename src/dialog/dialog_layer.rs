@@ -5,12 +5,12 @@ use super::subscription::{ClientSubscriptionDialog, ServerSubscriptionDialog};
 use super::{dialog::Dialog, server_dialog::ServerInviteDialog, DialogId};
 use crate::dialog::client_dialog::ClientInviteDialog;
 use crate::dialog::dialog::{DialogInner, DialogStateReceiver};
+use crate::sip::prelude::HeadersExt;
 use crate::transaction::key::TransactionRole;
 use crate::transaction::make_tag;
 use crate::transaction::transaction::transaction_event_sender_noop;
 use crate::transaction::{endpoint::EndpointInnerRef, transaction::Transaction};
 use crate::Result;
-use crate::sip::prelude::HeadersExt;
 use dashmap::DashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -155,11 +155,7 @@ impl DialogLayer {
     ) -> Result<ServerInviteDialog> {
         let mut id = DialogId::try_from(tx)?;
         if !id.local_tag.is_empty() {
-            let dlg = self
-                .inner
-                .dialogs
-                .get(&id.to_string())
-                .map(|d| d.clone());
+            let dlg = self.inner.dialogs.get(&id.to_string()).map(|d| d.clone());
             match dlg {
                 Some(Dialog::ServerInvite(dlg)) => return Ok(dlg),
                 _ => {
@@ -212,11 +208,7 @@ impl DialogLayer {
     ) -> Result<ServerSubscriptionDialog> {
         let mut id = DialogId::try_from(tx)?;
         if !id.local_tag.is_empty() {
-            let dlg = self
-                .inner
-                .dialogs
-                .get(&id.to_string())
-                .map(|d| d.clone());
+            let dlg = self.inner.dialogs.get(&id.to_string()).map(|d| d.clone());
             match dlg {
                 Some(Dialog::ServerSubscription(dlg)) => return Ok(dlg),
                 _ => {
@@ -269,11 +261,7 @@ impl DialogLayer {
     ) -> Result<ServerPublicationDialog> {
         let mut id = DialogId::try_from(tx)?;
         if !id.local_tag.is_empty() {
-            let dlg = self
-                .inner
-                .dialogs
-                .get(&id.to_string())
-                .map(|d| d.clone());
+            let dlg = self.inner.dialogs.get(&id.to_string()).map(|d| d.clone());
             match dlg {
                 Some(Dialog::ServerPublication(dlg)) => return Ok(dlg),
                 _ => {
@@ -537,7 +525,8 @@ impl DialogLayer {
 
         let mut params = params.unwrap_or_default();
         if !matches!(addr.r#type, Some(crate::sip::Transport::Udp) | None) {
-            addr.r#type.map(|t| params.push(crate::sip::Param::Transport(t)));
+            addr.r#type
+                .map(|t| params.push(crate::sip::Param::Transport(t)));
         }
         let auth = username.map(|user| crate::sip::Auth {
             user,

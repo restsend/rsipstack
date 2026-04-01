@@ -7,7 +7,8 @@ pub struct Allow {
 
 impl Allow {
     pub fn parse(s: &str) -> Result<Self, Error> {
-        let methods = s.split(',')
+        let methods = s
+            .split(',')
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(|m| m.parse::<Method>())
@@ -24,11 +25,15 @@ impl std::fmt::Display for Allow {
 }
 
 impl std::convert::From<Vec<Method>> for Allow {
-    fn from(methods: Vec<Method>) -> Self { Allow { methods } }
+    fn from(methods: Vec<Method>) -> Self {
+        Allow { methods }
+    }
 }
 
 impl std::convert::From<Allow> for String {
-    fn from(a: Allow) -> String { a.to_string() }
+    fn from(a: Allow) -> String {
+        a.to_string()
+    }
 }
 
 impl std::convert::From<Allow> for Header {

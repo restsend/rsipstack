@@ -4,6 +4,10 @@ use super::{
     dialog::{DialogInner, DialogStateSender},
     dialog_layer::DialogLayer,
 };
+use crate::sip::{
+    prelude::{HeadersExt, ToTypedHeader},
+    Request, Response, SipMessage, StatusCodeKind,
+};
 use crate::{
     dialog::{
         dialog::{Dialog, DialogState, TerminatedReason},
@@ -19,10 +23,6 @@ use crate::{
     Result,
 };
 use futures::FutureExt;
-use crate::sip::{
-    prelude::{HeadersExt, ToTypedHeader},
-    Request, Response, SipMessage, StatusCodeKind,
-};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
@@ -336,7 +336,9 @@ impl DialogLayer {
                 // some clients consider messages with duplicate "max-forwards"
                 // headers as malformed and may silently ignore invites
                 match header {
-                    crate::sip::Header::MaxForwards(_) => request.headers.unique_push(header.clone()),
+                    crate::sip::Header::MaxForwards(_) => {
+                        request.headers.unique_push(header.clone())
+                    }
                     _ => request.headers.push(header.clone()),
                 }
             }
@@ -474,24 +476,22 @@ impl DialogLayer {
             .expect("transcation should be avaible");
 
         let r = dialog.process_invite(tx).boxed().await;
-        self.inner
-            .dialogs
-            .remove(&id.to_string());
+        self.inner.dialogs.remove(&id.to_string());
 
         match r {
             Ok((new_dialog_id, resp)) => {
                 match resp {
-                    Some(ref r) if r.status_code.kind() == crate::sip::StatusCodeKind::Successful => {
+                    Some(ref r)
+                        if r.status_code.kind() == crate::sip::StatusCodeKind::Successful =>
+                    {
                         debug!(
                             "client invite dialog confirmed: {} => {}",
                             id, new_dialog_id
                         );
-                        self.inner
-                            .dialogs
-                            .insert(
-                                new_dialog_id.to_string(),
-                                Dialog::ClientInvite(dialog.clone()),
-                            );
+                        self.inner.dialogs.insert(
+                            new_dialog_id.to_string(),
+                            Dialog::ClientInvite(dialog.clone()),
+                        );
                     }
                     _ => {}
                 }
@@ -536,25 +536,23 @@ impl DialogLayer {
             let r = dialog_clone.process_invite(&mut tx).boxed().await;
 
             // remove early key
-            inner
-                .dialogs
-                .remove(&id0.to_string());
+            inner.dialogs.remove(&id0.to_string());
 
             match &r {
                 Ok((new_id, resp_opt)) => {
                     let is_2xx = resp_opt
                         .as_ref()
-                        .map(|resp| resp.status_code.kind() == crate::sip::StatusCodeKind::Successful)
+                        .map(|resp| {
+                            resp.status_code.kind() == crate::sip::StatusCodeKind::Successful
+                        })
                         .unwrap_or(false);
 
                     if is_2xx {
                         debug!("client invite dialog confirmed: {} => {}", id0, new_id);
-                        inner
-                            .dialogs
-                            .insert(
-                                new_id.to_string(),
-                                Dialog::ClientInvite(dialog_clone.clone()),
-                            );
+                        inner.dialogs.insert(
+                            new_id.to_string(),
+                            Dialog::ClientInvite(dialog_clone.clone()),
+                        );
                     }
                 }
                 Err(e) => debug!(%id0, error = %e, "async invite failed"),
@@ -573,9 +571,11 @@ impl DialogLayer {
     ) -> Result<(ClientInviteDialog, Transaction)> {
         let mut request = self.make_invite_request(&opt)?;
         request.body = opt.offer.unwrap_or_default();
-        request.headers.unique_push(crate::sip::Header::ContentLength(
-            (request.body.len() as u32).into(),
-        ));
+        request
+            .headers
+            .unique_push(crate::sip::Header::ContentLength(
+                (request.body.len() as u32).into(),
+            ));
         let key = TransactionKey::from_request(&request, TransactionRole::Client)?;
         let mut tx = Transaction::new_client(key, request.clone(), self.endpoint.clone(), None);
 

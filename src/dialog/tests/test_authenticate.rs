@@ -3,15 +3,15 @@
 //! Tests for SIP authentication handling, including Via header parameter updates
 
 use crate::dialog::authenticate::{handle_client_authenticate, Credential};
+use crate::sip::headers::*;
+use crate::sip::prelude::{HeadersExt, ToTypedHeader};
+use crate::sip::{Request, Response, StatusCode};
 use crate::transaction::{
     endpoint::EndpointBuilder,
     key::{TransactionKey, TransactionRole},
     transaction::Transaction,
 };
 use crate::transport::TransportLayer;
-use crate::sip::headers::*;
-use crate::sip::prelude::{HeadersExt, ToTypedHeader};
-use crate::sip::{Request, Response, StatusCode};
 use tokio_util::sync::CancellationToken;
 
 async fn create_test_endpoint() -> crate::Result<crate::transaction::endpoint::Endpoint> {
@@ -117,10 +117,9 @@ async fn test_authenticate_via_header_branch_update() -> crate::Result<()> {
         .expect("Via header should be parseable");
 
     // Verify old branch is removed
-    let old_branch_exists = new_via
-        .params
-        .iter()
-        .any(|p| matches!(p, crate::sip::Param::Branch(b) if b.to_string() == original_branch_value));
+    let old_branch_exists = new_via.params.iter().any(
+        |p| matches!(p, crate::sip::Param::Branch(b) if b.to_string() == original_branch_value),
+    );
     assert!(
         !old_branch_exists,
         "Old branch parameter should be removed from Via header"
@@ -146,9 +145,10 @@ async fn test_authenticate_via_header_branch_update() -> crate::Result<()> {
     );
 
     // Verify rport parameter is added
-    let has_rport = new_via.params.iter().any(
-        |p| matches!(p, crate::sip::Param::Rport(_)),
-    );
+    let has_rport = new_via
+        .params
+        .iter()
+        .any(|p| matches!(p, crate::sip::Param::Rport(_)));
     assert!(
         has_rport,
         "Via header should have rport parameter after authentication"
@@ -297,7 +297,8 @@ fn build_and_verify(
         username, realm, nonce, uri_raw, response, algorithm
     );
 
-    let auth: crate::sip::typed::Authorization = crate::sip::typed::Authorization::parse(&auth_header_value).unwrap();
+    let auth: crate::sip::typed::Authorization =
+        crate::sip::typed::Authorization::parse(&auth_header_value).unwrap();
 
     let is_valid = verify_digest(&auth, password, method, &auth_header_value);
     (is_valid, auth_header_value)
@@ -490,7 +491,8 @@ fn test_verify_digest_wrong_password_fails() {
         uri_raw, response
     );
 
-    let auth: crate::sip::typed::Authorization = crate::sip::typed::Authorization::parse(&auth_header_value).unwrap();
+    let auth: crate::sip::typed::Authorization =
+        crate::sip::typed::Authorization::parse(&auth_header_value).unwrap();
 
     // Verify with wrong password should fail
     let is_valid = verify_digest(
@@ -574,7 +576,8 @@ fn test_verify_digest_rsip_digest_generator_mismatch() {
         response
     );
 
-    let auth: crate::sip::typed::Authorization = crate::sip::typed::Authorization::parse(&auth_header_value).unwrap();
+    let auth: crate::sip::typed::Authorization =
+        crate::sip::typed::Authorization::parse(&auth_header_value).unwrap();
 
     // rsip's DigestGenerator normalizes URI → transport=TLS (uppercase)
     // This causes verification failure for devices using lowercase
@@ -584,7 +587,8 @@ fn test_verify_digest_rsip_digest_generator_mismatch() {
         "rsip normalizes transport to uppercase in parsed URI"
     );
 
-    let digest_gen = crate::sip::services::DigestGenerator::from(&auth, "111", &crate::sip::Method::Register);
+    let digest_gen =
+        crate::sip::services::DigestGenerator::from(&auth, "111", &crate::sip::Method::Register);
     let rsip_response = digest_gen.compute();
     assert_ne!(
         rsip_response, response,
@@ -592,7 +596,12 @@ fn test_verify_digest_rsip_digest_generator_mismatch() {
     );
 
     // Our verify_digest uses raw URI from AuthTokenizer → works correctly
-    let is_valid = verify_digest(&auth, "111", &crate::sip::Method::Register, &auth_header_value);
+    let is_valid = verify_digest(
+        &auth,
+        "111",
+        &crate::sip::Method::Register,
+        &auth_header_value,
+    );
     assert!(
         is_valid,
         "verify_digest should succeed where rsip DigestGenerator fails"
@@ -625,9 +634,15 @@ fn test_verify_digest_with_qop_auth() {
         uri_raw, response
     );
 
-    let auth: crate::sip::typed::Authorization = crate::sip::typed::Authorization::parse(&auth_header_value).unwrap();
+    let auth: crate::sip::typed::Authorization =
+        crate::sip::typed::Authorization::parse(&auth_header_value).unwrap();
 
-    let is_valid = verify_digest(&auth, "111", &crate::sip::Method::Register, &auth_header_value);
+    let is_valid = verify_digest(
+        &auth,
+        "111",
+        &crate::sip::Method::Register,
+        &auth_header_value,
+    );
     assert!(
         is_valid,
         "verify_digest should work with qop=auth and lowercase transport"
@@ -666,9 +681,15 @@ fn test_verify_digest_real_world_unify_tls() {
         username, realm, nonce, uri_raw, response
     );
 
-    let auth: crate::sip::typed::Authorization = crate::sip::typed::Authorization::parse(&auth_header_value).unwrap();
+    let auth: crate::sip::typed::Authorization =
+        crate::sip::typed::Authorization::parse(&auth_header_value).unwrap();
 
-    let is_valid = verify_digest(&auth, password, &crate::sip::Method::Register, &auth_header_value);
+    let is_valid = verify_digest(
+        &auth,
+        password,
+        &crate::sip::Method::Register,
+        &auth_header_value,
+    );
     assert!(
         is_valid,
         "Real-world Unify TLS case should pass verification"
@@ -703,9 +724,15 @@ fn test_verify_digest_real_world_unify_udp() {
         username, realm, nonce, uri_raw, response
     );
 
-    let auth: crate::sip::typed::Authorization = crate::sip::typed::Authorization::parse(&auth_header_value).unwrap();
+    let auth: crate::sip::typed::Authorization =
+        crate::sip::typed::Authorization::parse(&auth_header_value).unwrap();
 
-    let is_valid = verify_digest(&auth, password, &crate::sip::Method::Register, &auth_header_value);
+    let is_valid = verify_digest(
+        &auth,
+        password,
+        &crate::sip::Method::Register,
+        &auth_header_value,
+    );
     assert!(
         is_valid,
         "Real-world Unify UDP case should pass verification"

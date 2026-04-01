@@ -1,4 +1,9 @@
 use super::{sip_addr::SipAddr, stream::StreamConnection, tcp::TcpConnection, udp::UdpConnection};
+use crate::sip::headers::untyped::Via;
+use crate::sip::{
+    prelude::{HeadersExt, ToTypedHeader},
+    HostWithPort, Param, SipMessage, Transport,
+};
 use crate::transport::channel::ChannelConnection;
 use crate::transport::websocket::{WebSocketConnection, WebSocketListenerConnection};
 use crate::transport::{
@@ -7,11 +12,6 @@ use crate::transport::{
 };
 use crate::Result;
 use get_if_addrs::IfAddr;
-use crate::sip::{
-    prelude::{HeadersExt, ToTypedHeader},
-    HostWithPort, Param, SipMessage, Transport,
-};
-use crate::sip::headers::untyped::Via;
 use std::net::{IpAddr, Ipv4Addr};
 use std::{fmt, net::SocketAddr};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -308,19 +308,13 @@ impl SipConnection {
         }
         addr
     }
-    pub fn build_via_received(
-        via: &mut Via,
-        addr: SocketAddr,
-        transport: Transport,
-    ) -> Result<()> {
+    pub fn build_via_received(via: &mut Via, addr: SocketAddr, transport: Transport) -> Result<()> {
         let received = addr.into();
         let mut typed_via = via.typed()?;
 
-        typed_via.params.retain(|param| {
-            match param {
-                Param::Rport(_) | Param::Received(_) => false,
-                _ => true,
-            }
+        typed_via.params.retain(|param| match param {
+            Param::Rport(_) | Param::Received(_) => false,
+            _ => true,
         });
 
         // Only add received parameter if the source address differs from Via header
@@ -349,15 +343,17 @@ impl SipConnection {
             SocketAddr::V6(_) => format!("[{}]", received.host),
             _ => received.host.to_string(),
         };
-        typed_via.params.push(Param::Received(crate::sip::param::Received::new(received_str)));
+        typed_via
+            .params
+            .push(Param::Received(crate::sip::param::Received::new(
+                received_str,
+            )));
         typed_via.params.push(Param::Rport(Some(addr.port())));
         *via = typed_via.into();
         Ok(())
     }
 
-    pub fn parse_target_from_via(
-        via: &Via,
-    ) -> Result<(Transport, HostWithPort)> {
+    pub fn parse_target_from_via(via: &Via) -> Result<(Transport, HostWithPort)> {
         let typed_via = via.typed()?;
         let mut host_with_port = typed_via.uri.host_with_port.clone();
         let mut transport = typed_via.transport.clone();

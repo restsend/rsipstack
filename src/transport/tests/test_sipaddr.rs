@@ -1,5 +1,5 @@
-use crate::transport::{SipAddr, SipConnection};
 use crate::sip::{headers::*, prelude::HeadersExt, HostWithPort, SipMessage};
+use crate::transport::{SipAddr, SipConnection};
 
 #[test]
 fn test_via_received() {

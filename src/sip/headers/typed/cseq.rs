@@ -1,5 +1,5 @@
-use crate::sip::{Error, Header, Method};
 use super::tokenizers::CseqTokenizer;
+use crate::sip::{Error, Header, Method};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct CSeq {
@@ -10,7 +10,10 @@ pub struct CSeq {
 impl CSeq {
     pub fn parse(s: &str) -> Result<Self, Error> {
         let t = CseqTokenizer::parse(s)?;
-        let seq: u32 = t.seq.parse().map_err(|_| Error::ParseError("CSeq: invalid seq".into()))?;
+        let seq: u32 = t
+            .seq
+            .parse()
+            .map_err(|_| Error::ParseError("CSeq: invalid seq".into()))?;
         let method: Method = t.method.parse()?;
         Ok(CSeq { seq, method })
     }
@@ -29,7 +32,9 @@ impl std::convert::From<(u32, Method)> for CSeq {
 }
 
 impl std::convert::From<CSeq> for String {
-    fn from(c: CSeq) -> String { c.to_string() }
+    fn from(c: CSeq) -> String {
+        c.to_string()
+    }
 }
 
 impl std::convert::From<CSeq> for Header {

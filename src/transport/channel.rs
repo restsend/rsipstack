@@ -5,8 +5,8 @@ use super::{
     SipAddr, SipConnection,
 };
 use crate::Result;
-use std::sync::Arc;
 use parking_lot::Mutex;
+use std::sync::Arc;
 
 struct ChannelInner {
     incoming: Mutex<Option<TransportReceiver>>,

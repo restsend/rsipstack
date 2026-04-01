@@ -1,5 +1,5 @@
-use crate::sip::{Error, Header, Uri, uri::Param};
 use super::parse_helpers::parse_display_uri_params_str;
+use crate::sip::{uri::Param, Error, Header, Uri};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct RecordRoute {
@@ -15,26 +15,43 @@ fn split_rr_values(s: &str) -> Vec<String> {
     let mut in_quotes = false;
     for ch in s.chars() {
         match ch {
-            '"' => { in_quotes = !in_quotes; current.push(ch); }
-            '<' if !in_quotes => { angle_depth += 1; current.push(ch); }
-            '>' if !in_quotes => { angle_depth = angle_depth.saturating_sub(1); current.push(ch); }
+            '"' => {
+                in_quotes = !in_quotes;
+                current.push(ch);
+            }
+            '<' if !in_quotes => {
+                angle_depth += 1;
+                current.push(ch);
+            }
+            '>' if !in_quotes => {
+                angle_depth = angle_depth.saturating_sub(1);
+                current.push(ch);
+            }
             ',' if !in_quotes && angle_depth == 0 => {
                 let v = current.trim().to_string();
-                if !v.is_empty() { values.push(v); }
+                if !v.is_empty() {
+                    values.push(v);
+                }
                 current.clear();
             }
             _ => current.push(ch),
         }
     }
     let v = current.trim().to_string();
-    if !v.is_empty() { values.push(v); }
+    if !v.is_empty() {
+        values.push(v);
+    }
     values
 }
 
 impl RecordRoute {
     pub fn parse(s: &str) -> Result<Self, Error> {
         let (display_name, uri, params) = parse_display_uri_params_str(s)?;
-        Ok(RecordRoute { display_name, uri, params })
+        Ok(RecordRoute {
+            display_name,
+            uri,
+            params,
+        })
     }
 
     pub fn parse_header_list(s: &str) -> Result<Vec<Self>, Error> {
@@ -64,17 +81,25 @@ impl std::fmt::Display for RecordRoute {
 
 impl std::convert::From<Uri> for RecordRoute {
     fn from(uri: Uri) -> Self {
-        Self { display_name: None, uri, params: vec![] }
+        Self {
+            display_name: None,
+            uri,
+            params: vec![],
+        }
     }
 }
 
 impl std::convert::From<RecordRoute> for String {
-    fn from(r: RecordRoute) -> String { r.to_string() }
+    fn from(r: RecordRoute) -> String {
+        r.to_string()
+    }
 }
 
 impl std::convert::From<RecordRoute> for Header {
     fn from(r: RecordRoute) -> Header {
-        Header::RecordRoute(crate::sip::headers::untyped::RecordRoute::new(r.to_string()))
+        Header::RecordRoute(crate::sip::headers::untyped::RecordRoute::new(
+            r.to_string(),
+        ))
     }
 }
 
@@ -87,8 +112,14 @@ mod tests {
 
     #[test]
     fn record_route_keeps_uri_param_values_with_colons() {
-        let route = RecordRoute::parse("<sip:82.202.218.130;lr=on;ftag=d4nwJ0jF;du=sip:95.143.188.49:5060;did=893.d6d1>").unwrap();
-        assert_eq!(route.uri.to_string(), "sip:82.202.218.130;lr=on;ftag=d4nwJ0jF;du=sip:95.143.188.49:5060;did=893.d6d1");
+        let route = RecordRoute::parse(
+            "<sip:82.202.218.130;lr=on;ftag=d4nwJ0jF;du=sip:95.143.188.49:5060;did=893.d6d1>",
+        )
+        .unwrap();
+        assert_eq!(
+            route.uri.to_string(),
+            "sip:82.202.218.130;lr=on;ftag=d4nwJ0jF;du=sip:95.143.188.49:5060;did=893.d6d1"
+        );
         assert!(route.uri.params.iter().any(|param| matches!(param, Param::Other(name, Some(value)) if name.value().eq_ignore_ascii_case("du") && value.value() == "sip:95.143.188.49:5060")));
         assert!(route.uri.params.iter().any(|param| matches!(param, Param::Other(name, Some(value)) if name.value().eq_ignore_ascii_case("did") && value.value() == "893.d6d1")));
     }
@@ -103,8 +134,9 @@ mod tests {
     #[test]
     fn record_route_multi_entry() {
         let entries = RecordRoute::parse_header_list(
-            "<sip:proxy1.restsend.com;lr>, <sip:proxy2.restsend.com;lr>"
-        ).unwrap();
+            "<sip:proxy1.restsend.com;lr>, <sip:proxy2.restsend.com;lr>",
+        )
+        .unwrap();
         assert_eq!(entries.len(), 2);
         assert!(entries[0].has_lr());
         assert!(entries[1].has_lr());
@@ -116,7 +148,10 @@ mod tests {
         use crate::sip::Transport;
         let rr = RecordRoute::parse("<sip:proxy.restsend.com;transport=tcp;lr>").unwrap();
         assert!(rr.has_lr());
-        assert!(rr.uri.params.iter().any(|p| matches!(p, Param::Transport(Transport::Tcp))));
+        assert!(rr
+            .uri
+            .params
+            .iter()
+            .any(|p| matches!(p, Param::Transport(Transport::Tcp))));
     }
 }
-

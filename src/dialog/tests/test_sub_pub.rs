@@ -1,9 +1,9 @@
 use super::test_dialog_states::{create_invite_request, create_test_endpoint};
 use crate::dialog::dialog_layer::DialogLayer;
 use crate::dialog::DialogId;
+use crate::sip::Method;
 use crate::transaction::key::{TransactionKey, TransactionRole};
 use crate::transaction::transaction::Transaction;
-use crate::sip::Method;
 use std::sync::Arc;
 
 #[tokio::test]

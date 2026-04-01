@@ -7,9 +7,9 @@ use crate::transaction::key::TransactionKey;
 use crate::transport::connection::TransportReceiver;
 use crate::{transport::TransportEvent, Result};
 use async_trait::async_trait;
-use std::net::IpAddr;
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::sync::Arc;
 use tokio::select;
 use tokio::sync::mpsc;
@@ -60,9 +60,7 @@ impl DefaultDomainResolver {
 
         // Use new SipResolver
         let secure = match target.r#type {
-            Some(Transport::Tls)
-            | Some(Transport::Wss)
-            | Some(Transport::TlsSctp) => true,
+            Some(Transport::Tls) | Some(Transport::Wss) | Some(Transport::TlsSctp) => true,
             _ => false,
         };
 
@@ -306,12 +304,7 @@ impl TransportLayerInner {
             }
         }
         match target.r#type {
-            Some(
-                Transport::Tcp
-                | Transport::Tls
-                | Transport::Ws
-                | Transport::Wss,
-            ) => {
+            Some(Transport::Tcp | Transport::Tls | Transport::Ws | Transport::Wss) => {
                 let sip_connection = match target.r#type {
                     Some(Transport::Tcp) => {
                         let connection =
@@ -443,12 +436,12 @@ impl Drop for TransportLayer {
 #[cfg(test)]
 mod tests {
     use crate::resolver::SipResolver;
+    use crate::sip::uri::ParamsExt;
+    use crate::sip::{Host, HostWithPort, Transport};
     use crate::{
         transport::{udp::UdpConnection, SipAddr},
         Result,
     };
-    use crate::sip::{Host, HostWithPort, Transport};
-    use crate::sip::uri::ParamsExt;
 
     #[tokio::test]
     async fn test_lookup() -> Result<()> {

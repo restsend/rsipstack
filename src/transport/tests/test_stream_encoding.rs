@@ -1,12 +1,9 @@
+use crate::sip::{prelude::HeadersExt, SipMessage};
 use crate::transport::{
     connection::{KEEPALIVE_REQUEST, KEEPALIVE_RESPONSE},
     stream::SipCodec,
 };
 use bytes::BytesMut;
-use crate::sip::{
-    prelude::HeadersExt,
-    SipMessage,
-};
 use tokio_util::codec::{Decoder, Encoder};
 
 /// Test SipCodec decoding of single message

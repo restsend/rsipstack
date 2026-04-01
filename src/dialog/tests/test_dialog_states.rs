@@ -7,9 +7,9 @@ use crate::dialog::{
     dialog::{DialogInner, DialogState, TerminatedReason, TransactionHandle},
     DialogId,
 };
+use crate::sip::{headers::*, Request, Response, StatusCode};
 use crate::transaction::{endpoint::EndpointBuilder, key::TransactionRole};
 use crate::transport::TransportLayer;
-use crate::sip::{headers::*, Request, Response, StatusCode};
 use tokio::sync::mpsc::unbounded_channel;
 use tokio_util::sync::CancellationToken;
 
@@ -130,7 +130,9 @@ async fn test_dialog_state_transitions() -> crate::Result<()> {
         endpoint.inner.clone(),
         state_sender,
         None,
-        Some(crate::sip::Uri::try_from("sip:alice@alice.example.com:5060")?),
+        Some(crate::sip::Uri::try_from(
+            "sip:alice@alice.example.com:5060",
+        )?),
         tu_sender,
     )?;
 
@@ -256,7 +258,9 @@ async fn test_dialog_in_dialog_requests() -> crate::Result<()> {
         endpoint.inner.clone(),
         state_sender,
         None,
-        Some(crate::sip::Uri::try_from("sip:alice@alice.example.com:5060")?),
+        Some(crate::sip::Uri::try_from(
+            "sip:alice@alice.example.com:5060",
+        )?),
         tu_sender,
     )?;
 
@@ -352,7 +356,9 @@ async fn test_dialog_termination_scenarios() -> crate::Result<()> {
         endpoint.inner.clone(),
         state_sender.clone(),
         None,
-        Some(crate::sip::Uri::try_from("sip:alice@alice.example.com:5060")?),
+        Some(crate::sip::Uri::try_from(
+            "sip:alice@alice.example.com:5060",
+        )?),
         tu_sender,
     )?;
 
@@ -384,7 +390,9 @@ async fn test_dialog_termination_scenarios() -> crate::Result<()> {
         endpoint.inner.clone(),
         state_sender.clone(),
         None,
-        Some(crate::sip::Uri::try_from("sip:alice@alice.example.com:5060")?),
+        Some(crate::sip::Uri::try_from(
+            "sip:alice@alice.example.com:5060",
+        )?),
         tu_sender,
     )?;
 
@@ -427,7 +435,9 @@ async fn test_dialog_sequence_numbers() -> crate::Result<()> {
         endpoint.inner.clone(),
         state_sender,
         None,
-        Some(crate::sip::Uri::try_from("sip:alice@alice.example.com:5060")?),
+        Some(crate::sip::Uri::try_from(
+            "sip:alice@alice.example.com:5060",
+        )?),
         tu_sender,
     )?;
 

@@ -1,6 +1,6 @@
+use crate::sip::{Domain, Port, Transport};
 use hickory_resolver::TokioResolver;
 use rand::RngExt;
-use crate::sip::{Domain, Port, Transport};
 use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::str::FromStr;
@@ -275,8 +275,8 @@ fn order_srv_records(mut records: Vec<SrvRecord>) -> Vec<SrvRecord> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use parking_lot::Mutex;
+    use std::collections::HashMap;
 
     struct MockDns {
         srv: Mutex<HashMap<String, Vec<SrvRecord>>>,

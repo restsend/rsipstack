@@ -36,7 +36,9 @@ async fn test_dialog_make_request() -> crate::Result<()> {
         endpoint.inner.clone(),
         state_sender,
         None,
-        Some(crate::sip::Uri::try_from("sip:alice@alice.example.com:5060")?),
+        Some(crate::sip::Uri::try_from(
+            "sip:alice@alice.example.com:5060",
+        )?),
         tu_sender,
     )
     .expect("Failed to create dialog inner");
@@ -232,10 +234,14 @@ async fn test_server_dialog_reinvite_via() -> crate::Result<()> {
     };
 
     // Generate re-INVITE request
-    let reinvite_req =
-        server_dialog
-            .inner
-            .make_request(crate::sip::Method::Invite, None, None, None, None, None)?;
+    let reinvite_req = server_dialog.inner.make_request(
+        crate::sip::Method::Invite,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )?;
 
     assert_eq!(reinvite_req.method, crate::sip::Method::Invite);
     let via = reinvite_req.via_header().expect("no via").typed()?;

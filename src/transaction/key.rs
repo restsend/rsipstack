@@ -1,10 +1,10 @@
-use crate::{Error, Result};
 use crate::sip::{
-    typed::Via,
     param::Tag,
     prelude::{HeadersExt, ToTypedHeader},
+    typed::Via,
     Method, Request, Response,
 };
+use crate::{Error, Result};
 use std::fmt::Write;
 use std::hash::Hash;
 
