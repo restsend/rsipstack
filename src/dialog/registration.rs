@@ -113,7 +113,7 @@ pub struct Registration {
     pub endpoint: EndpointInnerRef,
     pub credential: Option<Credential>,
     pub contact: Option<crate::sip::typed::Contact>,
-    pub allow: crate::sip::headers::Allow,
+    pub allow: Option<crate::sip::headers::Allow>,
     /// Public address detected by the server (IP and port)
     pub public_address: Option<crate::sip::HostWithPort>,
     pub call_id: crate::sip::headers::CallId,
@@ -166,7 +166,7 @@ impl Registration {
             endpoint,
             credential,
             contact: None,
-            allow: crate::sip::headers::Allow::new(""),
+            allow: None,
             public_address: None,
             call_id,
             outbound_proxy: None,
@@ -416,7 +416,9 @@ impl Registration {
         let contact_for_retry = contact.clone();
         request.headers.unique_push(self.call_id.clone().into());
         request.headers.unique_push(contact.into());
-        request.headers.unique_push(self.allow.clone().into());
+        if let Some(allow) = &self.allow {
+            request.headers.unique_push(allow.clone().into());
+        }
         // RFC 3327 Path + RFC 5626 Outbound: tell the proxy to record
         // a Path header so INVITEs route through the correct edge node
         // (the one with our TCP connection).
