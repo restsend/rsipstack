@@ -1,13 +1,13 @@
 [package]
 name = "rsipstack"
-version = "0.5.2"
+version = "0.5.3"
 edition = "2021"
 description = "SIP Stack Rust library for building SIP applications"
 license = "MIT"
 repository = "https://github.com/restsend/rsipstack"
 readme = "README.md"
 keywords = ["sip", "voip", "telephony", "sipstack"]
-authors = ["kui<kui@fourz.cn>"]
+authors = ["jinti<shenjindi@fourz.cn>"]
 categories = ["network-programming", "multimedia"]
 
 
