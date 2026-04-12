@@ -703,6 +703,9 @@ impl ClientInviteDialog {
         self.inner.transition(DialogState::Calling(self.id()))?;
         let mut auth_sent = false;
         tx.send().await?;
+        if let Some(destination) = &tx.destination {
+            *self.inner.remote_uri.lock() = destination.clone().into();
+        }
         let mut dialog_id = self.id();
         let mut final_response = None;
         while let Some(msg) = tx.receive().await {
@@ -745,6 +748,9 @@ impl ClientInviteDialog {
                             )
                             .await?;
                             tx.send().await?;
+                            if let Some(destination) = &tx.destination {
+                                *self.inner.remote_uri.lock() = destination.clone().into();
+                            }
                             self.inner.update_remote_tag("").ok();
                             // Update initial_request with the new invite request
                             {
