@@ -10,6 +10,7 @@ use rustls::client::danger::ServerCertVerifier;
 use rustls::crypto::CryptoProvider;
 use rustls::server::{ClientHello, ResolvesServerCert};
 use rustls::sign::CertifiedKey;
+use socket2::{Domain, Protocol, Socket, Type};
 use std::{fmt, fmt::Debug, net::SocketAddr, sync::Arc};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::{
@@ -303,7 +304,20 @@ impl TlsListenerConnection {
         &self,
         transport_layer_inner: TransportLayerInnerRef,
     ) -> Result<()> {
-        let listener = TcpListener::bind(self.inner.local_addr.get_socketaddr()?).await?;
+        let local = self.inner.local_addr.get_socketaddr()?;
+        let domain = if local.is_ipv6() {
+            Domain::IPV6
+        } else {
+            Domain::IPV4
+        };
+        let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
+        if let Err(e) = socket.set_reuse_address(true) {
+            warn!(error = %e, "failed to set SO_REUSEADDR on TLS listener");
+        }
+        socket.set_nonblocking(true)?;
+        socket.bind(&local.into())?;
+        socket.listen(128)?;
+        let listener = TcpListener::from_std(socket.into())?;
         let (acceptor, resolver) = Self::create_acceptor(&self.inner.config).await?;
         *self.inner.cert_resolver.lock() = Some(resolver);
 

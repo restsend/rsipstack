@@ -8,6 +8,7 @@ use crate::{
     Result,
 };
 use bytes::BytesMut;
+use socket2::{Domain, Protocol, Socket, Type};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::net::UdpSocket;
 use tokio_util::sync::CancellationToken;
@@ -45,7 +46,21 @@ impl UdpConnection {
         external: Option<SocketAddr>,
         cancel_token: Option<CancellationToken>,
     ) -> Result<Self> {
-        let conn = UdpSocket::bind(local).await?;
+        let domain = if local.is_ipv6() {
+            Domain::IPV6
+        } else {
+            Domain::IPV4
+        };
+        let socket = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP))?;
+        match socket.set_reuse_address(true) {
+            Ok(_) => (),
+            Err(e) => {
+                warn!(error = %e, "Failed to set SO_REUSEADDR on UDP socket");
+            }
+        }
+        socket.set_nonblocking(true)?;
+        socket.bind(&local.into())?;
+        let conn = UdpSocket::from_std(socket.into())?;
 
         let addr = SipAddr {
             r#type: Some(crate::sip::transport::Transport::Udp),

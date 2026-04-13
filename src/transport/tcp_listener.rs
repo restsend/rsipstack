@@ -3,6 +3,7 @@ use crate::transport::transport_layer::TransportLayerInnerRef;
 use crate::transport::SipAddr;
 use crate::transport::SipConnection;
 use crate::Result;
+use socket2::{Domain, Protocol, Socket, Type};
 use std::fmt;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::net::TcpListener;
@@ -35,7 +36,20 @@ impl TcpListenerConnection {
         &self,
         transport_layer_inner: TransportLayerInnerRef,
     ) -> Result<()> {
-        let listener = TcpListener::bind(self.inner.local_addr.get_socketaddr()?).await?;
+        let local = self.inner.local_addr.get_socketaddr()?;
+        let domain = if local.is_ipv6() {
+            Domain::IPV6
+        } else {
+            Domain::IPV4
+        };
+        let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
+        if let Err(e) = socket.set_reuse_address(true) {
+            warn!(error = %e, "failed to set SO_REUSEADDR on TCP listener");
+        }
+        socket.set_nonblocking(true)?;
+        socket.bind(&local.into())?;
+        socket.listen(128)?;
+        let listener = TcpListener::from_std(socket.into())?;
         let listener_local_addr = SipAddr {
             r#type: Some(crate::sip::transport::Transport::Tcp),
             addr: listener.local_addr()?.into(),
