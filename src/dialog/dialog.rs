@@ -89,7 +89,7 @@ impl TransactionHandle {
 /// * `WaitAck` - Server dialog waiting for ACK after sending 2xx response
 /// * `Confirmed` - Dialog is established and confirmed (2xx response received/sent and ACK sent/received)
 /// * `Updated` - Dialog received an UPDATE request
-/// * `Notify` - Dialog received a NOTIFY request  
+/// * `Notify` - Dialog received a NOTIFY request
 /// * `Info` - Dialog received an INFO request
 /// * `Options` - Dialog received an OPTIONS request
 /// * `Terminated` - Dialog has been terminated
@@ -219,7 +219,7 @@ impl ReferStatus {
 ///         // Handle server dialog
 ///     },
 ///     Dialog::ClientInvite(client_dialog) => {
-///         // Handle client dialog  
+///         // Handle client dialog
 ///     },
 ///     Dialog::ServerSubscription(server_dialog) => {
 ///         // Handle server subscription dialog
@@ -877,10 +877,6 @@ impl DialogInner {
         let method = request.method().to_owned();
         let key = TransactionKey::from_request(&request, TransactionRole::Client)?;
         let mut tx = Transaction::new_client(key, request, self.endpoint_inner.clone(), None);
-
-        if matches!(method, Method::Cancel) {
-            tx.destination = SipAddr::try_from(self.remote_uri.lock().clone()).ok();
-        }
 
         if let Some(route) = tx.original.route_header() {
             if let Some(first_route) = route.typed().ok() {
