@@ -91,16 +91,10 @@ impl Decoder for SipCodec {
                             .all(|(&a, &b)| a.to_ascii_lowercase() == b)
                     {
                         true
-                    } else if header.len() == CL_SHORT_NAME.len()
-                        && header
+                    } else { header.len() == CL_SHORT_NAME.len() && header
                             .iter()
                             .zip(CL_SHORT_NAME.iter())
-                            .all(|(&a, &b)| a.to_ascii_lowercase() == b)
-                    {
-                        true
-                    } else {
-                        false
-                    };
+                            .all(|(&a, &b)| a.to_ascii_lowercase() == b) };
 
                     if is_cl {
                         // parse value
@@ -207,36 +201,30 @@ where
                 Ok(n) => {
                     buffer.extend_from_slice(&read_buf[0..n]);
 
-                    loop {
-                        match codec.decode(&mut buffer)? {
-                            Some(msg) => match msg {
-                                SipCodecType::Message(sip_msg) => {
-                                    debug!(src = %remote_addr, raw_message = %sip_msg, "received message");
-                                    let remote_socket_addr = remote_addr.get_socketaddr()?;
-                                    let sip_msg = SipConnection::update_msg_received(
-                                        sip_msg,
-                                        remote_socket_addr,
-                                        remote_addr.r#type.unwrap_or_default(),
-                                    )?;
+                    while let Some(msg) = codec.decode(&mut buffer)? {
+                        match msg {
+                            SipCodecType::Message(sip_msg) => {
+                                debug!(src = %remote_addr, raw_message = %sip_msg, "received message");
+                                let remote_socket_addr = remote_addr.get_socketaddr()?;
+                                let sip_msg = SipConnection::update_msg_received(
+                                    sip_msg,
+                                    remote_socket_addr,
+                                    remote_addr.r#type.unwrap_or_default(),
+                                )?;
 
-                                    if let Err(e) = sender.send(TransportEvent::Incoming(
-                                        sip_msg,
-                                        connection.clone(),
-                                        remote_addr.clone(),
-                                    )) {
-                                        warn!(error = ?e, "Error sending incoming message");
-                                        return Err(e.into());
-                                    }
+                                if let Err(e) = sender.send(TransportEvent::Incoming(
+                                    sip_msg,
+                                    connection.clone(),
+                                    remote_addr.clone(),
+                                )) {
+                                    warn!(error = ?e, "Error sending incoming message");
+                                    return Err(e.into());
                                 }
-                                SipCodecType::KeepaliveRequest => {
-                                    self.send_raw(KEEPALIVE_RESPONSE).await?;
-                                }
-                                SipCodecType::KeepaliveResponse => {}
-                            },
-                            None => {
-                                // Need more data
-                                break;
                             }
+                            SipCodecType::KeepaliveRequest => {
+                                self.send_raw(KEEPALIVE_RESPONSE).await?;
+                            }
+                            SipCodecType::KeepaliveResponse => {}
                         }
                     }
                 }

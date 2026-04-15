@@ -69,7 +69,7 @@ impl ProxyAuthorization {
                 .into(),
             uri: find_param(params, "uri")
                 .ok_or_else(|| Error::InvalidParam("missing uri".into()))
-                .and_then(|s| crate::sip::uri::parse_uri(s))?,
+                .and_then(crate::sip::uri::parse_uri)?,
             response: find_param(params, "response")
                 .ok_or_else(|| Error::InvalidParam("missing response".into()))?
                 .into(),

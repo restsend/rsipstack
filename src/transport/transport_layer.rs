@@ -59,17 +59,17 @@ impl DefaultDomainResolver {
         };
 
         // Use new SipResolver
-        let secure = match target.r#type {
-            Some(Transport::Tls) | Some(Transport::Wss) | Some(Transport::TlsSctp) => true,
-            _ => false,
-        };
+        let secure = matches!(
+            target.r#type,
+            Some(Transport::Tls) | Some(Transport::Wss) | Some(Transport::TlsSctp)
+        );
 
         let addrs = self
             .resolver
             .lookup(
                 domain,
-                target.addr.port.clone(),
-                target.r#type.clone(),
+                target.addr.port,
+                target.r#type,
                 secure,
             )
             .await
@@ -298,53 +298,50 @@ impl TransportLayerInner {
         debug!(?key, src = %destination, %target, "lookup target");
         {
             let connections = self.connections.read();
-            if let Some(transport) = connections.get(&target) {
+            if let Some(transport) = connections.get(target) {
                 return Ok((transport.clone(), target.clone()));
             }
         }
-        match target.r#type {
-            Some(Transport::Tcp | Transport::Tls | Transport::Ws | Transport::Wss) => {
-                let sip_connection = match target.r#type {
-                    Some(Transport::Tcp) => {
-                        let connection =
-                            TcpConnection::connect(target, Some(self.cancel_token.child_token()))
-                                .await?;
-                        SipConnection::Tcp(connection)
+        if let Some(Transport::Tcp | Transport::Tls | Transport::Ws | Transport::Wss) = target.r#type {
+            let sip_connection = match target.r#type {
+                Some(Transport::Tcp) => {
+                    let connection =
+                        TcpConnection::connect(target, Some(self.cancel_token.child_token()))
+                            .await?;
+                    SipConnection::Tcp(connection)
+                }
+                Some(Transport::Tls) => {
+                    // Build effective TLS config with SNI from the original domain
+                    let mut effective_config = tls_config.clone().unwrap_or_default();
+                    if effective_config.sni_hostname.is_none() {
+                        effective_config.sni_hostname = original_domain;
                     }
-                    Some(Transport::Tls) => {
-                        // Build effective TLS config with SNI from the original domain
-                        let mut effective_config = tls_config.clone().unwrap_or_default();
-                        if effective_config.sni_hostname.is_none() {
-                            effective_config.sni_hostname = original_domain;
-                        }
-                        let connection = TlsConnection::connect(
-                            target,
-                            Some(&effective_config),
-                            None,
-                            Some(self.cancel_token.child_token()),
-                        )
-                        .await?;
-                        SipConnection::Tls(connection)
-                    }
-                    Some(Transport::Ws | Transport::Wss) => {
-                        let connection = WebSocketConnection::connect(
-                            target,
-                            Some(self.cancel_token.child_token()),
-                        )
-                        .await?;
-                        SipConnection::WebSocket(connection)
-                    }
-                    _ => {
-                        return Err(crate::Error::TransportLayerError(
-                            format!("unsupported transport type: {:?}", target.r#type),
-                            target.to_owned(),
-                        ));
-                    }
-                };
-                self.add_connection(sip_connection.clone());
-                return Ok((sip_connection, target.clone()));
-            }
-            _ => {}
+                    let connection = TlsConnection::connect(
+                        target,
+                        Some(&effective_config),
+                        None,
+                        Some(self.cancel_token.child_token()),
+                    )
+                    .await?;
+                    SipConnection::Tls(connection)
+                }
+                Some(Transport::Ws | Transport::Wss) => {
+                    let connection = WebSocketConnection::connect(
+                        target,
+                        Some(self.cancel_token.child_token()),
+                    )
+                    .await?;
+                    SipConnection::WebSocket(connection)
+                }
+                _ => {
+                    return Err(crate::Error::TransportLayerError(
+                        format!("unsupported transport type: {:?}", target.r#type),
+                        target.to_owned(),
+                    ));
+                }
+            };
+            self.add_connection(sip_connection.clone());
+            return Ok((sip_connection, target.clone()));
         }
 
         let listens = self.listens.read();

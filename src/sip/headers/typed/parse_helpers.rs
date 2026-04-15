@@ -39,7 +39,7 @@ pub fn parse_display_uri_params_str(s: &str) -> Result<(Option<String>, Uri, Vec
                 // A ':' before the '@' (or when there is no '@') means we are
                 // in the userinfo section (scheme colon is already consumed by
                 // the caller via parse_uri, so here it signals user:password).
-                if at_pos.map_or(false, |at| i < at) {
+                if at_pos.is_some_and(|at| i < at) {
                     in_userinfo = true;
                 }
             }
@@ -122,24 +122,18 @@ mod tests {
         assert!(matches!(&result.2[0], Param::Tag(t) if t.value() == "12345"));
     }
 
-    // ── 无括号、有端口、无 @ ──────────────────────────────────────────────────
-
     #[test]
     fn test_no_userinfo_with_port_and_params() {
         // sip:host:5060;transport=tcp — ':' before ';' but no '@', so
         // in_userinfo must remain false and ';' triggers uri_end.
-        let result =
-            parse_display_uri_params_str("sip:example.com:5060;transport=tcp").unwrap();
+        let result = parse_display_uri_params_str("sip:example.com:5060;transport=tcp").unwrap();
         assert_eq!(result.1.host_with_port.to_string(), "example.com:5060");
         assert_eq!(result.2.len(), 1);
     }
 
-    // ── 无括号、user:password@host ────────────────────────────────────────────
-
     #[test]
     fn test_userinfo_password_no_brackets() {
-        let result =
-            parse_display_uri_params_str("sip:alice:secret@example.com;tag=abc").unwrap();
+        let result = parse_display_uri_params_str("sip:alice:secret@example.com;tag=abc").unwrap();
         let auth = result.1.auth.unwrap();
         assert_eq!(auth.user, "alice");
         assert_eq!(auth.password, Some("secret".into()));
@@ -156,8 +150,6 @@ mod tests {
         assert!(result.2.is_empty());
     }
 
-    // ── 有括号、display name 含引号 ──────────────────────────────────────────
-
     #[test]
     fn test_display_name_with_quotes() {
         let result =
@@ -167,16 +159,12 @@ mod tests {
         assert!(result.2.is_empty());
     }
 
-    // ── 有括号、display name 为空 ────────────────────────────────────────────
-
     #[test]
     fn test_empty_display_name_with_brackets() {
         let result = parse_display_uri_params_str("<sip:alice@example.com>;tag=xyz").unwrap();
         assert!(result.0.is_none());
         assert_eq!(result.2.len(), 1);
     }
-
-    // ── 多 ';' param（无括号） ────────────────────────────────────────────────
 
     #[test]
     fn test_no_brackets_multiple_params_with_at() {

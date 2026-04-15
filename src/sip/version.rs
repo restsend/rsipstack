@@ -1,16 +1,13 @@
 use crate::sip::Error;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
+#[derive(Default)]
 pub enum Version {
+    #[default]
     V2,
     V(u8, u8),
 }
 
-impl Default for Version {
-    fn default() -> Self {
-        Self::V2
-    }
-}
 
 impl std::fmt::Display for Version {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

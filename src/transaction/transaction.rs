@@ -486,20 +486,17 @@ impl Transaction {
                         (&target).try_into().ok()
                     }
                 };
-                match target {
-                    Some(addr) => {
-                        let (via_connection, resolved_addr) = self
-                            .endpoint_inner
-                            .transport_layer
-                            .lookup(&addr, Some(&self.key))
-                            .await?;
-                        // For UDP, we need to store the resolved destination address
-                        if !via_connection.is_reliable() {
-                            self.destination.replace(resolved_addr);
-                        }
-                        connection = Some(via_connection);
+                if let Some(addr) = target {
+                    let (via_connection, resolved_addr) = self
+                        .endpoint_inner
+                        .transport_layer
+                        .lookup(&addr, Some(&self.key))
+                        .await?;
+                    // For UDP, we need to store the resolved destination address
+                    if !via_connection.is_reliable() {
+                        self.destination.replace(resolved_addr);
                     }
-                    None => {}
+                    connection = Some(via_connection);
                 }
             }
         }
@@ -865,14 +862,11 @@ impl Transaction {
                         self.timer_g.replace(timer_g);
                     }
                     debug!(key=%self.key, last = self.last_response.is_none(), "entered confirmed state, waiting for ACK");
-                    match self.last_response {
-                        Some(ref resp) => {
-                            let dialog_id = DialogId::try_from((resp, TransactionRole::Server))?;
-                            self.endpoint_inner
-                                .waiting_ack
-                                .insert(dialog_id, self.key.clone());
-                        }
-                        _ => {}
+                    if let Some(ref resp) = self.last_response {
+                        let dialog_id = DialogId::try_from((resp, TransactionRole::Server))?;
+                        self.endpoint_inner
+                            .waiting_ack
+                            .insert(dialog_id, self.key.clone());
                     }
                     // start Timer K, wait for ACK
                     let timer_k = self.endpoint_inner.timers.timeout(
@@ -970,8 +964,8 @@ impl Transaction {
                     if matches!(
                         self.state,
                         TransactionState::Proceeding | TransactionState::Trying
-                    ) {
-                        if self.last_ack.is_none() {
+                    )
+                        && self.last_ack.is_none() {
                             if let Some(ref resp) = self.last_response {
                                 if let Ok(ack) = self.endpoint_inner.make_ack(&self.original, resp)
                                 {
@@ -979,7 +973,6 @@ impl Transaction {
                                 }
                             }
                         }
-                    }
                     self.last_ack.take().map(SipMessage::Request)
                 }
                 TransactionType::ServerNonInvite => {

@@ -240,7 +240,7 @@ impl EndpointInner {
         headers.unique_push(Header::UserAgent(self.user_agent.clone().into()));
         Response {
             status_code,
-            version: req.version().clone(),
+            version: *req.version(),
             headers,
             body: body.unwrap_or_default(),
         }
@@ -350,7 +350,7 @@ impl EndpointInner {
         Ok(Request {
             method: crate::sip::Method::Ack,
             uri: request_uri,
-            headers: headers.into(),
+            headers,
             body: vec![],
             version: crate::sip::Version::V2,
         })

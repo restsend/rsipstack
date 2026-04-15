@@ -447,7 +447,7 @@ impl Registration {
                 .iter()
                 .find(|p| matches!(p, Param::Transport(_)))
             {
-                dest.r#type = Some(t.clone());
+                dest.r#type = Some(*t);
             }
             tx.destination = Some(dest);
         }
@@ -563,11 +563,11 @@ impl Registration {
                 _ => break,
             }
         }
-        return Err(crate::Error::DialogError(
+        Err(crate::Error::DialogError(
             "registration transaction is already terminated".to_string(),
             DialogId::try_from(&tx)?,
             StatusCode::BadRequest,
-        ));
+        ))
     }
 
     /// Create a NAT-aware Contact header with public address

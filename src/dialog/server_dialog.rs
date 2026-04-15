@@ -422,15 +422,12 @@ impl ServerInviteDialog {
             self.inner
                 .make_request(crate::sip::Method::Invite, None, None, None, headers, body)?;
         let resp = self.inner.do_request(request.clone()).await;
-        match resp {
-            Ok(Some(ref resp)) => {
-                if resp.status_code == StatusCode::OK {
-                    let (handle, _) = TransactionHandle::new();
-                    self.inner
-                        .transition(DialogState::Updated(self.id(), request, handle))?;
-                }
+        if let Ok(Some(ref resp)) = resp {
+            if resp.status_code == StatusCode::OK {
+                let (handle, _) = TransactionHandle::new();
+                self.inner
+                    .transition(DialogState::Updated(self.id(), request, handle))?;
             }
-            _ => {}
         }
         resp
     }
@@ -562,7 +559,7 @@ impl ServerInviteDialog {
         let mut headers = headers.unwrap_or_default();
         headers.push(crate::sip::Header::Other(
             "Refer-To".into(),
-            format!("<{}>", refer_to).into(),
+            format!("<{}>", refer_to),
         ));
         self.request(crate::sip::Method::Refer, Some(headers), body)
             .await
@@ -715,14 +712,14 @@ impl ServerInviteDialog {
                     tx.original.clone().into(),
                     tx.connection.clone(),
                 ))?;
-                return Ok(());
+                Ok(())
             }
             // Accept BYE even in WaitAck state — remote may tear down call
             // before ACK arrives (common with SIP proxies)
             crate::sip::Method::Bye => return self.handle_bye(tx).await,
             _ => {
                 // ignore other requests in non-confirmed state
-                return Ok(());
+                Ok(())
             }
         }
     }
@@ -823,20 +820,14 @@ impl ServerInviteDialog {
         self.inner.process_transaction_handle(tx, rx).await?;
 
         while let Some(msg) = tx.receive().await {
-            match msg {
-                SipMessage::Request(req) => match req.method {
-                    crate::sip::Method::Ack => {
-                        debug!(id = %self.id(),"received ack for re-invite {}", req.uri);
-                        self.inner.transition(DialogState::Confirmed(
-                            self.id(),
-                            tx.last_response.clone().unwrap_or_default(),
-                        ))?;
-                        break;
-                    }
-                    _ => {}
-                },
-                _ => {}
-            }
+            if let SipMessage::Request(req) = msg { if req.method == crate::sip::Method::Ack {
+                debug!(id = %self.id(),"received ack for re-invite {}", req.uri);
+                self.inner.transition(DialogState::Confirmed(
+                    self.id(),
+                    tx.last_response.clone().unwrap_or_default(),
+                ))?;
+                break;
+            } }
         }
         Ok(())
     }
@@ -845,13 +836,9 @@ impl ServerInviteDialog {
         let handle_loop = async {
             if !self.inner.is_confirmed()
                 && matches!(tx.original.method, crate::sip::Method::Invite)
+                && self.inner.transition(DialogState::Calling(self.id())).is_ok()
             {
-                match self.inner.transition(DialogState::Calling(self.id())) {
-                    Ok(_) => {
-                        tx.send_trying().await.ok();
-                    }
-                    Err(_) => {}
-                }
+                tx.send_trying().await.ok();
             }
 
             while let Some(msg) = tx.receive().await {

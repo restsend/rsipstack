@@ -161,7 +161,7 @@ impl Drop for DialogGuard {
             Some((_, dlg)) => dlg,
             None => return,
         };
-        let _ = tokio::spawn(async move {
+        let _handle = tokio::spawn(async move {
             if let Err(e) = dlg.hangup().await {
                 info!(id = %dlg.id(), error = %e, "failed to hangup dialog");
             }
@@ -181,7 +181,7 @@ impl<'a> Drop for DialogGuardForUnconfirmed<'a> {
         if let Some((_, dlg)) = self.dialog_layer_inner.dialogs.remove(&self.id.to_string()) {
             debug!(%self.id, "unconfirmed dialog dropped, cancelling it");
             let invite_tx = self.invite_tx.take();
-            let _ = tokio::spawn(async move {
+            let _handle = tokio::spawn(async move {
                 if let Dialog::ClientInvite(ref client_dialog) = dlg {
                     if client_dialog.inner.can_cancel() {
                         if let Err(e) = client_dialog.cancel().await {
@@ -495,10 +495,10 @@ impl DialogLayer {
                     }
                     _ => {}
                 }
-                return Ok((dialog, resp));
+                Ok((dialog, resp))
             }
             Err(e) => {
-                return Err(e);
+                Err(e)
             }
         }
     }
@@ -509,7 +509,6 @@ impl DialogLayer {
     /// Once completed, the early entry is removed and, on 2xx response,
     /// the dialog is re-registered under the confirmed dialog ID.
     /// Returns a JoinHandle resolving to the final dialog ID and response.
-
     pub fn do_invite_async(
         self: &Arc<Self>,
         opt: InviteOption,
@@ -583,7 +582,7 @@ impl DialogLayer {
             tx.destination = opt.destination;
         } else {
             if let Some(route) = tx.original.route_header() {
-                if let Some(first_route) = route.typed().ok() {
+                if let Ok(first_route) = route.typed() {
                     tx.destination = SipAddr::try_from(&first_route.uri).ok();
                 }
             }

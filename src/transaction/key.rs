@@ -35,7 +35,7 @@ impl std::fmt::Display for TransactionKey {
 impl TransactionKey {
     pub fn from_request(req: &Request, role: TransactionRole) -> Result<Self> {
         let via = req.via_header()?.typed()?;
-        let mut method = req.method().clone();
+        let mut method = *req.method();
 
         if matches!(method, Method::Ack | Method::Cancel) && role == TransactionRole::Server {
             method = Method::Invite;

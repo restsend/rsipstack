@@ -74,7 +74,7 @@ pub fn parse_message(data: &[u8]) -> Result<SipMessage, Error> {
 }
 
 fn parse_request_line(line: &str, headers: Headers, body: Vec<u8>) -> Result<SipMessage, Error> {
-    let mut parts = line.splitn(3, |c: char| c == ' ' || c == '\t');
+    let mut parts = line.splitn(3, [' ', '\t']);
     let method_str = parts
         .next()
         .ok_or_else(|| Error::ParseError("Request-Line: missing method".into()))?;
@@ -100,7 +100,7 @@ fn parse_request_line(line: &str, headers: Headers, body: Vec<u8>) -> Result<Sip
 }
 
 fn parse_response_line(line: &str, headers: Headers, body: Vec<u8>) -> Result<SipMessage, Error> {
-    let mut parts = line.splitn(3, |c: char| c == ' ' || c == '\t');
+    let mut parts = line.splitn(3, [' ', '\t']);
     let version_str = parts
         .next()
         .ok_or_else(|| Error::ParseError("Status-Line: missing version".into()))?;

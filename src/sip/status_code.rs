@@ -1,6 +1,7 @@
 use crate::sip::Error;
 
 #[derive(Debug, PartialEq, Eq, Ord, PartialOrd, Clone)]
+#[derive(Default)]
 pub enum StatusCode {
     Trying,
     Ringing,
@@ -8,6 +9,7 @@ pub enum StatusCode {
     Queued,
     SessionProgress,
     EarlyDialogTerminated,
+    #[default]
     OK,
     Accepted,
     NoNotification,
@@ -330,11 +332,6 @@ impl StatusCode {
     }
 }
 
-impl Default for StatusCode {
-    fn default() -> Self {
-        Self::OK
-    }
-}
 
 impl From<u16> for StatusCode {
     fn from(code: u16) -> Self {

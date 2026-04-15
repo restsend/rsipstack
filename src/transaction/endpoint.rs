@@ -238,7 +238,7 @@ impl EndpointInner {
             _ = self.cancel_token.cancelled() => {},
             _ = self.process_timer() => {},
             r = self.clone().process_transport_layer() => {
-                _ = r?;
+                r?;
             },
         }
         Ok(())
@@ -290,24 +290,18 @@ impl EndpointInner {
     pub async fn process_timer(&self) {
         loop {
             for t in self.timers.wait_for_ready().await.into_iter() {
-                match t {
-                    TransactionTimer::TimerCleanup(key) => {
-                        trace!(%key, "TimerCleanup");
-                        self.transactions.remove(&key);
-                        self.finished_transactions.remove(&key);
-                        continue;
-                    }
-                    _ => {}
+                if let TransactionTimer::TimerCleanup(key) = t {
+                    trace!(%key, "TimerCleanup");
+                    self.transactions.remove(&key);
+                    self.finished_transactions.remove(&key);
+                    continue;
                 }
 
-                if let Some(tu) = self.transactions.get(&t.key()) {
+                if let Some(tu) = self.transactions.get(t.key()) {
                     match tu.send(TransactionEvent::Timer(t)) {
                         Ok(_) => {}
-                        Err(error::SendError(t)) => match t {
-                            TransactionEvent::Timer(t) => {
-                                self.detach_transaction(t.key(), None);
-                            }
-                            _ => {}
+                        Err(error::SendError(t)) => if let TransactionEvent::Timer(t) = t {
+                            self.detach_transaction(t.key(), None);
                         },
                     }
                 }
@@ -354,20 +348,14 @@ impl EndpointInner {
         };
         match &msg {
             SipMessage::Request(req) => {
-                match req.method() {
-                    crate::sip::Method::Ack => {
-                        match DialogId::try_from((req, super::key::TransactionRole::Server)) {
-                            Ok(dialog_id) => {
-                                if let Some(tx_key) =
-                                    self.waiting_ack.get(&dialog_id).map(|v| v.clone())
-                                {
-                                    key = tx_key;
-                                }
-                            }
-                            Err(_) => {}
+                if req.method() == &crate::sip::Method::Ack {
+                    if let Ok(dialog_id) = DialogId::try_from((req, super::key::TransactionRole::Server)) {
+                        if let Some(tx_key) =
+                            self.waiting_ack.get(&dialog_id).map(|v| v.clone())
+                        {
+                            key = tx_key;
                         }
                     }
-                    _ => {}
                 }
                 // check is the termination of an existing transaction
                 let last_message = self
@@ -392,56 +380,53 @@ impl EndpointInner {
                     .and_then(|v| v.value().clone());
 
                 if let Some(mut last_message) = last_message {
-                    match last_message {
-                        SipMessage::Request(ref mut last_req) => {
-                            if last_req.method() == &crate::sip::Method::Ack {
-                                match resp.status_code.kind() {
-                                    crate::sip::StatusCodeKind::Provisional => {
-                                        return Ok(());
-                                    }
-                                    crate::sip::StatusCodeKind::Successful => {
-                                        if last_req.to_header()?.tag().ok().is_none() {
-                                            // don't ack 2xx response when ack is placeholder
-                                            return Ok(());
-                                        }
-                                    }
-                                    _ => {}
-                                }
-
-                                if let Ok(Some(tag)) = resp.to_header().and_then(|h| h.tag()) {
-                                    last_req.to_header_mut().and_then(|h| h.mut_tag(tag)).ok();
-                                }
-
-                                if let crate::sip::StatusCodeKind::RequestFailure =
-                                    resp.status_code.kind()
-                                {
-                                    // for ACK to 487, send it where it came from
-                                    connection.send(last_message, Some(from)).await?;
+                    if let SipMessage::Request(ref mut last_req) = last_message {
+                        if last_req.method() == &crate::sip::Method::Ack {
+                            match resp.status_code.kind() {
+                                crate::sip::StatusCodeKind::Provisional => {
                                     return Ok(());
                                 }
-
-                                let dest_uri = last_req.destination();
-                                let dest = match SipAddr::try_from(&dest_uri).ok() {
-                                    Some(addr)
-                                        if matches!(
-                                            addr.addr.host,
-                                            crate::sip::Host::Domain(_)
-                                        ) =>
-                                    {
-                                        self.transport_layer
-                                            .inner
-                                            .domain_resolver
-                                            .resolve(&addr)
-                                            .await
-                                            .ok()
+                                crate::sip::StatusCodeKind::Successful => {
+                                    if last_req.to_header()?.tag().ok().is_none() {
+                                        // don't ack 2xx response when ack is placeholder
+                                        return Ok(());
                                     }
-                                    addr => addr,
-                                };
-
-                                connection.send(last_message, dest.as_ref()).await?;
+                                }
+                                _ => {}
                             }
+
+                            if let Ok(Some(tag)) = resp.to_header().and_then(|h| h.tag()) {
+                                last_req.to_header_mut().and_then(|h| h.mut_tag(tag)).ok();
+                            }
+
+                            if let crate::sip::StatusCodeKind::RequestFailure =
+                                resp.status_code.kind()
+                            {
+                                // for ACK to 487, send it where it came from
+                                connection.send(last_message, Some(from)).await?;
+                                return Ok(());
+                            }
+
+                            let dest_uri = last_req.destination();
+                            let dest = match SipAddr::try_from(&dest_uri).ok() {
+                                Some(addr)
+                                    if matches!(
+                                        addr.addr.host,
+                                        crate::sip::Host::Domain(_)
+                                    ) =>
+                                {
+                                    self.transport_layer
+                                        .inner
+                                        .domain_resolver
+                                        .resolve(&addr)
+                                        .await
+                                        .ok()
+                                }
+                                addr => addr,
+                            };
+
+                            connection.send(last_message, dest.as_ref()).await?;
                         }
-                        _ => {}
                     }
                     return Ok(());
                 }
@@ -589,6 +574,12 @@ impl EndpointInner {
             finished_transactions,
             waiting_ack,
         }
+    }
+}
+
+impl Default for EndpointBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

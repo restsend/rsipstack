@@ -410,6 +410,10 @@ impl DialogLayer {
         self.inner.dialogs.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.inner.dialogs.is_empty()
+    }
+
     pub fn all_dialog_ids(&self) -> Vec<String> {
         self.inner
             .dialogs
@@ -478,7 +482,7 @@ impl DialogLayer {
         };
 
         let inner = Arc::new(inner);
-        let dialog = Dialog::from_inner(inner.role.clone(), inner.clone());
+        let dialog = Dialog::from_inner(inner.role, inner.clone());
 
         let key = dialog.id().to_string();
 
@@ -489,10 +493,9 @@ impl DialogLayer {
 
     pub fn remove_dialog(&self, id: &DialogId) {
         debug!(%id, "remove dialog");
-        self.inner
+        if let Some((_, d)) = self.inner
             .dialogs
-            .remove(&id.to_string())
-            .map(|(_, d)| d.on_remove());
+            .remove(&id.to_string()) { d.on_remove() }
     }
 
     pub fn match_dialog(&self, tx: &Transaction) -> Option<Dialog> {
@@ -525,8 +528,7 @@ impl DialogLayer {
 
         let mut params = params.unwrap_or_default();
         if !matches!(addr.r#type, Some(crate::sip::Transport::Udp) | None) {
-            addr.r#type
-                .map(|t| params.push(crate::sip::Param::Transport(t)));
+            if let Some(t) = addr.r#type { params.push(crate::sip::Param::Transport(t)) }
         }
         let auth = username.map(|user| crate::sip::Auth {
             user,
@@ -535,7 +537,7 @@ impl DialogLayer {
         Ok(crate::sip::Uri {
             scheme: Some(scheme),
             auth,
-            host_with_port: addr.addr.clone().into(),
+            host_with_port: addr.addr.clone(),
             params,
             ..Default::default()
         })

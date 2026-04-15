@@ -150,9 +150,7 @@ impl ReloadableCertResolver {
                 .map_err(|e| Error::Error(format!("Failed to parse PKCS8 key: {}", e)))?;
 
             if !keys.is_empty() {
-                pki_types::PrivateKeyDer::Pkcs8(pki_types::PrivatePkcs8KeyDer::from(
-                    keys[0].clone_key(),
-                ))
+                pki_types::PrivateKeyDer::Pkcs8(keys[0].clone_key())
             } else {
                 let mut reader = std::io::BufReader::new(key_data);
                 let keys = rustls_pemfile::rsa_private_keys(&mut reader)
@@ -160,9 +158,7 @@ impl ReloadableCertResolver {
                     .map_err(|e| Error::Error(format!("Failed to parse RSA key: {}", e)))?;
 
                 if !keys.is_empty() {
-                    pki_types::PrivateKeyDer::Pkcs1(pki_types::PrivatePkcs1KeyDer::from(
-                        keys[0].clone_key(),
-                    ))
+                    pki_types::PrivateKeyDer::Pkcs1(keys[0].clone_key())
                 } else {
                     return Err(Error::Error("No valid private key found".to_string()));
                 }
@@ -249,7 +245,7 @@ fn parse_private_key(key_data: &[u8]) -> Result<pki_types::PrivateKeyDer<'static
         .map_err(|e| Error::Error(format!("Failed to parse PKCS8 key: {}", e)))?;
 
     if !keys.is_empty() {
-        let key_der = pki_types::PrivatePkcs8KeyDer::from(keys[0].clone_key());
+        let key_der = keys[0].clone_key();
         return Ok(pki_types::PrivateKeyDer::Pkcs8(key_der));
     }
 
@@ -260,7 +256,7 @@ fn parse_private_key(key_data: &[u8]) -> Result<pki_types::PrivateKeyDer<'static
         .map_err(|e| Error::Error(format!("Failed to parse RSA key: {}", e)))?;
 
     if !keys.is_empty() {
-        let key_der = pki_types::PrivatePkcs1KeyDer::from(keys[0].clone_key());
+        let key_der = keys[0].clone_key();
         return Ok(pki_types::PrivateKeyDer::Pkcs1(key_der));
     }
 

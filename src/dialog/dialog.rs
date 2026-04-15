@@ -456,7 +456,7 @@ impl DialogInner {
             role,
             cancel_token: CancellationToken::new(),
             id: Mutex::new(id.clone()),
-            from: from,
+            from,
             to: Mutex::new(to),
             local_seq: AtomicU32::new(cseq),
             remote_uri: Mutex::new(remote_uri),
@@ -585,7 +585,7 @@ impl DialogInner {
         let mut tx = Transaction::new_client(key, request, self.endpoint_inner.clone(), None);
 
         if let Some(route) = tx.original.route_header() {
-            if let Some(first_route) = route.typed().ok() {
+            if let Ok(first_route) = route.typed() {
                 tx.destination = SipAddr::try_from(&first_route.uri).ok();
             }
         }
@@ -833,9 +833,8 @@ impl DialogInner {
             }
         }
 
-        self.local_contact
-            .as_ref()
-            .map(|c| resp_headers.push(Contact::from(c.clone()).into()));
+        if let Some(c) = self.local_contact
+            .as_ref() { resp_headers.push(Contact::from(c.clone()).into()) }
 
         if let Some(headers) = headers {
             for header in headers {
@@ -869,7 +868,7 @@ impl DialogInner {
             status_code: status,
             headers: resp_headers,
             body: body.unwrap_or_default(),
-            version: request.version().clone(),
+            version: *request.version(),
         }
     }
 
@@ -879,7 +878,7 @@ impl DialogInner {
         let mut tx = Transaction::new_client(key, request, self.endpoint_inner.clone(), None);
 
         if let Some(route) = tx.original.route_header() {
-            if let Some(first_route) = route.typed().ok() {
+            if let Ok(first_route) = route.typed() {
                 tx.destination = SipAddr::try_from(&first_route.uri).ok();
             }
         }
@@ -1002,7 +1001,7 @@ impl DialogInner {
         DialogSnapshot {
             state,
 
-            role: self.role.clone(),
+            role: self.role,
             id: id.clone(),
 
             from: self.from.clone(),
@@ -1060,10 +1059,10 @@ impl DialogInner {
             from = from.with_tag(from_tag.into());
         }
 
-        let role = snapshot.role.clone();
+        let role = snapshot.role;
 
         let initial_request = Mutex::new(Self::build_restored_initial_request(
-            role.clone(),
+            role,
             &snapshot.id,
             &from,
             &to,

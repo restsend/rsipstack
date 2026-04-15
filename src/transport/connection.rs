@@ -164,10 +164,7 @@ pub enum SipConnection {
 
 impl SipConnection {
     pub fn is_reliable(&self) -> bool {
-        match self {
-            SipConnection::Udp(_) => false,
-            _ => true,
-        }
+        !matches!(self, SipConnection::Udp(_))
     }
 
     pub fn cancel_token(&self) -> Option<CancellationToken> {
@@ -312,10 +309,9 @@ impl SipConnection {
         let received = addr.into();
         let mut typed_via = via.typed()?;
 
-        typed_via.params.retain(|param| match param {
-            Param::Rport(_) | Param::Received(_) => false,
-            _ => true,
-        });
+        typed_via
+            .params
+            .retain(|param| !matches!(param, Param::Rport(_) | Param::Received(_)));
 
         // Only add received parameter if the source address differs from Via header
         if typed_via.uri.host_with_port == received {
@@ -356,7 +352,7 @@ impl SipConnection {
     pub fn parse_target_from_via(via: &Via) -> Result<(Transport, HostWithPort)> {
         let typed_via = via.typed()?;
         let mut host_with_port = typed_via.uri.host_with_port.clone();
-        let mut transport = typed_via.transport.clone();
+        let mut transport = typed_via.transport;
         for param in &typed_via.params {
             match param {
                 Param::Received(v) => {
@@ -365,7 +361,7 @@ impl SipConnection {
                     }
                 }
                 Param::Transport(t) => {
-                    transport = t.clone();
+                    transport = *t;
                 }
                 Param::Rport(Some(port)) => {
                     host_with_port.port = Some((*port).into());

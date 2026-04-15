@@ -5,17 +5,14 @@ use std::net::IpAddr;
 use std::str::FromStr;
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
+#[derive(Default)]
 pub enum Scheme {
+    #[default]
     Sip,
     Sips,
     Other(String),
 }
 
-impl Default for Scheme {
-    fn default() -> Self {
-        Self::Sip
-    }
-}
 
 impl fmt::Display for Scheme {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

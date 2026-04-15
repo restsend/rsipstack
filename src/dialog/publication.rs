@@ -43,22 +43,20 @@ impl ClientPublicationDialog {
     ) -> Result<Option<crate::sip::Response>> {
         let mut headers = headers.unwrap_or_default();
         if let Some(etag) = self.etag() {
-            headers.push(Header::Other("SIP-If-Match".into(), etag.into()));
+            headers.push(Header::Other("SIP-If-Match".into(), etag));
         }
 
         let resp = self.request(Method::Publish, Some(headers), body).await?;
         if let Some(ref response) = resp {
             if matches!(response.status_code.kind(), StatusCodeKind::Successful) {
-                if let Some(etag_header) = response.headers.iter().find(|h| {
+                if let Some(Header::Other(_, value)) = response.headers.iter().find(|h| {
                     if let Header::Other(name, _) = h {
                         name.to_string().eq_ignore_ascii_case("SIP-ETag")
                     } else {
                         false
                     }
                 }) {
-                    if let Header::Other(_, value) = etag_header {
-                        *self.etag.lock() = Some(value.to_string());
-                    }
+                    *self.etag.lock() = Some(value.to_string());
                 }
             }
         }
@@ -76,7 +74,7 @@ impl ClientPublicationDialog {
         let mut headers = extra_headers.unwrap_or_default();
         headers.push(Header::Expires(0.into()));
         if let Some(etag) = self.etag() {
-            headers.push(Header::Other("SIP-If-Match".into(), etag.into()));
+            headers.push(Header::Other("SIP-If-Match".into(), etag));
         }
         self.request(Method::Publish, Some(headers), None).await?;
         self.inner
@@ -175,7 +173,7 @@ impl ServerPublicationDialog {
         body: Option<Vec<u8>>,
     ) -> Result<()> {
         let mut headers = headers.unwrap_or_default();
-        headers.push(Header::Other("SIP-ETag".into(), etag.clone().into()));
+        headers.push(Header::Other("SIP-ETag".into(), etag.clone()));
 
         let resp = self.inner.make_response(
             &self.inner.initial_request.lock(),
@@ -206,7 +204,7 @@ impl ServerPublicationDialog {
         let mut headers = extra_headers.unwrap_or_default();
         headers.push(Header::Expires(0.into()));
         if let Some(etag) = self.etag() {
-            headers.push(Header::Other("SIP-If-Match".into(), etag.into()));
+            headers.push(Header::Other("SIP-If-Match".into(), etag));
         }
         self.request(Method::Publish, Some(headers), None).await?;
         self.inner

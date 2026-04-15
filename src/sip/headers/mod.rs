@@ -308,11 +308,11 @@ impl Headers {
     }
 
     pub fn get<T, F: Fn(&Header) -> Option<&T>>(&self, f: F) -> Option<&T> {
-        self.0.iter().find_map(|h| f(h))
+        self.0.iter().find_map(f)
     }
 
     pub fn get_all<T, F: Fn(&Header) -> Option<&T>>(&self, f: F) -> Vec<&T> {
-        self.0.iter().filter_map(|h| f(h)).collect()
+        self.0.iter().filter_map(f).collect()
     }
 
     pub fn pop_first<T, F: Fn(&Header) -> Option<T>>(&mut self, f: F) -> Option<T> {
@@ -321,7 +321,7 @@ impl Headers {
     }
 
     pub fn remove_first<F: Fn(&Header) -> bool>(&mut self, pred: F) -> bool {
-        if let Some(pos) = self.0.iter().position(|h| pred(h)) {
+        if let Some(pos) = self.0.iter().position(pred) {
             self.0.remove(pos);
             true
         } else {

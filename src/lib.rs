@@ -1,5 +1,13 @@
 // A SIP stack in Rust
 
+#![allow(
+    clippy::result_large_err,
+    clippy::too_many_arguments,
+    clippy::module_inception,
+    clippy::wrong_self_convention,
+    clippy::large_enum_variant
+)]
+
 //! # RSIPStack - A SIP Stack Implementation in Rust
 //!
 //! RSIPStack is a comprehensive Session Initiation Protocol (SIP) implementation

@@ -1,3 +1,5 @@
+#![allow(clippy::result_large_err)]
+
 use clap::Parser;
 use futures::future::{self, Future};
 use parking_lot::Mutex;
@@ -224,8 +226,7 @@ async fn update_stats(dialog_layer: Arc<DialogLayer>, stats: Stats) {
         let current_time = Instant::now();
         let elapsed = current_time.duration_since(last_time).as_secs();
 
-        if elapsed > 0 {
-            let cps = (current_total - last_total) / elapsed;
+        if let Some(cps) = (current_total - last_total).checked_div(elapsed) {
             stats.calls_per_second.store(cps, Ordering::Relaxed);
             last_total = current_total;
             last_time = current_time;
@@ -263,15 +264,11 @@ async fn process_dialog_state(
 ) -> Result<()> {
     while let Some(state) = state_receiver.recv().await {
         match state {
-            DialogState::Calling(id) => match dialog_layer.get_dialog(&id) {
-                Some(dialog) => match dialog {
-                    Dialog::ServerInvite(dialog) => {
-                        dialog.accept(None, None).ok();
-                    }
-                    _ => {}
-                },
-                None => {}
-            },
+            DialogState::Calling(id) => {
+                if let Some(Dialog::ServerInvite(dialog)) = dialog_layer.get_dialog(&id) {
+                    dialog.accept(None, None).ok();
+                }
+            }
             DialogState::Confirmed(id, _) => {
                 stats.active_calls.lock().insert(id, Instant::now());
             }
@@ -367,7 +364,7 @@ async fn main() -> Result<()> {
     let contact = rsipstack::sip::Uri {
         scheme: Some(rsipstack::sip::Scheme::Sip),
         auth: None,
-        host_with_port: first_addr.addr.into(),
+        host_with_port: first_addr.addr,
         params: vec![],
         headers: vec![],
     };

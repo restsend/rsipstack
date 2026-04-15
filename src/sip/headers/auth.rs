@@ -1,18 +1,15 @@
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Default)]
 pub enum Algorithm {
     Md5,
     Md5Sess,
+    #[default]
     Sha256,
     Sha256Sess,
     Sha512,
     Sha512Sess,
 }
 
-impl Default for Algorithm {
-    fn default() -> Self {
-        Self::Sha256
-    }
-}
 
 impl std::fmt::Display for Algorithm {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -105,7 +102,9 @@ impl std::fmt::Display for AuthQop {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Default)]
 pub enum Scheme {
+    #[default]
     Digest,
     Other(String),
 }
@@ -143,8 +142,3 @@ impl std::convert::TryFrom<String> for Scheme {
     }
 }
 
-impl Default for Scheme {
-    fn default() -> Self {
-        Self::Digest
-    }
-}

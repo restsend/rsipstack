@@ -80,10 +80,7 @@ impl<T> Timer<T> {
 
     pub fn cancel(&self, task_id: u64) -> Option<T> {
         let mut state = self.lock_state();
-        let execute_at = match state.id_to_tasks.remove(&task_id) {
-            Some(execute_at) => execute_at,
-            None => return None,
-        };
+        let execute_at = state.id_to_tasks.remove(&task_id)?;
 
         let key = TimerKey {
             task_id,
