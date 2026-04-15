@@ -1,6 +1,6 @@
 [package]
 name = "rsipstack"
-version = "0.5.5"
+version = "0.5.6"
 edition = "2021"
 description = "SIP Stack Rust library for building SIP applications"
 license = "MIT"
@@ -34,6 +34,7 @@ hickory-resolver = { version = "0.25.2", features = [
     "tokio",
 ], optional = true }
 bytes = "1.11.1"
+memchr = "2"
 futures-util = "0.3.32"
 parking_lot = "0.12"
 dashmap = "6"
@@ -59,6 +60,7 @@ tokio = { version = "1.50.0", features = ["time", "sync", "macros", "io-util"] }
 tokio = { version = "1.50.0", features = ["full"] }
 
 [dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
 dotenv = "0.15"
 tempfile = "3"
 sdp-rs = "0.2.1"

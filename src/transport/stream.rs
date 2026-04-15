@@ -7,6 +7,7 @@ use crate::{
     Result,
 };
 use bytes::{Buf, BytesMut};
+use memchr::{memchr, memmem};
 use tokio::{
     io::{AsyncRead, AsyncWrite, AsyncWriteExt},
     sync::Mutex,
@@ -64,25 +65,24 @@ impl Decoder for SipCodec {
             return Ok(Some(SipCodecType::KeepaliveResponse));
         }
 
-        if let Some(headers_end) = src.windows(4).position(|w| w == b"\r\n\r\n") {
+        if let Some(headers_end) = memmem::find(src, b"\r\n\r\n") {
             let headers = &src[..headers_end + 4]; // include CRLFCRLF
 
             // Parse Content-Length as u32 without UTF-8 conversion
             let mut content_length: usize = 0;
             let mut start = 0;
             while start < headers.len() {
-                // find end of line
-                let mut end = start;
-                while end < headers.len() && headers[end] != b'\n' {
-                    end += 1;
-                }
+                // find end of line with memchr
+                let end = memchr(b'\n', &headers[start..])
+                    .map(|p| start + p)
+                    .unwrap_or(headers.len());
 
                 let mut line = &headers[start..end];
                 if let Some(&b'\r') = line.last() {
                     line = &line[..line.len().saturating_sub(1)];
                 }
 
-                if let Some(colon) = line.iter().position(|&b| b == b':') {
+                if let Some(colon) = memchr(b':', line) {
                     let header = &line[..colon];
                     let is_cl = if header.len() == CL_FULL_NAME.len()
                         && header
@@ -283,4 +283,179 @@ where
     lock.write_all(data).await?;
     lock.flush().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transport::connection::{KEEPALIVE_REQUEST, KEEPALIVE_RESPONSE};
+    use bytes::BytesMut;
+    use tokio_util::codec::Decoder;
+
+    fn make_codec() -> SipCodec {
+        SipCodec::new()
+    }
+
+    // Minimal valid INVITE with the given body.
+    fn invite_bytes(body: &str) -> Vec<u8> {
+        let msg = format!(
+            concat!(
+                "INVITE sip:bob@biloxi.com SIP/2.0\r\n",
+                "Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bK776\r\n",
+                "To: Bob <sip:bob@biloxi.com>\r\n",
+                "From: Alice <sip:alice@atlanta.com>;tag=123\r\n",
+                "Call-ID: abc@test\r\n",
+                "CSeq: 1 INVITE\r\n",
+                "Content-Type: application/sdp\r\n",
+                "Content-Length: {}\r\n",
+                "\r\n",
+                "{}"
+            ),
+            body.len(),
+            body
+        );
+        msg.into_bytes()
+    }
+
+    fn register_bytes() -> Vec<u8> {
+        concat!(
+            "REGISTER sip:registrar.example.com SIP/2.0\r\n",
+            "Via: SIP/2.0/UDP bob:5060;branch=z9hG4bKnashds8\r\n",
+            "To: Bob <sip:bob@example.com>\r\n",
+            "From: Bob <sip:bob@example.com>;tag=456\r\n",
+            "Call-ID: 843817637@998sdasdh09\r\n",
+            "CSeq: 1 REGISTER\r\n",
+            "Content-Length: 0\r\n",
+            "\r\n",
+        )
+        .as_bytes()
+        .to_vec()
+    }
+
+    // ── 基本解码 ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn decode_complete_message_no_body() {
+        let mut codec = make_codec();
+        let mut buf = BytesMut::from(register_bytes().as_slice());
+        let result = codec.decode(&mut buf).unwrap();
+        assert!(matches!(result, Some(SipCodecType::Message(_))));
+        assert_eq!(buf.len(), 0, "buffer should be fully consumed");
+    }
+
+    #[test]
+    fn decode_complete_message_with_body() {
+        let body = "v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\n";
+        let mut codec = make_codec();
+        let mut buf = BytesMut::from(invite_bytes(body).as_slice());
+        let result = codec.decode(&mut buf).unwrap();
+        assert!(matches!(result, Some(SipCodecType::Message(_))));
+        assert_eq!(buf.len(), 0);
+    }
+
+    // ── 分包：header 尚未完整 ─────────────────────────────────────────────────
+
+    #[test]
+    fn decode_returns_none_when_headers_incomplete() {
+        let mut codec = make_codec();
+        let full = register_bytes();
+        // Feed only the first half of the message.
+        let half = &full[..full.len() / 2];
+        let mut buf = BytesMut::from(half);
+        let result = codec.decode(&mut buf).unwrap();
+        assert!(result.is_none(), "should wait for more data");
+        // Buffer must be untouched.
+        assert_eq!(buf.as_ref(), half);
+    }
+
+    // ── 分包：body 尚未完整 ───────────────────────────────────────────────────
+
+    #[test]
+    fn decode_returns_none_when_body_incomplete() {
+        let body = "v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\n";
+        let mut codec = make_codec();
+        let full = invite_bytes(body);
+        // Feed headers + CRLFCRLF but only half the body.
+        let headers_end = memmem::find(&full, b"\r\n\r\n").unwrap() + 4;
+        let partial_body = body.len() / 2;
+        let partial = &full[..headers_end + partial_body];
+        let mut buf = BytesMut::from(partial);
+        let result = codec.decode(&mut buf).unwrap();
+        assert!(result.is_none());
+        assert_eq!(buf.len(), partial.len());
+    }
+
+    // ── 粘包：两条消息连在一起 ────────────────────────────────────────────────
+
+    #[test]
+    fn decode_two_back_to_back_messages() {
+        let mut codec = make_codec();
+        let mut buf = BytesMut::new();
+        buf.extend_from_slice(&register_bytes());
+        buf.extend_from_slice(&register_bytes());
+
+        let first = codec.decode(&mut buf).unwrap();
+        assert!(matches!(first, Some(SipCodecType::Message(_))));
+
+        let second = codec.decode(&mut buf).unwrap();
+        assert!(matches!(second, Some(SipCodecType::Message(_))));
+
+        assert_eq!(buf.len(), 0);
+    }
+
+    // ── Content-Length 短格式 'l' ─────────────────────────────────────────────
+
+    #[test]
+    fn decode_short_content_length_header() {
+        let body = "hello";
+        let raw = format!(
+            concat!(
+                "INVITE sip:bob@example.com SIP/2.0\r\n",
+                "Via: SIP/2.0/UDP pc;branch=z9hG4bK1\r\n",
+                "To: <sip:bob@example.com>\r\n",
+                "From: <sip:alice@example.com>;tag=1\r\n",
+                "Call-ID: x@y\r\n",
+                "CSeq: 1 INVITE\r\n",
+                "l: {}\r\n",
+                "\r\n",
+                "{}"
+            ),
+            body.len(),
+            body
+        );
+        let mut codec = make_codec();
+        let mut buf = BytesMut::from(raw.as_bytes());
+        let result = codec.decode(&mut buf).unwrap();
+        assert!(matches!(result, Some(SipCodecType::Message(_))));
+    }
+
+    // ── Keepalive 帧 ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn decode_keepalive_request() {
+        let mut codec = make_codec();
+        let mut buf = BytesMut::from(KEEPALIVE_REQUEST.as_ref());
+        let result = codec.decode(&mut buf).unwrap();
+        assert!(matches!(result, Some(SipCodecType::KeepaliveRequest)));
+        assert_eq!(buf.len(), 0);
+    }
+
+    #[test]
+    fn decode_keepalive_response() {
+        let mut codec = make_codec();
+        let mut buf = BytesMut::from(KEEPALIVE_RESPONSE.as_ref());
+        let result = codec.decode(&mut buf).unwrap();
+        assert!(matches!(result, Some(SipCodecType::KeepaliveResponse)));
+        assert_eq!(buf.len(), 0);
+    }
+
+    // ── 消息过大 ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn decode_rejects_oversized_buffer() {
+        let mut codec = make_codec();
+        let mut buf = BytesMut::from(vec![b'X'; MAX_SIP_MESSAGE_SIZE + 1].as_slice());
+        let result = codec.decode(&mut buf);
+        assert!(result.is_err());
+    }
 }

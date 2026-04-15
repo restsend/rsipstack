@@ -4,6 +4,7 @@ use crate::sip::{
     uri::parse_uri,
     Error, Method, StatusCode, Uri, Version,
 };
+use memchr::{memchr, memmem};
 pub fn parse_message(data: &[u8]) -> Result<SipMessage, Error> {
     let sep = find_double_crlf(data)
         .ok_or_else(|| Error::ParseError("SIP message: missing \\r\\n\\r\\n separator".into()))?;
@@ -123,8 +124,7 @@ fn parse_response_line(line: &str, headers: Headers, body: Vec<u8>) -> Result<Si
 }
 
 fn find_double_crlf(data: &[u8]) -> Option<usize> {
-    let needle = b"\r\n\r\n";
-    data.windows(4).position(|w| w == needle)
+    memmem::find(data, b"\r\n\r\n")
 }
 
 fn split_crlf_lines(data: &[u8]) -> impl Iterator<Item = &str> {
@@ -146,8 +146,14 @@ impl<'a> Iterator for SplitCrLf<'a> {
         let start = self.pos;
         let rest = &self.data[start..];
 
-        let (end, next_pos) = if let Some(p) = rest.windows(2).position(|w| w == b"\r\n") {
-            (start + p, start + p + 2)
+        // Find '\n' with memchr, then check the preceding '\r'.
+        let (end, next_pos) = if let Some(lf) = memchr(b'\n', rest) {
+            let line_end = if lf > 0 && rest[lf - 1] == b'\r' {
+                start + lf - 1
+            } else {
+                start + lf
+            };
+            (line_end, start + lf + 1)
         } else {
             (self.data.len(), self.data.len())
         };
