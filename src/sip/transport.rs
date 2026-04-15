@@ -1,7 +1,6 @@
 use crate::sip::{Error, Scheme};
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
-#[derive(Default)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash, Default)]
 pub enum Transport {
     #[default]
     Udp,
@@ -47,7 +46,6 @@ impl Transport {
         }
     }
 }
-
 
 impl std::fmt::Display for Transport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

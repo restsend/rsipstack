@@ -85,7 +85,9 @@ impl Hash for SipAddr {
             Host::Domain(ref domain) => domain.hash(state),
             Host::IpAddr(ref ip_addr) => ip_addr.hash(state),
         }
-        if let Some(port) = self.addr.port { port.value().hash(state) }
+        if let Some(port) = self.addr.port {
+            port.value().hash(state)
+        }
     }
 }
 

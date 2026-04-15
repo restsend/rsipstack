@@ -493,9 +493,9 @@ impl DialogLayer {
 
     pub fn remove_dialog(&self, id: &DialogId) {
         debug!(%id, "remove dialog");
-        if let Some((_, d)) = self.inner
-            .dialogs
-            .remove(&id.to_string()) { d.on_remove() }
+        if let Some((_, d)) = self.inner.dialogs.remove(&id.to_string()) {
+            d.on_remove()
+        }
     }
 
     pub fn match_dialog(&self, tx: &Transaction) -> Option<Dialog> {
@@ -528,7 +528,9 @@ impl DialogLayer {
 
         let mut params = params.unwrap_or_default();
         if !matches!(addr.r#type, Some(crate::sip::Transport::Udp) | None) {
-            if let Some(t) = addr.r#type { params.push(crate::sip::Param::Transport(t)) }
+            if let Some(t) = addr.r#type {
+                params.push(crate::sip::Param::Transport(t))
+            }
         }
         let auth = username.map(|user| crate::sip::Auth {
             user,

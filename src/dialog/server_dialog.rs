@@ -820,14 +820,16 @@ impl ServerInviteDialog {
         self.inner.process_transaction_handle(tx, rx).await?;
 
         while let Some(msg) = tx.receive().await {
-            if let SipMessage::Request(req) = msg { if req.method == crate::sip::Method::Ack {
-                debug!(id = %self.id(),"received ack for re-invite {}", req.uri);
-                self.inner.transition(DialogState::Confirmed(
-                    self.id(),
-                    tx.last_response.clone().unwrap_or_default(),
-                ))?;
-                break;
-            } }
+            if let SipMessage::Request(req) = msg {
+                if req.method == crate::sip::Method::Ack {
+                    debug!(id = %self.id(),"received ack for re-invite {}", req.uri);
+                    self.inner.transition(DialogState::Confirmed(
+                        self.id(),
+                        tx.last_response.clone().unwrap_or_default(),
+                    ))?;
+                    break;
+                }
+            }
         }
         Ok(())
     }
@@ -836,7 +838,10 @@ impl ServerInviteDialog {
         let handle_loop = async {
             if !self.inner.is_confirmed()
                 && matches!(tx.original.method, crate::sip::Method::Invite)
-                && self.inner.transition(DialogState::Calling(self.id())).is_ok()
+                && self
+                    .inner
+                    .transition(DialogState::Calling(self.id()))
+                    .is_ok()
             {
                 tx.send_trying().await.ok();
             }

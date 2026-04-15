@@ -759,7 +759,9 @@ impl ClientInviteDialog {
                         }
                     }
                     final_response = Some(resp.clone());
-                    if let Some(tag) = resp.to_header()?.tag()? { self.inner.update_remote_tag(tag.value())? }
+                    if let Some(tag) = resp.to_header()?.tag()? {
+                        self.inner.update_remote_tag(tag.value())?
+                    }
 
                     if let Ok(id) = DialogId::try_from((&resp, TransactionRole::Client)) {
                         dialog_id = id;

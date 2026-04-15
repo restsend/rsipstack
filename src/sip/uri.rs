@@ -4,15 +4,13 @@ use std::fmt;
 use std::net::IpAddr;
 use std::str::FromStr;
 
-#[derive(Debug, PartialEq, Eq, Clone, Hash)]
-#[derive(Default)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash, Default)]
 pub enum Scheme {
     #[default]
     Sip,
     Sips,
     Other(String),
 }
-
 
 impl fmt::Display for Scheme {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

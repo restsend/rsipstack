@@ -497,9 +497,7 @@ impl DialogLayer {
                 }
                 Ok((dialog, resp))
             }
-            Err(e) => {
-                Err(e)
-            }
+            Err(e) => Err(e),
         }
     }
 

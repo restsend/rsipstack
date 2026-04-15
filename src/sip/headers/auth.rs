@@ -1,5 +1,4 @@
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-#[derive(Default)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
 pub enum Algorithm {
     Md5,
     Md5Sess,
@@ -9,7 +8,6 @@ pub enum Algorithm {
     Sha512,
     Sha512Sess,
 }
-
 
 impl std::fmt::Display for Algorithm {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -101,8 +99,7 @@ impl std::fmt::Display for AuthQop {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
-#[derive(Default)]
+#[derive(Debug, PartialEq, Eq, Clone, Default)]
 pub enum Scheme {
     #[default]
     Digest,
@@ -141,4 +138,3 @@ impl std::convert::TryFrom<String> for Scheme {
         Scheme::try_from(s.as_str())
     }
 }
-

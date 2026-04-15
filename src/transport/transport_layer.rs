@@ -66,12 +66,7 @@ impl DefaultDomainResolver {
 
         let addrs = self
             .resolver
-            .lookup(
-                domain,
-                target.addr.port,
-                target.r#type,
-                secure,
-            )
+            .lookup(domain, target.addr.port, target.r#type, secure)
             .await
             .map_err(|e| crate::Error::DnsResolutionError(format!("{}: {}", target.addr, e)))?;
 
@@ -302,7 +297,9 @@ impl TransportLayerInner {
                 return Ok((transport.clone(), target.clone()));
             }
         }
-        if let Some(Transport::Tcp | Transport::Tls | Transport::Ws | Transport::Wss) = target.r#type {
+        if let Some(Transport::Tcp | Transport::Tls | Transport::Ws | Transport::Wss) =
+            target.r#type
+        {
             let sip_connection = match target.r#type {
                 Some(Transport::Tcp) => {
                     let connection =
@@ -326,11 +323,9 @@ impl TransportLayerInner {
                     SipConnection::Tls(connection)
                 }
                 Some(Transport::Ws | Transport::Wss) => {
-                    let connection = WebSocketConnection::connect(
-                        target,
-                        Some(self.cancel_token.child_token()),
-                    )
-                    .await?;
+                    let connection =
+                        WebSocketConnection::connect(target, Some(self.cancel_token.child_token()))
+                            .await?;
                     SipConnection::WebSocket(connection)
                 }
                 _ => {

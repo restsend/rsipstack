@@ -300,9 +300,11 @@ impl EndpointInner {
                 if let Some(tu) = self.transactions.get(t.key()) {
                     match tu.send(TransactionEvent::Timer(t)) {
                         Ok(_) => {}
-                        Err(error::SendError(t)) => if let TransactionEvent::Timer(t) = t {
-                            self.detach_transaction(t.key(), None);
-                        },
+                        Err(error::SendError(t)) => {
+                            if let TransactionEvent::Timer(t) = t {
+                                self.detach_transaction(t.key(), None);
+                            }
+                        }
                     }
                 }
             }
@@ -349,10 +351,10 @@ impl EndpointInner {
         match &msg {
             SipMessage::Request(req) => {
                 if req.method() == &crate::sip::Method::Ack {
-                    if let Ok(dialog_id) = DialogId::try_from((req, super::key::TransactionRole::Server)) {
-                        if let Some(tx_key) =
-                            self.waiting_ack.get(&dialog_id).map(|v| v.clone())
-                        {
+                    if let Ok(dialog_id) =
+                        DialogId::try_from((req, super::key::TransactionRole::Server))
+                    {
+                        if let Some(tx_key) = self.waiting_ack.get(&dialog_id).map(|v| v.clone()) {
                             key = tx_key;
                         }
                     }
@@ -410,10 +412,7 @@ impl EndpointInner {
                             let dest_uri = last_req.destination();
                             let dest = match SipAddr::try_from(&dest_uri).ok() {
                                 Some(addr)
-                                    if matches!(
-                                        addr.addr.host,
-                                        crate::sip::Host::Domain(_)
-                                    ) =>
+                                    if matches!(addr.addr.host, crate::sip::Host::Domain(_)) =>
                                 {
                                     self.transport_layer
                                         .inner

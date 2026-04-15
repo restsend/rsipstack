@@ -964,15 +964,14 @@ impl Transaction {
                     if matches!(
                         self.state,
                         TransactionState::Proceeding | TransactionState::Trying
-                    )
-                        && self.last_ack.is_none() {
-                            if let Some(ref resp) = self.last_response {
-                                if let Ok(ack) = self.endpoint_inner.make_ack(&self.original, resp)
-                                {
-                                    self.last_ack.replace(ack);
-                                }
+                    ) && self.last_ack.is_none()
+                    {
+                        if let Some(ref resp) = self.last_response {
+                            if let Ok(ack) = self.endpoint_inner.make_ack(&self.original, resp) {
+                                self.last_ack.replace(ack);
                             }
                         }
+                    }
                     self.last_ack.take().map(SipMessage::Request)
                 }
                 TransactionType::ServerNonInvite => {

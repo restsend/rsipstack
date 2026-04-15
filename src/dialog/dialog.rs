@@ -833,8 +833,9 @@ impl DialogInner {
             }
         }
 
-        if let Some(c) = self.local_contact
-            .as_ref() { resp_headers.push(Contact::from(c.clone()).into()) }
+        if let Some(c) = self.local_contact.as_ref() {
+            resp_headers.push(Contact::from(c.clone()).into())
+        }
 
         if let Some(headers) = headers {
             for header in headers {
