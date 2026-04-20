@@ -173,6 +173,12 @@ untyped_header!(Privacy, "Privacy", Header::Privacy);
 untyped_header!(Path, "Path", Header::Path);
 untyped_header!(Identity, "Identity", Header::Identity);
 
+impl std::convert::From<crate::sip::Uri> for ReferTo {
+    fn from(uri: crate::sip::Uri) -> Self {
+        Self(format!("<{}>", uri))
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
 pub struct CallId(pub String);
 impl CallId {

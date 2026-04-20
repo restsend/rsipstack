@@ -1429,7 +1429,7 @@ impl Dialog {
 
     pub async fn refer(
         &self,
-        refer_to: crate::sip::Uri,
+        refer_to: impl Into<crate::sip::ReferTo>,
         headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
     ) -> Result<Option<crate::sip::Response>> {

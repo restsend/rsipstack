@@ -58,14 +58,12 @@ impl ClientSubscriptionDialog {
 
     pub async fn refer(
         &self,
-        refer_to: crate::sip::Uri,
+        refer_to: impl Into<crate::sip::ReferTo>,
         headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
     ) -> Result<Option<crate::sip::Response>> {
         let mut headers = headers.unwrap_or_default();
-        headers.push(crate::sip::Header::ReferTo(
-            format!("<{}>", refer_to).into(),
-        ));
+        headers.push(crate::sip::Header::ReferTo(refer_to.into()));
         self.request(crate::sip::Method::Refer, Some(headers), body)
             .await
     }
@@ -193,14 +191,12 @@ impl ServerSubscriptionDialog {
 
     pub async fn refer(
         &self,
-        refer_to: crate::sip::Uri,
+        refer_to: impl Into<crate::sip::ReferTo>,
         headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
     ) -> Result<Option<crate::sip::Response>> {
         let mut headers = headers.unwrap_or_default();
-        headers.push(crate::sip::Header::ReferTo(
-            format!("<{}>", refer_to).into(),
-        ));
+        headers.push(crate::sip::Header::ReferTo(refer_to.into()));
         self.request(crate::sip::Method::Refer, Some(headers), body)
             .await
     }
