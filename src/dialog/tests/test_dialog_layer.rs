@@ -3,13 +3,15 @@
 //! This module contains tests for dialog management and lifecycle
 
 use crate::dialog::{dialog_layer::DialogLayer, DialogId};
-use crate::sip::{headers::*, Request};
+use crate::sip::{headers::*, prelude::HeadersExt, HostWithPort, Param, Transport, Request};
 use crate::transaction::{
     endpoint::EndpointBuilder,
     key::{TransactionKey, TransactionRole},
     transaction::Transaction,
 };
-use crate::transport::{udp::UdpConnection, TransportLayer};
+use crate::transport::{
+    tcp_listener::TcpListenerConnection, udp::UdpConnection, SipAddr, TransportLayer,
+};
 use tokio::sync::mpsc::unbounded_channel;
 use tokio_util::sync::CancellationToken;
 
@@ -397,6 +399,227 @@ async fn test_dialog_error_cases() -> crate::Result<()> {
     );
 
     assert!(result.is_err());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_server_invite_dialog_with_tcp_transport() -> crate::Result<()> {
+    let endpoint = create_test_endpoint().await?;
+    let dialog_layer = DialogLayer::new(endpoint.inner.clone());
+
+    // Create a TCP listener connection (without binding a socket)
+    let tcp_addr = SipAddr {
+        r#type: Some(Transport::Tcp),
+        addr: HostWithPort {
+            host: crate::sip::Host::IpAddr(std::net::IpAddr::V4(
+                std::net::Ipv4Addr::new(127, 0, 0, 1),
+            )),
+            port: Some(5060.into()),
+        },
+    };
+    let tcp_listener = TcpListenerConnection::new(tcp_addr.clone(), None).await?;
+    let conn: crate::transport::SipConnection = tcp_listener.into();
+
+    // Create INVITE request
+    let invite_req = create_invite_request("alice-tcp-tag", "", "call-id-tcp", "z9hG4bKtcp");
+    let key = TransactionKey::from_request(&invite_req, TransactionRole::Server)?;
+    let tx = Transaction::new_server(
+        key,
+        invite_req.clone(),
+        endpoint.inner.clone(),
+        Some(conn),
+    );
+
+    let (state_sender, _state_receiver) = unbounded_channel();
+
+    let dialog = dialog_layer.get_or_create_server_invite(
+        &tx,
+        state_sender,
+        None,
+        Some(crate::sip::Uri::try_from("sip:bob@bob.example.com:5060")?),
+    )?;
+
+    // Dialog should be created
+    assert_eq!(dialog_layer.len(), 1);
+
+    // The remote_uri should have a Transport::Tcp param added
+    let remote_uri = dialog.inner.remote_uri.lock();
+    let has_tcp_transport = remote_uri
+        .params
+        .iter()
+        .any(|p| matches!(p, Param::Transport(Transport::Tcp)));
+    assert!(
+        has_tcp_transport,
+        "expected Transport::Tcp param in remote_uri, got params: {:?}",
+        remote_uri.params
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_make_invite_request_with_tcp_transport() -> crate::Result<()> {
+    let token = CancellationToken::new();
+    let tl = TransportLayer::new(token.child_token());
+
+    // Add a TCP listener address to the transport layer
+    let tcp_addr = SipAddr {
+        r#type: Some(Transport::Tcp),
+        addr: HostWithPort {
+            host: crate::sip::Host::IpAddr(std::net::IpAddr::V4(
+                std::net::Ipv4Addr::new(192, 168, 1, 10),
+            )),
+            port: Some(5060.into()),
+        },
+    };
+    let tcp_listener = TcpListenerConnection::new(tcp_addr.clone(), None).await?;
+    tl.add_transport(crate::transport::SipConnection::TcpListener(tcp_listener));
+
+    let endpoint = EndpointBuilder::new()
+        .with_user_agent("rsipstack-test")
+        .with_transport_layer(tl)
+        .build();
+    let dialog_layer = DialogLayer::new(endpoint.inner.clone());
+
+    let destination = SipAddr {
+        r#type: Some(Transport::Tcp),
+        addr: HostWithPort {
+            host: crate::sip::Host::IpAddr(std::net::IpAddr::V4(
+                std::net::Ipv4Addr::new(10, 0, 0, 1),
+            )),
+            port: Some(5060.into()),
+        },
+    };
+
+    let opt = crate::dialog::invitation::InviteOption {
+        caller: crate::sip::Uri::try_from("sip:alice@example.com")?,
+        callee: crate::sip::Uri::try_from("sip:bob@example.com")?,
+        contact: crate::sip::Uri::try_from("sip:alice@192.168.1.10:5060")?,
+        destination: Some(destination),
+        ..Default::default()
+    };
+
+    let request = dialog_layer.make_invite_request(&opt)?;
+
+    // Verify Contact header has the transport layer's TCP address and transport param
+    let contact = request.contact_header()?.typed()?;
+    assert_eq!(
+        contact.uri.host_with_port,
+        tcp_addr.addr,
+        "Contact URI should use the transport layer's TCP address"
+    );
+    assert!(
+        contact
+            .uri
+            .params
+            .iter()
+            .any(|p| matches!(p, Param::Transport(Transport::Tcp))),
+        "Contact should have Transport::Tcp param, got: {:?}",
+        contact.uri.params
+    );
+    assert_eq!(
+        contact.uri.scheme,
+        Some(crate::sip::Scheme::Sip),
+        "TCP contact should have sip scheme"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_make_invite_request_without_transport_uses_contact_as_is() -> crate::Result<()> {
+    let token = CancellationToken::new();
+    let tl = TransportLayer::new(token.child_token());
+
+    // Add a UDP address so get_via has an address to use
+    let udp_conn = UdpConnection::create_connection("127.0.0.1:0".parse()?, None, None).await?;
+    tl.add_transport(crate::transport::SipConnection::Udp(udp_conn));
+
+    let endpoint = EndpointBuilder::new()
+        .with_user_agent("rsipstack-test")
+        .with_transport_layer(tl)
+        .build();
+    let dialog_layer = DialogLayer::new(endpoint.inner.clone());
+
+    let opt = crate::dialog::invitation::InviteOption {
+        caller: crate::sip::Uri::try_from("sip:alice@example.com")?,
+        callee: crate::sip::Uri::try_from("sip:bob@example.com")?,
+        contact: crate::sip::Uri::try_from("sip:alice@192.168.1.10:5060")?,
+        ..Default::default()
+    };
+
+    let request = dialog_layer.make_invite_request(&opt)?;
+    let contact = request.contact_header()?.typed()?;
+
+    // When no destination transport, contact should remain unchanged
+    assert_eq!(
+        contact.uri, opt.contact,
+        "Contact should remain unchanged when no transport destination"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_make_invite_request_with_tls_transport_uses_sips_scheme() -> crate::Result<()> {
+    let token = CancellationToken::new();
+    let tl = TransportLayer::new(token.child_token());
+
+    // Add a TLS listener address
+    let tls_addr = SipAddr {
+        r#type: Some(Transport::Tls),
+        addr: HostWithPort {
+            host: crate::sip::Host::IpAddr(std::net::IpAddr::V4(
+                std::net::Ipv4Addr::new(192, 168, 1, 10),
+            )),
+            port: Some(5061.into()),
+        },
+    };
+    let tcp_listener = TcpListenerConnection::new(tls_addr.clone(), None).await?;
+    tl.add_transport(crate::transport::SipConnection::TcpListener(tcp_listener));
+
+    let endpoint = EndpointBuilder::new()
+        .with_user_agent("rsipstack-test")
+        .with_transport_layer(tl)
+        .build();
+    let dialog_layer = DialogLayer::new(endpoint.inner.clone());
+
+    let destination = SipAddr {
+        r#type: Some(Transport::Tls),
+        addr: HostWithPort {
+            host: crate::sip::Host::IpAddr(std::net::IpAddr::V4(
+                std::net::Ipv4Addr::new(10, 0, 0, 1),
+            )),
+            port: Some(5061.into()),
+        },
+    };
+
+    let opt = crate::dialog::invitation::InviteOption {
+        caller: crate::sip::Uri::try_from("sip:alice@example.com")?,
+        callee: crate::sip::Uri::try_from("sip:bob@example.com")?,
+        contact: crate::sip::Uri::try_from("sip:alice@192.168.1.10:5061")?,
+        destination: Some(destination),
+        ..Default::default()
+    };
+
+    let request = dialog_layer.make_invite_request(&opt)?;
+    let contact = request.contact_header()?.typed()?;
+
+    // TLS should use sips scheme
+    assert_eq!(
+        contact.uri.scheme,
+        Some(crate::sip::Scheme::Sips),
+        "TLS contact should have sips scheme"
+    );
+    assert!(
+        contact
+            .uri
+            .params
+            .iter()
+            .any(|p| matches!(p, Param::Transport(Transport::Tls))),
+        "Contact should have Transport::Tls param"
+    );
 
     Ok(())
 }

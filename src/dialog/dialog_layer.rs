@@ -189,6 +189,16 @@ impl DialogLayer {
 
         *dlg_inner.remote_contact.lock() = tx.original.contact_header().ok().cloned();
 
+        if let Some(conn) = &tx.connection {
+            let transport = conn.transport();
+            if !matches!(transport, crate::sip::Transport::Udp) {
+                let mut remote_uri = dlg_inner.remote_uri.lock();
+                if !remote_uri.params.iter().any(|p| matches!(p, crate::sip::Param::Transport(_))) {
+                    remote_uri.params.push(crate::sip::Param::Transport(transport));
+                }
+            }
+        }
+
         let dialog = ServerInviteDialog {
             inner: Arc::new(dlg_inner),
         };

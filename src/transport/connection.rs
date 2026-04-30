@@ -163,6 +163,20 @@ pub enum SipConnection {
 }
 
 impl SipConnection {
+    pub fn transport(&self) -> Transport {
+        match self {
+            SipConnection::Udp(_) => Transport::Udp,
+            SipConnection::Tcp(_) | SipConnection::TcpListener(_) => Transport::Tcp,
+            #[cfg(feature = "rustls")]
+            SipConnection::Tls(_) | SipConnection::TlsListener(_) => Transport::Tls,
+            #[cfg(feature = "websocket")]
+            SipConnection::WebSocket(_) => Transport::Ws,
+            #[cfg(feature = "websocket")]
+            SipConnection::WebSocketListener(_) => Transport::Wss,
+            SipConnection::Channel(_) => Transport::Udp,
+        }
+    }
+
     pub fn is_reliable(&self) -> bool {
         !matches!(self, SipConnection::Udp(_))
     }
@@ -447,5 +461,78 @@ impl From<WebSocketConnection> for SipConnection {
 impl From<WebSocketListenerConnection> for SipConnection {
     fn from(connection: WebSocketListenerConnection) -> Self {
         SipConnection::WebSocketListener(connection)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transport::channel::ChannelConnection;
+    use crate::transport::tcp_listener::TcpListenerConnection;
+    use crate::sip::HostWithPort;
+    use std::net::Ipv4Addr;
+
+    fn test_sip_addr() -> SipAddr {
+        SipAddr {
+            r#type: None,
+            addr: HostWithPort {
+                host: crate::sip::Host::IpAddr(std::net::IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))),
+                port: Some(5060.into()),
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn test_transport_channel_returns_udp() -> crate::Result<()> {
+        let (_incoming_tx, incoming_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (outgoing_tx, _outgoing_rx) = tokio::sync::mpsc::unbounded_channel();
+        let conn = ChannelConnection::create_connection(incoming_rx, outgoing_tx, test_sip_addr(), None).await?;
+        let sip_conn = SipConnection::Channel(conn);
+        assert_eq!(sip_conn.transport(), Transport::Udp);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_transport_udp_returns_udp() -> crate::Result<()> {
+        let udp = UdpConnection::create_connection("127.0.0.1:0".parse()?, None, None).await?;
+        let sip_conn = SipConnection::Udp(udp);
+        assert_eq!(sip_conn.transport(), Transport::Udp);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_transport_tcp_listener_returns_tcp() -> crate::Result<()> {
+        let addr = SipAddr {
+            r#type: Some(Transport::Tcp),
+            addr: HostWithPort {
+                host: crate::sip::Host::IpAddr(std::net::IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))),
+                port: Some(5060.into()),
+            },
+        };
+        let listener = TcpListenerConnection::new(addr, None).await?;
+        let sip_conn = SipConnection::TcpListener(listener);
+        assert_eq!(sip_conn.transport(), Transport::Tcp);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_transport_channel_send() -> crate::Result<()> {
+        let (_incoming_tx, incoming_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::unbounded_channel();
+        let conn = ChannelConnection::create_connection(incoming_rx, outgoing_tx, test_sip_addr(), None).await?;
+        let sip_conn = SipConnection::Channel(conn);
+
+        let req = crate::sip::Request {
+            method: crate::sip::Method::Invite,
+            uri: crate::sip::Uri::try_from("sip:test@example.com")?,
+            headers: vec![].into(),
+            version: crate::sip::Version::V2,
+            body: vec![],
+        };
+        sip_conn.send(SipMessage::Request(req), None).await?;
+        let received = outgoing_rx.recv().await;
+        assert!(received.is_some());
+
+        Ok(())
     }
 }

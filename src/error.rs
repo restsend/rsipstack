@@ -38,3 +38,36 @@ impl<T> From<tokio::sync::mpsc::error::SendError<T>> for Error {
         Error::Error(e.to_string())
     }
 }
+
+impl<T> From<tokio::sync::mpsc::error::TrySendError<T>> for Error {
+    fn from(e: tokio::sync::mpsc::error::TrySendError<T>) -> Self {
+        Error::Error(e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_try_send_error_full_conversion() {
+        let (tx, _rx) = tokio::sync::mpsc::channel::<i32>(1);
+        let _ = tx.try_send(1).unwrap();
+        let err = tx.try_send(2).unwrap_err();
+        let error: Error = err.into();
+        assert!(
+            error.to_string().contains("capacity"),
+            "expected 'capacity' in error, got: {}",
+            error
+        );
+    }
+
+    #[test]
+    fn test_try_send_error_closed_conversion() {
+        let (tx, rx) = tokio::sync::mpsc::channel::<i32>(1);
+        drop(rx);
+        let err = tx.try_send(1).unwrap_err();
+        let error: Error = err.into();
+        assert!(error.to_string().contains("closed"), "expected 'closed' in error, got: {}", error);
+    }
+}

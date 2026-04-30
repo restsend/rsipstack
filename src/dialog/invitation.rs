@@ -6,6 +6,7 @@ use super::{
 };
 use crate::sip::{
     prelude::{HeadersExt, ToTypedHeader},
+    uri::ParamsExt,
     Request, Response, SipMessage, StatusCodeKind,
 };
 use crate::{
@@ -295,7 +296,23 @@ impl DialogLayer {
             .as_ref()
             .map(|id| crate::sip::headers::CallId::from(id.clone()));
 
-        let via = self.endpoint.get_via(None, None)?;
+        let target_transport = opt
+            .destination
+            .as_ref()
+            .and_then(|d| d.r#type)
+            .or_else(|| opt.callee.transport().cloned())
+            .filter(|t| *t != crate::sip::Transport::Udp);
+
+        let transport_addr = target_transport.and_then(|transport| {
+            self.endpoint
+                .transport_layer
+                .get_addrs()
+                .iter()
+                .find(|a| a.r#type == Some(transport))
+                .cloned()
+        });
+
+        let via = self.endpoint.get_via(transport_addr.clone(), None)?;
         let mut request = self.endpoint.make_request(
             crate::sip::Method::Invite,
             recipient,
@@ -306,10 +323,33 @@ impl DialogLayer {
             call_id,
         );
 
-        let contact = crate::sip::typed::Contact {
-            display_name: None,
-            uri: opt.contact.clone(),
-            params: vec![],
+        let contact = if let Some(ref addr) = transport_addr {
+            let mut uri = opt.contact.clone();
+            uri.host_with_port = addr.addr.clone();
+            if !uri
+                .params
+                .iter()
+                .any(|p| matches!(p, crate::sip::Param::Transport(_)))
+            {
+                uri.params
+                    .push(crate::sip::Param::Transport(addr.r#type.unwrap_or(
+                        crate::sip::Transport::Tcp,
+                    )));
+            }
+            if addr.r#type == Some(crate::sip::Transport::Tls) {
+                uri.scheme = Some(crate::sip::Scheme::Sips);
+            }
+            crate::sip::typed::Contact {
+                display_name: None,
+                uri,
+                params: vec![],
+            }
+        } else {
+            crate::sip::typed::Contact {
+                display_name: None,
+                uri: opt.contact.clone(),
+                params: vec![],
+            }
         };
 
         request
@@ -587,6 +627,13 @@ impl DialogLayer {
         }
 
         let id = DialogId::try_from(&tx)?;
+
+        let local_contact = request
+            .contact_header()
+            .ok()
+            .and_then(|c| c.typed().ok().map(|ct| ct.uri))
+            .or(Some(opt.contact));
+
         let dlg_inner = DialogInner::new(
             TransactionRole::Client,
             id.clone(),
@@ -594,7 +641,7 @@ impl DialogLayer {
             self.endpoint.clone(),
             state_sender,
             opt.credential,
-            Some(opt.contact),
+            local_contact,
             tx.tu_sender.clone(),
         )?;
 
