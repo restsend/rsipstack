@@ -21,6 +21,7 @@ pub struct UdpInner {
 #[derive(Clone)]
 pub struct UdpConnection {
     pub external: Option<SipAddr>,
+    remote: Option<SipAddr>,
     cancel_token: Option<CancellationToken>,
     inner: Arc<UdpInner>,
 }
@@ -36,6 +37,7 @@ impl UdpConnection {
                 r#type: Some(crate::sip::transport::Transport::Udp),
                 addr: SipConnection::resolve_bind_address(addr).into(),
             }),
+            remote: None,
             inner: Arc::new(inner),
             cancel_token,
         }
@@ -72,6 +74,7 @@ impl UdpConnection {
                 r#type: Some(crate::sip::transport::Transport::Udp),
                 addr: addr.into(),
             }),
+            remote: None,
             inner: Arc::new(UdpInner { addr, conn }),
             cancel_token,
         };
@@ -181,13 +184,20 @@ impl UdpConnection {
 
             debug!(len, src=%addr, dest=%self.get_addr(), raw_message=undecoded, "udp received");
 
+            let from = SipAddr {
+                r#type: Some(crate::sip::transport::Transport::Udp),
+                addr: addr.into(),
+            };
+
             sender.send(TransportEvent::Incoming(
                 msg,
-                SipConnection::Udp(self.clone()),
-                SipAddr {
-                    r#type: Some(crate::sip::transport::Transport::Udp),
-                    addr: addr.into(),
-                },
+                SipConnection::Udp(Self {
+                    external: self.external.clone(),
+                    remote: Some(from.clone()),
+                    cancel_token: self.cancel_token.clone(),
+                    inner: self.inner.clone(),
+                }),
+                from,
             ))?;
         }
     }
@@ -244,6 +254,11 @@ impl UdpConnection {
             &self.inner.addr
         }
     }
+
+    pub fn get_remote_addr(&self) -> Option<&SipAddr> {
+        self.remote.as_ref()
+    }
+
     pub fn cancel_token(&self) -> Option<CancellationToken> {
         self.cancel_token.clone()
     }

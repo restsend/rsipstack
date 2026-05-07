@@ -96,6 +96,10 @@ impl TcpConnection {
 #[async_trait::async_trait]
 impl StreamConnection for TcpConnection {
     fn get_addr(&self) -> &SipAddr {
+        &self.inner.local_addr
+    }
+
+    fn get_remote_addr(&self) -> &SipAddr {
         &self.inner.remote_addr
     }
 

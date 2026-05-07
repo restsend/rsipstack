@@ -209,6 +209,24 @@ impl SipConnection {
             SipConnection::WebSocketListener(transport) => transport.get_addr(),
         }
     }
+
+    pub fn get_remote_addr(&self) -> Option<&SipAddr> {
+        match self {
+            SipConnection::Channel(transport) => transport.get_remote_addr(),
+            SipConnection::Udp(transport) => transport.get_remote_addr(),
+            SipConnection::Tcp(transport) => Some(transport.get_remote_addr()),
+            SipConnection::TcpListener(_) => None,
+            #[cfg(feature = "rustls")]
+            SipConnection::Tls(transport) => Some(transport.get_remote_addr()),
+            #[cfg(feature = "rustls")]
+            SipConnection::TlsListener(_) => None,
+            #[cfg(feature = "websocket")]
+            SipConnection::WebSocket(transport) => Some(transport.get_remote_addr()),
+            #[cfg(feature = "websocket")]
+            SipConnection::WebSocketListener(_) => None,
+        }
+    }
+
     pub async fn send(&self, msg: SipMessage, destination: Option<&SipAddr>) -> Result<()> {
         match self {
             SipConnection::Channel(transport) => transport.send(msg).await,

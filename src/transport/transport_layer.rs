@@ -188,19 +188,9 @@ impl TransportLayer {
             .iter()
             .map(|t| t.get_addr().to_owned())
             .collect();
-        // Also include local addresses from TCP/TLS client connections.
-        // For connection-oriented transports, get_addr() returns the remote address
-        // (used for lookup), but Via/Contact headers need the local address.
         let connections = self.inner.connections.read();
         for conn in connections.values() {
-            match conn {
-                SipConnection::Tcp(tcp) => {
-                    addrs.push(tcp.inner.local_addr.clone());
-                }
-                // TLS inner is private — skip for now
-                SipConnection::Tls(_) => {}
-                _ => {}
-            }
+            addrs.push(conn.get_addr().clone());
         }
         addrs
     }
@@ -259,10 +249,14 @@ impl TransportLayerInner {
     }
 
     pub(super) fn add_connection(&self, connection: SipConnection) {
-        let mut connections = self.connections.write();
-        connections.insert(connection.get_addr().to_owned(), connection.clone());
-        drop(connections);
-        self.serve_connection(connection);
+        if let Some(remote_addr) = connection.get_remote_addr().cloned() {
+            let mut connections = self.connections.write();
+            connections.insert(remote_addr, connection.clone());
+            drop(connections);
+            self.serve_connection(connection);
+        } else {
+            warn!(addr = %connection.get_addr(), "connection has no remote address");
+        }
     }
 
     pub(super) fn del_connection(&self, addr: &SipAddr) {
@@ -392,14 +386,18 @@ impl TransportLayerInner {
     pub fn serve_connection(&self, transport: SipConnection) {
         let sub_token = self.cancel_token.child_token();
         let sender_clone = self.transport_tx.clone();
-        info!(addr=%transport.get_addr(), "serve_connection: starting serve_loop");
+        let remote_addr = transport
+            .get_remote_addr()
+            .map(|addr| addr.to_string())
+            .unwrap_or_else(|| "-".to_string());
+        info!(addr=%transport.get_addr(), remote=%remote_addr, "serve_connection: starting serve_loop");
         tokio::spawn(async move {
             match sender_clone.send(TransportEvent::New(transport.clone())) {
                 Ok(()) => {
-                    info!(addr=%transport.get_addr(), "serve_connection: New event sent");
+                    info!(addr=%transport.get_addr(), remote=%remote_addr, "serve_connection: New event sent");
                 }
                 Err(e) => {
-                    warn!(addr=%transport.get_addr(), error = ?e, "Error sending new connection event");
+                    warn!(addr=%transport.get_addr(), remote=%remote_addr, error = ?e, "Error sending new connection event");
                     return;
                 }
             }
@@ -409,11 +407,11 @@ impl TransportLayerInner {
                     transport.serve_loop(sender_clone.clone()).await
                 } => {
                     if let Err(e) = result {
-                        warn!(addr=%transport.get_addr(), error = %e, "serve_loop error");
+                        warn!(addr=%transport.get_addr(), remote=%remote_addr, error = %e, "serve_loop error");
                     }
                 }
             }
-            info!(addr=%transport.get_addr(), "transport serve_loop exited");
+            info!(addr=%transport.get_addr(), remote=%remote_addr, "transport serve_loop exited");
             transport.close().await.ok();
             sender_clone.send(TransportEvent::Closed(transport)).ok();
         });

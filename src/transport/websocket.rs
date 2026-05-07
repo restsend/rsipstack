@@ -93,6 +93,7 @@ impl WebSocketListenerConnection {
         } else {
             crate::sip::transport::Transport::Ws
         };
+        let listener_local_addr = self.get_addr().clone();
 
         debug!(local = %self.inner.local_addr, "Starting WebSocket listener");
         tokio::spawn(async move {
@@ -116,6 +117,7 @@ impl WebSocketListenerConnection {
                     addr: remote_addr.into(),
                 };
                 let transport_layer_inner_ref = transport_layer_inner.clone();
+                let local_addr = listener_local_addr.clone();
                 tokio::spawn(async move {
                     // Wrap the TCP stream in MaybeTlsStream
                     let maybe_tls_stream = MaybeTlsStream::Plain(stream);
@@ -152,6 +154,7 @@ impl WebSocketListenerConnection {
                     let (ws_sink, ws_read) = ws_stream.split();
                     let connection = WebSocketConnection {
                         inner: Arc::new(WebSocketInner {
+                            local_addr,
                             remote_addr,
                             ws_sink: Mutex::new(ws_sink),
                             ws_read: Mutex::new(Some(ws_read)),
@@ -195,6 +198,7 @@ impl fmt::Debug for WebSocketListenerConnection {
 }
 
 pub struct WebSocketInner {
+    pub local_addr: SipAddr,
     pub remote_addr: SipAddr,
     pub ws_sink: Mutex<WsSink>,
     pub ws_read: Mutex<Option<WsRead>>,
@@ -230,10 +234,15 @@ impl WebSocketConnection {
             .insert("sec-websocket-protocol", "sip".parse().unwrap());
 
         let (ws_stream, _) = connect_async(request).await?;
+        let local_addr = SipAddr {
+            r#type: Some(remote.r#type.unwrap_or(crate::sip::transport::Transport::Ws)),
+            addr: ws_stream.get_ref().get_ref().local_addr()?.into(),
+        };
         let (ws_sink, ws_stream) = ws_stream.split();
 
         let connection = WebSocketConnection {
             inner: Arc::new(WebSocketInner {
+                local_addr,
                 remote_addr: remote.clone(),
                 ws_sink: Mutex::new(ws_sink),
                 ws_read: Mutex::new(Some(ws_stream)),
@@ -257,6 +266,10 @@ impl WebSocketConnection {
 #[async_trait::async_trait]
 impl StreamConnection for WebSocketConnection {
     fn get_addr(&self) -> &SipAddr {
+        &self.inner.local_addr
+    }
+
+    fn get_remote_addr(&self) -> &SipAddr {
         &self.inner.remote_addr
     }
 
@@ -372,7 +385,11 @@ impl fmt::Display for WebSocketConnection {
             Some(crate::sip::transport::Transport::Wss) => "WSS",
             _ => "WS",
         };
-        write!(f, "{} {}", transport, self.inner.remote_addr)
+        write!(
+            f,
+            "{} {} -> {}",
+            transport, self.inner.local_addr, self.inner.remote_addr
+        )
     }
 }
 

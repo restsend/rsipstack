@@ -50,10 +50,7 @@ impl TcpListenerConnection {
         socket.bind(&local.into())?;
         socket.listen(128)?;
         let listener = TcpListener::from_std(socket.into())?;
-        let listener_local_addr = SipAddr {
-            r#type: Some(crate::sip::transport::Transport::Tcp),
-            addr: listener.local_addr()?.into(),
-        };
+        let listener_local_addr = self.get_addr().clone();
         tokio::spawn(async move {
             loop {
                 let (stream, remote_addr) = match listener.accept().await {

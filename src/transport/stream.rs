@@ -253,6 +253,7 @@ where
 #[async_trait::async_trait]
 pub trait StreamConnection: Send + Sync + 'static {
     fn get_addr(&self) -> &SipAddr;
+    fn get_remote_addr(&self) -> &SipAddr;
     async fn send_message(&self, msg: SipMessage) -> Result<()>;
     async fn send_raw(&self, data: &[u8]) -> Result<()>;
     async fn serve_loop(&self, sender: TransportSender) -> Result<()>;
