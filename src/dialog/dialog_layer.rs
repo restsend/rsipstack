@@ -193,8 +193,14 @@ impl DialogLayer {
             let transport = conn.transport();
             if !matches!(transport, crate::sip::Transport::Udp) {
                 let mut remote_uri = dlg_inner.remote_uri.lock();
-                if !remote_uri.params.iter().any(|p| matches!(p, crate::sip::Param::Transport(_))) {
-                    remote_uri.params.push(crate::sip::Param::Transport(transport));
+                if !remote_uri
+                    .params
+                    .iter()
+                    .any(|p| matches!(p, crate::sip::Param::Transport(_)))
+                {
+                    remote_uri
+                        .params
+                        .push(crate::sip::Param::Transport(transport));
                 }
             }
         }

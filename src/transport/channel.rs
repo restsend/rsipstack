@@ -33,13 +33,8 @@ impl ChannelConnection {
         addr: SipAddr,
         cancel_token: Option<CancellationToken>,
     ) -> Result<Self> {
-        Self::create_connection_inner(
-            incoming,
-            Outgoing::Unbounded(outgoing),
-            addr,
-            cancel_token,
-        )
-        .await
+        Self::create_connection_inner(incoming, Outgoing::Unbounded(outgoing), addr, cancel_token)
+            .await
     }
 
     pub async fn create_connection_bounded(
@@ -48,13 +43,8 @@ impl ChannelConnection {
         addr: SipAddr,
         cancel_token: Option<CancellationToken>,
     ) -> Result<Self> {
-        Self::create_connection_inner(
-            incoming,
-            Outgoing::Bounded(outgoing),
-            addr,
-            cancel_token,
-        )
-        .await
+        Self::create_connection_inner(incoming, Outgoing::Bounded(outgoing), addr, cancel_token)
+            .await
     }
 
     async fn create_connection_inner(
@@ -143,7 +133,9 @@ mod tests {
         SipAddr {
             r#type: None,
             addr: HostWithPort {
-                host: crate::sip::Host::IpAddr(std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1))),
+                host: crate::sip::Host::IpAddr(std::net::IpAddr::V4(std::net::Ipv4Addr::new(
+                    127, 0, 0, 1,
+                ))),
                 port: Some(5060.into()),
             },
         }
@@ -163,9 +155,14 @@ mod tests {
     async fn test_create_connection_bounded_send_receive() {
         let (_incoming_tx, incoming_rx) = mpsc::unbounded_channel();
         let (outgoing_tx, mut outgoing_rx) = mpsc::channel(16);
-        let conn = ChannelConnection::create_connection_bounded(incoming_rx, outgoing_tx, test_sip_addr(), None)
-            .await
-            .expect("create_connection_bounded");
+        let conn = ChannelConnection::create_connection_bounded(
+            incoming_rx,
+            outgoing_tx,
+            test_sip_addr(),
+            None,
+        )
+        .await
+        .expect("create_connection_bounded");
 
         let msg = test_message();
         conn.send(msg).await.expect("send via bounded channel");
@@ -178,9 +175,14 @@ mod tests {
     async fn test_try_send_on_bounded() {
         let (_incoming_tx, incoming_rx) = mpsc::unbounded_channel();
         let (outgoing_tx, mut outgoing_rx) = mpsc::channel(2);
-        let conn = ChannelConnection::create_connection_bounded(incoming_rx, outgoing_tx, test_sip_addr(), None)
-            .await
-            .expect("create_connection_bounded");
+        let conn = ChannelConnection::create_connection_bounded(
+            incoming_rx,
+            outgoing_tx,
+            test_sip_addr(),
+            None,
+        )
+        .await
+        .expect("create_connection_bounded");
 
         let msg = test_message();
         conn.try_send(msg).expect("try_send on bounded");
@@ -193,9 +195,10 @@ mod tests {
     async fn test_try_send_on_unbounded() {
         let (_incoming_tx, incoming_rx) = mpsc::unbounded_channel();
         let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
-        let conn = ChannelConnection::create_connection(incoming_rx, outgoing_tx, test_sip_addr(), None)
-            .await
-            .expect("create_connection");
+        let conn =
+            ChannelConnection::create_connection(incoming_rx, outgoing_tx, test_sip_addr(), None)
+                .await
+                .expect("create_connection");
 
         let msg = test_message();
         conn.try_send(msg).expect("try_send on unbounded");
@@ -208,22 +211,35 @@ mod tests {
     async fn test_try_send_bounded_full() {
         let (_incoming_tx, incoming_rx) = mpsc::unbounded_channel();
         let (outgoing_tx, _outgoing_rx) = mpsc::channel(1);
-        let conn = ChannelConnection::create_connection_bounded(incoming_rx, outgoing_tx, test_sip_addr(), None)
-            .await
-            .expect("create_connection_bounded");
+        let conn = ChannelConnection::create_connection_bounded(
+            incoming_rx,
+            outgoing_tx,
+            test_sip_addr(),
+            None,
+        )
+        .await
+        .expect("create_connection_bounded");
 
         conn.try_send(test_message()).expect("first send");
         let result = conn.try_send(test_message());
-        assert!(result.is_err(), "try_send on full bounded channel should return error");
+        assert!(
+            result.is_err(),
+            "try_send on full bounded channel should return error"
+        );
     }
 
     #[tokio::test]
     async fn test_bounded_connection_serve_loop() {
         let (incoming_tx, incoming_rx) = mpsc::unbounded_channel::<super::super::TransportEvent>();
         let (outgoing_tx, _outgoing_rx) = mpsc::channel(16);
-        let conn = ChannelConnection::create_connection_bounded(incoming_rx, outgoing_tx, test_sip_addr(), None)
-            .await
-            .expect("create_connection_bounded");
+        let conn = ChannelConnection::create_connection_bounded(
+            incoming_rx,
+            outgoing_tx,
+            test_sip_addr(),
+            None,
+        )
+        .await
+        .expect("create_connection_bounded");
 
         // Serve loop in background, forwarding events
         let (event_tx, _event_rx) = mpsc::unbounded_channel();
@@ -247,9 +263,14 @@ mod tests {
     async fn test_bounded_serve_loop_twice_returns_error() {
         let (incoming_tx, incoming_rx) = mpsc::unbounded_channel::<super::super::TransportEvent>();
         let (outgoing_tx, _outgoing_rx) = mpsc::channel(16);
-        let conn = ChannelConnection::create_connection_bounded(incoming_rx, outgoing_tx, test_sip_addr(), None)
-            .await
-            .expect("create_connection_bounded");
+        let conn = ChannelConnection::create_connection_bounded(
+            incoming_rx,
+            outgoing_tx,
+            test_sip_addr(),
+            None,
+        )
+        .await
+        .expect("create_connection_bounded");
 
         // Drop the sender so the incoming channel is closed
         drop(incoming_tx);

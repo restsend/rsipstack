@@ -331,10 +331,9 @@ impl DialogLayer {
                 .iter()
                 .any(|p| matches!(p, crate::sip::Param::Transport(_)))
             {
-                uri.params
-                    .push(crate::sip::Param::Transport(addr.r#type.unwrap_or(
-                        crate::sip::Transport::Tcp,
-                    )));
+                uri.params.push(crate::sip::Param::Transport(
+                    addr.r#type.unwrap_or(crate::sip::Transport::Tcp),
+                ));
             }
             if addr.r#type == Some(crate::sip::Transport::Tls) {
                 uri.scheme = Some(crate::sip::Scheme::Sips);

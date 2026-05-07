@@ -68,6 +68,10 @@ mod tests {
         drop(rx);
         let err = tx.try_send(1).unwrap_err();
         let error: Error = err.into();
-        assert!(error.to_string().contains("closed"), "expected 'closed' in error, got: {}", error);
+        assert!(
+            error.to_string().contains("closed"),
+            "expected 'closed' in error, got: {}",
+            error
+        );
     }
 }

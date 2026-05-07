@@ -467,9 +467,9 @@ impl From<WebSocketListenerConnection> for SipConnection {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sip::HostWithPort;
     use crate::transport::channel::ChannelConnection;
     use crate::transport::tcp_listener::TcpListenerConnection;
-    use crate::sip::HostWithPort;
     use std::net::Ipv4Addr;
 
     fn test_sip_addr() -> SipAddr {
@@ -486,7 +486,9 @@ mod tests {
     async fn test_transport_channel_returns_udp() -> crate::Result<()> {
         let (_incoming_tx, incoming_rx) = tokio::sync::mpsc::unbounded_channel();
         let (outgoing_tx, _outgoing_rx) = tokio::sync::mpsc::unbounded_channel();
-        let conn = ChannelConnection::create_connection(incoming_rx, outgoing_tx, test_sip_addr(), None).await?;
+        let conn =
+            ChannelConnection::create_connection(incoming_rx, outgoing_tx, test_sip_addr(), None)
+                .await?;
         let sip_conn = SipConnection::Channel(conn);
         assert_eq!(sip_conn.transport(), Transport::Udp);
         Ok(())
@@ -519,7 +521,9 @@ mod tests {
     async fn test_transport_channel_send() -> crate::Result<()> {
         let (_incoming_tx, incoming_rx) = tokio::sync::mpsc::unbounded_channel();
         let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::unbounded_channel();
-        let conn = ChannelConnection::create_connection(incoming_rx, outgoing_tx, test_sip_addr(), None).await?;
+        let conn =
+            ChannelConnection::create_connection(incoming_rx, outgoing_tx, test_sip_addr(), None)
+                .await?;
         let sip_conn = SipConnection::Channel(conn);
 
         let req = crate::sip::Request {

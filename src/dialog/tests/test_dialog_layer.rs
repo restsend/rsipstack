@@ -3,7 +3,7 @@
 //! This module contains tests for dialog management and lifecycle
 
 use crate::dialog::{dialog_layer::DialogLayer, DialogId};
-use crate::sip::{headers::*, prelude::HeadersExt, HostWithPort, Param, Transport, Request};
+use crate::sip::{headers::*, prelude::HeadersExt, HostWithPort, Param, Request, Transport};
 use crate::transaction::{
     endpoint::EndpointBuilder,
     key::{TransactionKey, TransactionRole},
@@ -412,9 +412,9 @@ async fn test_server_invite_dialog_with_tcp_transport() -> crate::Result<()> {
     let tcp_addr = SipAddr {
         r#type: Some(Transport::Tcp),
         addr: HostWithPort {
-            host: crate::sip::Host::IpAddr(std::net::IpAddr::V4(
-                std::net::Ipv4Addr::new(127, 0, 0, 1),
-            )),
+            host: crate::sip::Host::IpAddr(std::net::IpAddr::V4(std::net::Ipv4Addr::new(
+                127, 0, 0, 1,
+            ))),
             port: Some(5060.into()),
         },
     };
@@ -424,12 +424,7 @@ async fn test_server_invite_dialog_with_tcp_transport() -> crate::Result<()> {
     // Create INVITE request
     let invite_req = create_invite_request("alice-tcp-tag", "", "call-id-tcp", "z9hG4bKtcp");
     let key = TransactionKey::from_request(&invite_req, TransactionRole::Server)?;
-    let tx = Transaction::new_server(
-        key,
-        invite_req.clone(),
-        endpoint.inner.clone(),
-        Some(conn),
-    );
+    let tx = Transaction::new_server(key, invite_req.clone(), endpoint.inner.clone(), Some(conn));
 
     let (state_sender, _state_receiver) = unbounded_channel();
 
@@ -467,9 +462,9 @@ async fn test_make_invite_request_with_tcp_transport() -> crate::Result<()> {
     let tcp_addr = SipAddr {
         r#type: Some(Transport::Tcp),
         addr: HostWithPort {
-            host: crate::sip::Host::IpAddr(std::net::IpAddr::V4(
-                std::net::Ipv4Addr::new(192, 168, 1, 10),
-            )),
+            host: crate::sip::Host::IpAddr(std::net::IpAddr::V4(std::net::Ipv4Addr::new(
+                192, 168, 1, 10,
+            ))),
             port: Some(5060.into()),
         },
     };
@@ -485,9 +480,9 @@ async fn test_make_invite_request_with_tcp_transport() -> crate::Result<()> {
     let destination = SipAddr {
         r#type: Some(Transport::Tcp),
         addr: HostWithPort {
-            host: crate::sip::Host::IpAddr(std::net::IpAddr::V4(
-                std::net::Ipv4Addr::new(10, 0, 0, 1),
-            )),
+            host: crate::sip::Host::IpAddr(std::net::IpAddr::V4(std::net::Ipv4Addr::new(
+                10, 0, 0, 1,
+            ))),
             port: Some(5060.into()),
         },
     };
@@ -505,8 +500,7 @@ async fn test_make_invite_request_with_tcp_transport() -> crate::Result<()> {
     // Verify Contact header has the transport layer's TCP address and transport param
     let contact = request.contact_header()?.typed()?;
     assert_eq!(
-        contact.uri.host_with_port,
-        tcp_addr.addr,
+        contact.uri.host_with_port, tcp_addr.addr,
         "Contact URI should use the transport layer's TCP address"
     );
     assert!(
@@ -570,9 +564,9 @@ async fn test_make_invite_request_with_tls_transport_uses_sips_scheme() -> crate
     let tls_addr = SipAddr {
         r#type: Some(Transport::Tls),
         addr: HostWithPort {
-            host: crate::sip::Host::IpAddr(std::net::IpAddr::V4(
-                std::net::Ipv4Addr::new(192, 168, 1, 10),
-            )),
+            host: crate::sip::Host::IpAddr(std::net::IpAddr::V4(std::net::Ipv4Addr::new(
+                192, 168, 1, 10,
+            ))),
             port: Some(5061.into()),
         },
     };
@@ -588,9 +582,9 @@ async fn test_make_invite_request_with_tls_transport_uses_sips_scheme() -> crate
     let destination = SipAddr {
         r#type: Some(Transport::Tls),
         addr: HostWithPort {
-            host: crate::sip::Host::IpAddr(std::net::IpAddr::V4(
-                std::net::Ipv4Addr::new(10, 0, 0, 1),
-            )),
+            host: crate::sip::Host::IpAddr(std::net::IpAddr::V4(std::net::Ipv4Addr::new(
+                10, 0, 0, 1,
+            ))),
             port: Some(5061.into()),
         },
     };
