@@ -90,6 +90,10 @@ impl ChannelConnection {
         &self.inner.addr
     }
 
+    pub fn get_remote_addr(&self) -> Option<&SipAddr> {
+        Some(&self.inner.addr)
+    }
+
     pub async fn serve_loop(&self, sender: TransportSender) -> Result<()> {
         let mut incoming = match self.inner.clone().incoming.lock().take() {
             Some(incoming) => incoming,

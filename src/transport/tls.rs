@@ -316,6 +316,7 @@ impl TlsListenerConnection {
         let listener = TcpListener::from_std(socket.into())?;
         let (acceptor, resolver) = Self::create_acceptor(&self.inner.config).await?;
         *self.inner.cert_resolver.lock() = Some(resolver);
+        let listener_local_addr = self.get_addr().clone();
 
         tokio::spawn(async move {
             loop {
@@ -333,6 +334,7 @@ impl TlsListenerConnection {
 
                 let acceptor_clone = acceptor.clone();
                 let transport_layer_inner_ref = transport_layer_inner.clone();
+                let local_addr = listener_local_addr.clone();
 
                 tokio::spawn(async move {
                     // Perform TLS handshake
@@ -352,6 +354,7 @@ impl TlsListenerConnection {
                     // Create TLS connection
                     let tls_connection = match TlsConnection::from_server_stream(
                         tls_stream,
+                        local_addr,
                         remote_sip_addr.clone(),
                         Some(transport_layer_inner_ref.cancel_token.child_token()),
                     )
@@ -600,14 +603,10 @@ impl TlsConnection {
     // Create TLS connection from existing server TLS stream
     pub async fn from_server_stream(
         stream: TlsServerStream,
+        local_addr: SipAddr,
         remote_addr: SipAddr,
         cancel_token: Option<CancellationToken>,
     ) -> Result<Self> {
-        let local_addr = SipAddr {
-            r#type: Some(crate::sip::transport::Transport::Tls),
-            addr: stream.get_ref().0.local_addr()?.into(),
-        };
-
         // Split stream into read and write halves
         let (read_half, write_half) = tokio::io::split(stream);
 
@@ -640,6 +639,13 @@ impl TlsConnection {
 #[async_trait::async_trait]
 impl StreamConnection for TlsConnection {
     fn get_addr(&self) -> &SipAddr {
+        match &self.inner {
+            TlsConnectionInner::Client(inner) => &inner.local_addr,
+            TlsConnectionInner::Server(inner) => &inner.local_addr,
+        }
+    }
+
+    fn get_remote_addr(&self) -> &SipAddr {
         match &self.inner {
             TlsConnectionInner::Client(inner) => &inner.remote_addr,
             TlsConnectionInner::Server(inner) => &inner.remote_addr,

@@ -73,6 +73,7 @@ async fn test_udp_recv_sip_message() -> Result<()> {
                     assert!(msg.is_request());
                     assert_eq!(from, peer_alice.get_addr().to_owned());
                     assert_eq!(connection.get_addr(), peer_bob.get_addr());
+                    assert_eq!(connection.get_remote_addr(), Some(peer_alice.get_addr()));
                 }
                 _ => {
                     assert!(false, "unexpected event");
