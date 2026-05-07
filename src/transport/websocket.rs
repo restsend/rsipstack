@@ -235,7 +235,11 @@ impl WebSocketConnection {
 
         let (ws_stream, _) = connect_async(request).await?;
         let local_addr = SipAddr {
-            r#type: Some(remote.r#type.unwrap_or(crate::sip::transport::Transport::Ws)),
+            r#type: Some(
+                remote
+                    .r#type
+                    .unwrap_or(crate::sip::transport::Transport::Ws),
+            ),
             addr: ws_stream.get_ref().get_ref().local_addr()?.into(),
         };
         let (ws_sink, ws_stream) = ws_stream.split();
