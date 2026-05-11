@@ -314,15 +314,7 @@ impl ClientInviteDialog {
         let request =
             self.inner
                 .make_request(crate::sip::Method::Invite, None, None, None, headers, body)?;
-        let resp = self.inner.do_request(request.clone()).await;
-        if let Ok(Some(ref resp)) = resp {
-            if resp.status_code == StatusCode::OK {
-                let (handle, _) = TransactionHandle::new();
-                self.inner
-                    .transition(DialogState::Updated(self.id(), request, handle))?;
-            }
-        }
-        resp
+        self.inner.do_request(request).await
     }
 
     /// Send an UPDATE request to modify session parameters
