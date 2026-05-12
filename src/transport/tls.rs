@@ -14,7 +14,7 @@ use socket2::{Domain, Protocol, Socket, Type};
 use std::{fmt, fmt::Debug, net::SocketAddr, sync::Arc};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::{
-    rustls::{pki_types, ClientConfig, RootCertStore, ServerConfig},
+    rustls::{pki_types, pki_types::pem::PemObject, ClientConfig, RootCertStore, ServerConfig},
     TlsAcceptor, TlsConnector,
 };
 use tokio_util::sync::CancellationToken;
@@ -137,24 +137,21 @@ impl ReloadableCertResolver {
         provider: &CryptoProvider,
     ) -> std::result::Result<Arc<CertifiedKey>, Error> {
         let certs = {
-            let mut reader = std::io::BufReader::new(cert_data);
-            rustls_pemfile::certs(&mut reader)
-                .collect::<std::result::Result<Vec<_>, std::io::Error>>()
+            pki_types::CertificateDer::pem_slice_iter(cert_data)
+                .collect::<std::result::Result<Vec<_>, _>>()
                 .map_err(|e| Error::Error(format!("Failed to parse certificate: {}", e)))?
         };
 
         let key = {
-            let mut reader = std::io::BufReader::new(key_data);
-            let keys = rustls_pemfile::pkcs8_private_keys(&mut reader)
-                .collect::<std::result::Result<Vec<_>, std::io::Error>>()
+            let keys: Vec<_> = pki_types::PrivatePkcs8KeyDer::pem_slice_iter(key_data)
+                .collect::<std::result::Result<Vec<_>, _>>()
                 .map_err(|e| Error::Error(format!("Failed to parse PKCS8 key: {}", e)))?;
 
             if !keys.is_empty() {
                 pki_types::PrivateKeyDer::Pkcs8(keys[0].clone_key())
             } else {
-                let mut reader = std::io::BufReader::new(key_data);
-                let keys = rustls_pemfile::rsa_private_keys(&mut reader)
-                    .collect::<std::result::Result<Vec<_>, std::io::Error>>()
+                let keys: Vec<_> = pki_types::PrivatePkcs1KeyDer::pem_slice_iter(key_data)
+                    .collect::<std::result::Result<Vec<_>, _>>()
                     .map_err(|e| Error::Error(format!("Failed to parse RSA key: {}", e)))?;
 
                 if !keys.is_empty() {
@@ -239,9 +236,8 @@ pub struct TlsConfig {
 
 fn parse_private_key(key_data: &[u8]) -> Result<pki_types::PrivateKeyDer<'static>> {
     // Try PKCS8 format first
-    let mut reader = std::io::BufReader::new(key_data);
-    let keys = rustls_pemfile::pkcs8_private_keys(&mut reader)
-        .collect::<std::result::Result<Vec<_>, std::io::Error>>()
+    let keys: Vec<_> = pki_types::PrivatePkcs8KeyDer::pem_slice_iter(key_data)
+        .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|e| Error::Error(format!("Failed to parse PKCS8 key: {}", e)))?;
 
     if !keys.is_empty() {
@@ -250,9 +246,8 @@ fn parse_private_key(key_data: &[u8]) -> Result<pki_types::PrivateKeyDer<'static
     }
 
     // Try PKCS1 format
-    let mut reader = std::io::BufReader::new(key_data);
-    let keys = rustls_pemfile::rsa_private_keys(&mut reader)
-        .collect::<std::result::Result<Vec<_>, std::io::Error>>()
+    let keys: Vec<_> = pki_types::PrivatePkcs1KeyDer::pem_slice_iter(key_data)
+        .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|e| Error::Error(format!("Failed to parse RSA key: {}", e)))?;
 
     if !keys.is_empty() {
@@ -477,9 +472,8 @@ impl TlsConnection {
 
         // Load CA certificates if provided
         if let Some(ca_data) = tls_config.and_then(|c| c.ca_certs.as_ref()) {
-            let mut reader = std::io::BufReader::new(ca_data.as_slice());
-            let certs = rustls_pemfile::certs(&mut reader)
-                .collect::<std::result::Result<Vec<_>, std::io::Error>>()
+            let certs = pki_types::CertificateDer::pem_slice_iter(ca_data.as_slice())
+                .collect::<std::result::Result<Vec<_>, _>>()
                 .map_err(|e| Error::Error(format!("Failed to parse CA certificates: {}", e)))?;
             for cert in certs {
                 root_store
@@ -494,9 +488,8 @@ impl TlsConnection {
             tls_config.and_then(|c| c.client_key.as_ref()),
         ) {
             (Some(cert_data), Some(key_data)) => {
-                let mut reader = std::io::BufReader::new(cert_data.as_slice());
-                let certs = rustls_pemfile::certs(&mut reader)
-                    .collect::<std::result::Result<Vec<_>, std::io::Error>>()
+                let certs = pki_types::CertificateDer::pem_slice_iter(cert_data.as_slice())
+                    .collect::<std::result::Result<Vec<_>, _>>()
                     .map_err(|e| {
                         Error::Error(format!("Failed to parse client certificate: {}", e))
                     })?;
