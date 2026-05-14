@@ -11,7 +11,7 @@ use axum::{
 };
 use clap::Parser;
 use futures::{SinkExt, StreamExt};
-use get_if_addrs::get_if_addrs;
+use if_addrs::get_if_addrs;
 use rsip::prelude::{HeadersExt, ToTypedHeader};
 use rsip::SipMessage;
 use rsipstack::dialog::DialogId;
@@ -118,7 +118,7 @@ async fn main() -> Result<()> {
             .iter()
             .find(|i| !i.is_loopback())
             .map(|i| match i.addr {
-                get_if_addrs::IfAddr::V4(ref addr) => Ok(std::net::IpAddr::V4(addr.ip)),
+                if_addrs::IfAddr::V4(ref addr) => Ok(std::net::IpAddr::V4(addr.ip)),
                 _ => Err(Error::Error("No IPv4 address found".to_string())),
             })
             .unwrap_or(Err(Error::Error("No interface found".to_string())))?,
