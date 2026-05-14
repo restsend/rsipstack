@@ -1,6 +1,5 @@
 use crate::sip::{Domain, Port, Transport};
-use hickory_resolver::proto::rr::RData;
-use hickory_resolver::TokioResolver;
+use hickory_resolver::{config::LookupIpStrategy, proto::rr::RData, TokioResolver};
 use rand::RngExt;
 use std::net::IpAddr;
 use std::net::SocketAddr;
@@ -26,10 +25,11 @@ impl Default for SipResolver {
 
 impl SipResolver {
     pub fn new() -> Self {
-        let resolver = TokioResolver::builder_tokio()
-            .expect("Error reading system config to build DNS resolver")
-            .build()
-            .expect("Error building DNS resolver");
+        let mut builder = TokioResolver::builder_tokio()
+            .expect("Error reading system config to build DNS resolver");
+        builder.options_mut().ip_strategy = LookupIpStrategy::Ipv4thenIpv6;
+
+        let resolver = builder.build().expect("Error building DNS resolver");
         Self {
             resolver: Arc::new(resolver),
         }
