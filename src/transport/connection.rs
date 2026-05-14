@@ -11,7 +11,7 @@ use crate::transport::{
     tls::{TlsConnection, TlsListenerConnection},
 };
 use crate::Result;
-use get_if_addrs::IfAddr;
+use if_addrs::IfAddr;
 use std::net::{IpAddr, Ipv4Addr};
 use std::{fmt, net::SocketAddr};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -316,7 +316,7 @@ impl SipConnection {
         let ip = addr.ip();
         if ip.is_unspecified() {
             // 0.0.0.0 or ::
-            let interfaces = match get_if_addrs::get_if_addrs() {
+            let interfaces = match if_addrs::get_if_addrs() {
                 Ok(interfaces) => interfaces,
                 Err(_) => return addr,
             };
