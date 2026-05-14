@@ -1,4 +1,5 @@
 use crate::sip::{Domain, Port, Transport};
+use hickory_resolver::proto::rr::RData;
 use hickory_resolver::TokioResolver;
 use rand::RngExt;
 use std::net::IpAddr;
@@ -26,8 +27,9 @@ impl Default for SipResolver {
 impl SipResolver {
     pub fn new() -> Self {
         let resolver = TokioResolver::builder_tokio()
-            .expect("Unexpected error creating DNS resolver")
-            .build();
+            .expect("Error reading system config to build DNS resolver")
+            .build()
+            .expect("Error building DNS resolver");
         Self {
             resolver: Arc::new(resolver),
         }
@@ -68,16 +70,18 @@ impl LookupSource for HickorySource {
         match self.0.srv_lookup(name).await {
             Ok(records) => {
                 let mut res = Vec::new();
-                for r in records {
-                    let target = r.target().to_string();
-                    // Remove trailing dot
-                    let target = target.trim_end_matches('.').to_string();
-                    res.push(SrvRecord {
-                        target,
-                        port: r.port(),
-                        priority: r.priority(),
-                        weight: r.weight(),
-                    });
+                for r in records.message().all_sections() {
+                    if let RData::SRV(srv) = &r.data {
+                        let target = srv.target.to_string();
+                        // Remove trailing dot
+                        let target = target.trim_end_matches('.').to_string();
+                        res.push(SrvRecord {
+                            target,
+                            port: srv.port,
+                            priority: srv.priority,
+                            weight: srv.weight,
+                        });
+                    }
                 }
                 Ok(res)
             }

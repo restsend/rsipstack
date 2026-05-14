@@ -29,7 +29,7 @@ rand = { version = "0.10.1" }
 md-5 = "0.11.0"
 sha2 = "0.11.0"
 if-addrs = "0.14"
-hickory-resolver = { version = "0.25.2", features = [
+hickory-resolver = { version = "0.26.1", features = [
     "system-config",
     "tokio",
 ], optional = true }
