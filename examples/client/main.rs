@@ -141,7 +141,7 @@ async fn main() -> rsipstack::Result<()> {
         .try_init()
         .ok();
 
-    if let Err(e) = dotenv::dotenv() {
+    if let Err(e) = dotenvy::dotenv() {
         info!(error = %e, "Failed to load .env file");
     }
 

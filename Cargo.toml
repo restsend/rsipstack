@@ -60,7 +60,7 @@ tokio = { version = "1.50.0", features = ["time", "sync", "macros", "io-util"] }
 tokio = { version = "1.50.0", features = ["full"] }
 
 [dev-dependencies]
-dotenv = "0.15"
+dotenvy = "0.15.7"
 tempfile = "3"
 sdp-rs = "0.2.1"
 rtp-rs = "0.6.0"

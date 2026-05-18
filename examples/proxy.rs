@@ -95,7 +95,7 @@ async fn main() -> Result<()> {
         .with_line_number(true)
         .try_init()
         .ok();
-    if let Err(e) = dotenv::dotenv() {
+    if let Err(e) = dotenvy::dotenv() {
         info!(error = %e, "Failed to load .env file");
     }
     let args = Args::parse();
