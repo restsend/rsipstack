@@ -417,7 +417,11 @@ impl ServerInviteDialog {
         if !self.inner.is_confirmed() {
             return Ok(None);
         }
-        debug!(id = %self.id(), ?body, "sending re-invite request");
+        debug!(
+            id = %self.id(),
+            body = ?body.as_deref().map(String::from_utf8_lossy),
+            "sending re-invite request"
+        );
         let request =
             self.inner
                 .make_request(crate::sip::Method::Invite, None, None, None, headers, body)?;
@@ -460,7 +464,11 @@ impl ServerInviteDialog {
         if !self.inner.is_confirmed() {
             return Ok(None);
         }
-        debug!(id = %self.id(), ?body, "sending update request");
+        debug!(
+            id = %self.id(),
+            body = ?body.as_deref().map(String::from_utf8_lossy),
+            "sending update request"
+        );
         let request =
             self.inner
                 .make_request(crate::sip::Method::Update, None, None, None, headers, body)?;
@@ -507,7 +515,11 @@ impl ServerInviteDialog {
         if !self.inner.is_confirmed() {
             return Ok(None);
         }
-        debug!(id = %self.id(), ?body, "sending info request");
+        debug!(
+            id = %self.id(),
+            body = ?body.as_deref().map(String::from_utf8_lossy),
+            "sending info request"
+        );
         let request =
             self.inner
                 .make_request(crate::sip::Method::Info, None, None, None, headers, body)?;
