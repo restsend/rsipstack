@@ -263,7 +263,7 @@ pub async fn handle_client_authenticate(
         qop: auth_qop,
     };
 
-    let mut via_header = tx.original.via_header()?.clone().typed()?;
+    let mut via_header = tx.original.top_via_header()?.typed()?;
     let params = &mut via_header.params;
     params.retain(|p| !matches!(p, crate::sip::Param::Branch(_)));
     params.push(make_via_branch());

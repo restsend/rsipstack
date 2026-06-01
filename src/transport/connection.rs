@@ -339,50 +339,52 @@ impl SipConnection {
     }
     pub fn build_via_received(via: &mut Via, addr: SocketAddr, transport: Transport) -> Result<()> {
         let received = addr.into();
-        let mut typed_via = via.typed()?;
+        via.update_first_value(|via| {
+            let mut typed_via = via.typed()?;
 
-        typed_via
-            .params
-            .retain(|param| !matches!(param, Param::Rport(_) | Param::Received(_)));
+            typed_via
+                .params
+                .retain(|param| !matches!(param, Param::Rport(_) | Param::Received(_)));
 
-        // Only add received parameter if the source address differs from Via header
-        if typed_via.uri.host_with_port == received {
-            return Ok(());
-        }
-
-        // For reliable transports (TCP/TLS/WS), we need to be more careful about received parameter
-        let should_add_received = match transport {
-            Transport::Udp => true,
-            _ => {
-                // For connection-oriented protocols, only add if explicitly different
-                typed_via.uri.host_with_port.host != received.host
+            // Only add received parameter if the source address differs from Via header
+            if typed_via.uri.host_with_port == received {
+                return Ok(via);
             }
-        };
 
-        if !should_add_received {
-            return Ok(());
-        }
+            // For reliable transports (TCP/TLS/WS), we need to be more careful about received parameter
+            let should_add_received = match transport {
+                Transport::Udp => true,
+                _ => {
+                    // For connection-oriented protocols, only add if explicitly different
+                    typed_via.uri.host_with_port.host != received.host
+                }
+            };
 
-        if transport != Transport::Udp && typed_via.transport != transport {
-            typed_via.params.push(Param::Transport(transport));
-        }
+            if !should_add_received {
+                return Ok(via);
+            }
 
-        let received_str = match addr {
-            SocketAddr::V6(_) => format!("[{}]", received.host),
-            _ => received.host.to_string(),
-        };
-        typed_via
-            .params
-            .push(Param::Received(crate::sip::param::Received::new(
-                received_str,
-            )));
-        typed_via.params.push(Param::Rport(Some(addr.port())));
-        *via = typed_via.into();
+            if transport != Transport::Udp && typed_via.transport != transport {
+                typed_via.params.push(Param::Transport(transport));
+            }
+
+            let received_str = match addr {
+                SocketAddr::V6(_) => format!("[{}]", received.host),
+                _ => received.host.to_string(),
+            };
+            typed_via
+                .params
+                .push(Param::Received(crate::sip::param::Received::new(
+                    received_str,
+                )));
+            typed_via.params.push(Param::Rport(Some(addr.port())));
+            Ok(typed_via.into())
+        })?;
         Ok(())
     }
 
     pub fn parse_target_from_via(via: &Via) -> Result<(Transport, HostWithPort)> {
-        let typed_via = via.typed()?;
+        let typed_via = via.first_value()?.typed()?;
         let mut host_with_port = typed_via.uri.host_with_port.clone();
         let mut transport = typed_via.transport;
         for param in &typed_via.params {

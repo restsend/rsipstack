@@ -1,4 +1,4 @@
-use crate::sip::{headers::*, Header, Response, SipMessage, Uri};
+use crate::sip::{headers::*, prelude::HeadersExt, Header, Response, SipMessage, Uri};
 use crate::transaction::key::{TransactionKey, TransactionRole};
 use crate::transaction::transaction::Transaction;
 use crate::transport::udp::UdpConnection;
@@ -226,6 +226,31 @@ Content-Length: 0\r\n\r\n";
         destination, expected_destination,
         "First Route entry must determine the transport destination",
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_make_ack_updates_first_combined_via_value_only() -> Result<()> {
+    let endpoint = super::create_test_endpoint(None).await?;
+
+    let raw_response = "SIP/2.0 200 OK\r\n\
+Via: SIP/2.0/UDP uac.example.com:5060;branch=z9hG4bKfirst,SIP/2.0/TCP proxy.example.com:5060;branch=z9hG4bKsecond\r\n\
+From: <sip:alice@example.com>;tag=from-tag\r\n\
+To: <sip:bob@example.com>;tag=to-tag\r\n\
+Call-ID: callid@example.com\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:uas@192.0.2.55:5080;transport=udp>\r\n\
+Content-Length: 0\r\n\r\n";
+
+    let response = Response::try_from(raw_response)?;
+    let invite = make_invite_request("sip:bob@example.com")?;
+    let ack = endpoint.inner.make_ack(&invite, &response)?;
+    let via = ack.via_header()?.value();
+
+    assert!(via.starts_with("SIP/2.0/UDP uac.example.com:5060;branch=z9hG4bK"));
+    assert!(!via.contains("z9hG4bKfirst"));
+    assert!(via.contains(",SIP/2.0/TCP proxy.example.com:5060;branch=z9hG4bKsecond"));
 
     Ok(())
 }

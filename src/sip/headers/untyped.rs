@@ -442,10 +442,65 @@ impl Via {
     pub fn value(&self) -> &str {
         &self.0
     }
+    fn first_value_split(value: &str) -> Result<(&str, Option<&str>), Error> {
+        if value.is_empty() {
+            return Err(Error::ParseError("empty Via header".into()));
+        }
+
+        let mut in_quotes = false;
+        let mut escaped = false;
+        for (idx, ch) in value.char_indices() {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+
+            match ch {
+                '\\' if in_quotes => escaped = true,
+                '"' => in_quotes = !in_quotes,
+                ',' if !in_quotes => return Ok((value[..idx].trim(), Some(&value[idx..]))),
+                _ => {}
+            }
+        }
+
+        if in_quotes {
+            return Err(Error::ParseError("Via: unclosed quoted string".into()));
+        }
+
+        Ok((value, None))
+    }
+    pub fn first_value(&self) -> Result<Self, Error> {
+        let value = self.0.trim();
+        let (first, _) = Self::first_value_split(value)?;
+        if first.is_empty() {
+            return Err(Error::ParseError("empty Via header value".into()));
+        }
+        Ok(Self::new(first))
+    }
+    pub fn update_first_value(
+        &mut self,
+        f: impl FnOnce(Self) -> Result<Self, Error>,
+    ) -> Result<(), Error> {
+        let value = self.0.trim();
+        let (first, rest) = Self::first_value_split(value)?;
+        if first.is_empty() {
+            return Err(Error::ParseError("empty Via header value".into()));
+        }
+        let first = f(Self::new(first))?;
+        if first.value().trim().is_empty() {
+            return Err(Error::ParseError("empty Via header value".into()));
+        }
+        self.0 = match rest {
+            Some(rest) => format!("{}{}", first.value(), rest),
+            None => first.0,
+        };
+        Ok(())
+    }
     pub fn replace(&mut self, new_value: impl Into<String>) {
         self.0 = new_value.into();
     }
 }
+
 impl std::fmt::Display for Via {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Via: {}", self.0)

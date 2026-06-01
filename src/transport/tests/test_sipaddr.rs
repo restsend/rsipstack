@@ -48,6 +48,57 @@ fn test_via_received() {
 }
 
 #[test]
+fn parse_target_from_via_uses_topmost_value() {
+    let via = Via::new(
+        "SIP/2.0/UDP 10.0.13.70:5060;received=172.22.22.80;rport=5062,SIP/2.0/TCP proxy.example.com:5060;branch=z9hG4bKproxy",
+    );
+
+    let (_, parse_addr) =
+        SipConnection::parse_target_from_via(&via).expect("get_target_socketaddr");
+
+    let addr = HostWithPort {
+        host: "172.22.22.80".parse().unwrap(),
+        port: Some(5062.into()),
+    };
+    assert_eq!(parse_addr, addr);
+}
+
+#[test]
+fn parse_target_from_via_keeps_quoted_comma_in_first_value() {
+    let via = Via::new(
+        "SIP/2.0/UDP 10.0.13.70:5060;received=172.22.22.80;rport=5062;note=\"edge, \\\"one\\\"\",SIP/2.0/TCP proxy.example.com:5060;branch=z9hG4bKproxy",
+    );
+
+    let (_, parse_addr) =
+        SipConnection::parse_target_from_via(&via).expect("get_target_socketaddr");
+
+    let addr = HostWithPort {
+        host: "172.22.22.80".parse().unwrap(),
+        port: Some(5062.into()),
+    };
+    assert_eq!(parse_addr, addr);
+}
+
+#[test]
+fn build_via_received_updates_first_value_only() {
+    let mut via = Via::new(
+        "SIP/2.0/UDP client.example.com:5060;branch=z9hG4bKfirst,SIP/2.0/TCP proxy.example.com:5060;branch=z9hG4bKsecond",
+    );
+
+    SipConnection::build_via_received(
+        &mut via,
+        "192.0.2.10:5062".parse().unwrap(),
+        crate::sip::Transport::Udp,
+    )
+    .unwrap();
+
+    assert_eq!(
+        via.value(),
+        "SIP/2.0/UDP client.example.com:5060;branch=z9hG4bKfirst;received=192.0.2.10;rport=5062,SIP/2.0/TCP proxy.example.com:5060;branch=z9hG4bKsecond"
+    );
+}
+
+#[test]
 fn test_sipaddr() {
     let addr = "sip:proxy1.example.org:25060;transport=tcp";
     let uri = crate::sip::Uri::try_from(addr).expect("parse uri");

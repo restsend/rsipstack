@@ -34,7 +34,7 @@ impl std::fmt::Display for TransactionKey {
 
 impl TransactionKey {
     pub fn from_request(req: &Request, role: TransactionRole) -> Result<Self> {
-        let via = req.via_header()?.typed()?;
+        let via = req.top_via_header()?.typed()?;
         let mut method = *req.method();
 
         if matches!(method, Method::Ack | Method::Cancel) && role == TransactionRole::Server {
@@ -51,7 +51,7 @@ impl TransactionKey {
     }
 
     pub fn from_response(resp: &Response, role: TransactionRole) -> Result<Self> {
-        let via = resp.via_header()?.typed()?;
+        let via = resp.top_via_header()?.typed()?;
         let cseq = resp.cseq_header()?;
         let method = cseq.method()?;
         let from_tag = resp
@@ -154,6 +154,29 @@ fn test_transaction_key() -> Result<()> {
             "s.INVITE_2_1j9FpLxk3uxtm8tn@sip.restsend.com_ja743ks76zlflH_z9hG4bKnashd92"
                 .to_string()
         )
+    );
+    Ok(())
+}
+
+#[test]
+fn transaction_key_uses_top_via_header_value() -> Result<()> {
+    let resp: crate::sip::Response = concat!(
+        "SIP/2.0 401 Unauthorized\r\n",
+        "Via: SIP/2.0/UDP 172.22.22.80:5062;received=172.22.22.80;rport=5062;branch=z9hG4bKkwpQ8Rq2RRoi,SIP/2.0/TCP 10.0.13.70:5060;branch=z9hG4bK20ede05124e2b786dbfbe11b\r\n",
+        "From: <sip:001010000000001@ims.example.com>;tag=e80c1d8c\r\n",
+        "To: <sip:001010000000001@ims.example.com>;tag=2e518\r\n",
+        "Call-ID: 9e353fc94f78064f@10.0.13.70\r\n",
+        "CSeq: 1 REGISTER\r\n",
+        "Content-Length: 0\r\n",
+        "\r\n",
+    )
+    .try_into()?;
+
+    let key = TransactionKey::from_response(&resp, TransactionRole::Client)?;
+
+    assert_eq!(
+        key.to_string(),
+        "c.REGISTER_1_9e353fc94f78064f@10.0.13.70_e80c1d8c_z9hG4bKkwpQ8Rq2RRoi"
     );
     Ok(())
 }

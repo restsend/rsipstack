@@ -268,11 +268,12 @@ impl EndpointInner {
                 Header::Via,
                 Error::missing_header("Via")
             ) {
-                if let Ok(mut typed_via) = top_most_via.typed() {
+                let _ = top_most_via.update_first_value(|via| {
+                    let mut typed_via = via.typed()?;
                     typed_via.params.clear();
                     typed_via.params.push(make_via_branch());
-                    *top_most_via = typed_via.into();
-                }
+                    Ok(typed_via.into())
+                });
             }
             let mut route_set: Vec<UriWithParams> = Vec::new();
             for header in resp.headers.iter() {

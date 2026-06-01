@@ -100,6 +100,9 @@ pub trait HeadersExt: HasHeaders {
             Error::MissingHeader("Via".into())
         )
     }
+    fn top_via_header(&self) -> Result<Via, Error> {
+        self.via_header()?.first_value()
+    }
     fn via_header_mut(&mut self) -> Result<&mut Via, Error> {
         header_get_mut!(
             self.headers_mut().iter_mut(),
@@ -291,7 +294,7 @@ pub trait HeadersExt: HasHeaders {
     }
     fn transaction_id(&self) -> Result<Option<Branch>, Error> {
         use crate::sip::headers::untyped::ToTypedHeader;
-        Ok(self.via_header()?.clone().typed()?.branch().cloned())
+        Ok(self.top_via_header()?.typed()?.branch().cloned())
     }
 }
 
@@ -441,7 +444,7 @@ impl Response {
     /// Get the received address from the Via header (including rport if present)
     pub fn via_received(&self) -> Option<crate::sip::uri::HostWithPort> {
         use crate::sip::HeadersExt;
-        self.via_header().ok().and_then(|via| {
+        self.top_via_header().ok().and_then(|via| {
             via.typed()
                 .ok()
                 .and_then(|typed_via: crate::sip::typed::Via| {
@@ -773,6 +776,31 @@ mod tests {
             .filter(|h| matches!(h, Header::Via(_)))
             .collect();
         assert_eq!(vias.len(), 3);
+    }
+
+    #[test]
+    fn top_via_header_returns_first_value_from_combined_header() {
+        let resp: Response = concat!(
+            "SIP/2.0 401 Unauthorized\r\n",
+            "Via: SIP/2.0/UDP 172.22.22.80:5062;received=172.22.22.80;rport=5062;branch=z9hG4bKfirst,SIP/2.0/TCP 10.0.13.70:5060;branch=z9hG4bKsecond\r\n",
+            "From: <sip:001010000000001@ims.example.com>;tag=e80c1d8c\r\n",
+            "To: <sip:001010000000001@ims.example.com>;tag=2e518\r\n",
+            "Call-ID: 9e353fc94f78064f@10.0.13.70\r\n",
+            "CSeq: 1 REGISTER\r\n",
+            "Content-Length: 0\r\n",
+            "\r\n",
+        )
+        .try_into()
+        .unwrap();
+
+        assert_eq!(
+            resp.via_header().unwrap().value(),
+            "SIP/2.0/UDP 172.22.22.80:5062;received=172.22.22.80;rport=5062;branch=z9hG4bKfirst,SIP/2.0/TCP 10.0.13.70:5060;branch=z9hG4bKsecond"
+        );
+        assert_eq!(
+            resp.top_via_header().unwrap().value(),
+            "SIP/2.0/UDP 172.22.22.80:5062;received=172.22.22.80;rport=5062;branch=z9hG4bKfirst"
+        );
     }
 
     #[test]
