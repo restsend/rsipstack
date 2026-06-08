@@ -360,6 +360,29 @@ impl std::fmt::Display for Request {
     }
 }
 
+impl Request {
+    /// Serialize the request to its on-the-wire byte representation.
+    ///
+    /// The request line and headers are ASCII; the body is appended verbatim.
+    /// A SIP message body is an opaque octet sequence (RFC 3261 §7.4) and may
+    /// contain arbitrary bytes — e.g. a binary ISUP part or an eCall MSD — so
+    /// it must not be forced through UTF-8.
+    ///
+    /// Prefer this over [`Display`](std::fmt::Display) / `to_string()` when
+    /// putting a message on the wire: `Display` renders the body with
+    /// [`String::from_utf8_lossy`], which is fine for logging but corrupts
+    /// non-UTF-8 bytes.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let head = format!(
+            "{} {} {}\r\n{}\r\n",
+            self.method, self.uri, self.version, self.headers
+        );
+        let mut buf = head.into_bytes();
+        buf.extend_from_slice(&self.body);
+        buf
+    }
+}
+
 impl std::convert::TryFrom<Vec<u8>> for Request {
     type Error = Error;
     fn try_from(bytes: Vec<u8>) -> Result<Self, Error> {
@@ -406,7 +429,7 @@ impl std::convert::From<Request> for String {
 
 impl std::convert::From<Request> for Vec<u8> {
     fn from(r: Request) -> Vec<u8> {
-        r.to_string().into_bytes()
+        r.to_bytes()
     }
 }
 
@@ -507,6 +530,25 @@ impl std::fmt::Display for Response {
     }
 }
 
+impl Response {
+    /// Serialize the response to its on-the-wire byte representation.
+    ///
+    /// See [`Request::to_bytes`]: the body is written verbatim because a SIP
+    /// body is an opaque octet sequence (RFC 3261 §7.4), not necessarily UTF-8.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let head = format!(
+            "{} {} {}\r\n{}\r\n",
+            self.version,
+            self.status_code.code(),
+            self.status_code.text(),
+            self.headers
+        );
+        let mut buf = head.into_bytes();
+        buf.extend_from_slice(&self.body);
+        buf
+    }
+}
+
 impl std::convert::TryFrom<Vec<u8>> for Response {
     type Error = Error;
     fn try_from(bytes: Vec<u8>) -> Result<Self, Error> {
@@ -553,7 +595,7 @@ impl std::convert::From<Response> for String {
 
 impl std::convert::From<Response> for Vec<u8> {
     fn from(r: Response) -> Vec<u8> {
-        r.to_string().into_bytes()
+        r.to_bytes()
     }
 }
 
@@ -601,6 +643,19 @@ impl std::fmt::Display for SipMessage {
         match self {
             SipMessage::Request(r) => write!(f, "{}", r),
             SipMessage::Response(r) => write!(f, "{}", r),
+        }
+    }
+}
+
+impl SipMessage {
+    /// Serialize the message to its on-the-wire byte representation.
+    ///
+    /// See [`Request::to_bytes`]. Transports should use this rather than
+    /// `to_string()` so binary bodies are preserved byte-for-byte.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        match self {
+            SipMessage::Request(r) => r.to_bytes(),
+            SipMessage::Response(r) => r.to_bytes(),
         }
     }
 }
@@ -673,7 +728,7 @@ impl std::convert::From<SipMessage> for String {
 
 impl std::convert::From<SipMessage> for Vec<u8> {
     fn from(m: SipMessage) -> Vec<u8> {
-        m.to_string().into_bytes()
+        m.to_bytes()
     }
 }
 
@@ -765,6 +820,39 @@ mod tests {
         let resp: Response = ok_response().try_into().unwrap();
         assert_eq!(resp.status_code.code(), 200);
         assert_eq!(resp.body, b"v=0\r\no=bob 2890844527 2890844527 IN IP4 192.0.2.4\r\ns=-\r\nc=IN IP4 192.0.2.4\r\nt=0 0\r\nm=audio 3456 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000");
+    }
+
+    #[test]
+    fn request_binary_body_survives_serialization() {
+        // A SIP message body is an opaque octet payload (RFC 3261 §7.4), not
+        // necessarily UTF-8 text. e.g. an NG-eCall INVITE carries a binary
+        // ASN.1 PER-encoded MSD. Serialization to the wire must preserve every
+        // byte, including bytes that are invalid as UTF-8.
+        let mut req: Request = invite_request().try_into().unwrap();
+        let binary_body: Vec<u8> = vec![0x00, 0x01, 0x80, 0xFF, 0xC0, 0xC1, 0xFE, 0x02, 0x7F, 0x90];
+        req.body = binary_body.clone();
+
+        let wire: Vec<u8> = req.into();
+
+        assert!(
+            wire.ends_with(&binary_body),
+            "binary body corrupted during serialization: got tail {:?}",
+            &wire[wire.len().saturating_sub(binary_body.len() + 4)..]
+        );
+    }
+
+    #[test]
+    fn response_binary_body_survives_serialization() {
+        let mut resp: Response = ok_response().try_into().unwrap();
+        let binary_body: Vec<u8> = vec![0x00, 0x80, 0xFF, 0xC0, 0xC1, 0xFE, 0x02];
+        resp.body = binary_body.clone();
+
+        let wire: Vec<u8> = resp.into();
+
+        assert!(
+            wire.ends_with(&binary_body),
+            "binary body corrupted during serialization"
+        );
     }
 
     #[test]

@@ -136,8 +136,9 @@ impl Encoder<SipMessage> for SipCodec {
     type Error = crate::Error;
 
     fn encode(&mut self, item: SipMessage, dst: &mut BytesMut) -> Result<()> {
-        let data = item.to_string();
-        dst.extend_from_slice(data.as_bytes());
+        // Use to_bytes() (not to_string()) so binary bodies are preserved
+        // byte-for-byte; a SIP body is opaque octets (RFC 3261 §7.4).
+        dst.extend_from_slice(&item.to_bytes());
         Ok(())
     }
 }
@@ -264,7 +265,7 @@ pub async fn send_to_stream<W>(write_half: &Mutex<W>, msg: SipMessage) -> Result
 where
     W: AsyncWrite + Unpin + Send,
 {
-    send_raw_to_stream(write_half, msg.to_string().as_bytes()).await
+    send_raw_to_stream(write_half, &msg.to_bytes()).await
 }
 
 pub async fn send_raw_to_stream<W>(write_half: &Mutex<W>, data: &[u8]) -> Result<()>
@@ -322,6 +323,29 @@ mod tests {
         )
         .as_bytes()
         .to_vec()
+    }
+
+    // ── binary body ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn encode_preserves_binary_body() {
+        use crate::sip::{Request, SipMessage};
+        // A SIP body is opaque octets (RFC 3261 §7.4); the stream codec must
+        // emit it byte-for-byte, including bytes that are invalid as UTF-8.
+        let mut req: Request = invite_bytes("").as_slice().try_into().unwrap();
+        let binary_body: Vec<u8> = vec![0x00, 0x80, 0xFF, 0xC0, 0xC1, 0xFE, 0x01, 0x7F];
+        req.body = binary_body.clone();
+
+        let mut codec = make_codec();
+        let mut dst = BytesMut::new();
+        codec
+            .encode(SipMessage::Request(req), &mut dst)
+            .expect("encode");
+
+        assert!(
+            dst.ends_with(&binary_body),
+            "stream codec corrupted binary body"
+        );
     }
 
     // ── 基本解码 ──────────────────────────────────────────────────────────────
