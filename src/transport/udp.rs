@@ -211,13 +211,15 @@ impl UdpConnection {
             Some(addr) => addr.get_socketaddr(),
             None => SipConnection::get_destination(&msg),
         }?;
-        let buf = msg.to_string();
+        // Use to_bytes() (not to_string()) so binary bodies are preserved
+        // byte-for-byte; a SIP body is opaque octets (RFC 3261 §7.4).
+        let buf = msg.to_bytes();
 
-        debug!(len=buf.len(), dest=%destination, src=%self.get_addr(), raw_message=buf, "udp send");
+        debug!(len=buf.len(), dest=%destination, src=%self.get_addr(), raw_message=%msg, "udp send");
 
         self.inner
             .conn
-            .send_to(buf.as_bytes(), destination)
+            .send_to(&buf, destination)
             .await
             .map_err(|e| {
                 crate::Error::TransportLayerError(e.to_string(), self.get_addr().to_owned())
