@@ -279,10 +279,11 @@ impl Transaction {
                 .transport_layer
                 .lookup(target_uri, Some(&self.key))
                 .await?;
-            // For UDP, we need to store the resolved destination address
-            if !connection.is_reliable() {
-                self.destination.replace(resolved_addr);
-            }
+            // Store the resolved destination address for all transports so
+            // that before_send inspectors and sipflow recording have the
+            // correct dst_addr (reliable connections like WebSocket already
+            // know where to send, but still need this for logging).
+            self.destination.replace(resolved_addr);
             self.connection.replace(connection);
         }
 
