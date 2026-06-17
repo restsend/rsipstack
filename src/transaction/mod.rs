@@ -90,9 +90,13 @@ pub type TransactionSender = UnboundedSender<Transaction>;
 ///     TransactionState::Completed => println!("Final non-2xx response"),
 ///     TransactionState::Confirmed => println!("ACK received/sent"),
 ///     TransactionState::Terminated => println!("Transaction complete"),
+///     // `#[non_exhaustive]`: downstream code MUST keep a wildcard arm to
+///     // remain forward-compatible with future state additions.
+///     _ => println!("future RFC-extension state"),
 /// }
 /// ```
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum TransactionState {
     Nothing,
     Calling,
@@ -255,6 +259,9 @@ impl std::fmt::Display for TransactionType {
 ///     TransactionTimer::TimerB(key) => {
 ///         println!("Transaction {} timed out", key);
 ///     },
+///     // `#[non_exhaustive]`: downstream code MUST keep a wildcard arm to
+///     // remain forward-compatible with future timer additions (e.g. RFC
+///     // extensions like Timer L / Timer M / future RFC variants).
 ///     _ => {}
 /// }
 /// # Ok(())
@@ -268,6 +275,7 @@ impl std::fmt::Display for TransactionType {
 /// * Cancelled when leaving states or receiving responses
 /// * Fire events that drive state machine transitions
 /// * Handle retransmissions and timeouts
+#[non_exhaustive]
 pub enum TransactionTimer {
     TimerA(TransactionKey, Duration),
     TimerB(TransactionKey),
