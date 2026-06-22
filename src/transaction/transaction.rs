@@ -561,11 +561,13 @@ impl Transaction {
 
 impl Transaction {
     fn inform_tu_response(&mut self, response: Response) -> Result<()> {
+        let msg = if let Some(ref inspector) = self.endpoint_inner.message_inspector {
+            inspector.after_received(SipMessage::Response(response), None)
+        } else {
+            SipMessage::Response(response)
+        };
         self.tu_sender
-            .send(TransactionEvent::Received(
-                SipMessage::Response(response),
-                None,
-            ))
+            .send(TransactionEvent::Received(msg, None))
             .map_err(|e| Error::TransactionError(e.to_string(), self.key.clone()))
     }
 

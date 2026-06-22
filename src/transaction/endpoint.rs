@@ -24,7 +24,7 @@ use tracing::{debug, info, trace, warn};
 
 pub trait MessageInspector: Send + Sync {
     fn before_send(&self, msg: SipMessage, dest: Option<&SipAddr>) -> SipMessage;
-    fn after_received(&self, msg: SipMessage, from: &SipAddr) -> SipMessage;
+    fn after_received(&self, msg: SipMessage, from: Option<&SipAddr>) -> SipMessage;
 }
 
 #[async_trait]
@@ -433,7 +433,7 @@ impl EndpointInner {
         };
 
         let msg = if let Some(inspector) = &self.message_inspector {
-            inspector.after_received(msg, from)
+            inspector.after_received(msg, Some(from))
         } else {
             msg
         };
