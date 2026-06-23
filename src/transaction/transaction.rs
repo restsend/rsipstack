@@ -338,7 +338,35 @@ impl Transaction {
     pub async fn reply(&mut self, status_code: StatusCode) -> Result<()> {
         self.reply_with(status_code, vec![], None).await
     }
-    // send server response
+    /// Send a server response.
+    ///
+    /// Validates the state transition, sends the response through the
+    /// transaction's connection, stores it as `last_response`, and
+    /// transitions the state machine. The response routing follows
+    /// RFC 3261 §17.2.1 + RFC 6026 §7.1 (server INVITE 2xx → Accepted;
+    /// server INVITE 3xx-6xx → Completed; server non-INVITE → Terminated).
+    ///
+    /// # Errors
+    /// Returns `Error::TransactionError` if:
+    /// - the transaction is a client transaction (`respond` is server-only),
+    /// - the requested transition is not allowed by `can_transition`,
+    /// - the connection is missing,
+    /// - the underlying transport send fails.
+    ///
+    /// # Cancel safety
+    ///
+    /// **NOT cancel-safe.** The mutation order is: store `last_response`
+    /// → `await` the transport send → transition the state machine. If the
+    /// future is dropped during the `await`, `last_response` will already
+    /// be updated while the response may have been only partially
+    /// transmitted (or not at all) and the state did not advance. If it
+    /// is dropped between the send completing and the transition, the
+    /// response is on the wire but the transaction remains in the previous
+    /// state and subsequent timer-driven retransmits may fire incorrectly.
+    /// Drive `respond` from an owning task; do not place it directly
+    /// inside `tokio::select!` / `tokio::time::timeout` unless this hazard
+    /// is acceptable. Prefer the `TransactionEvent::Respond` channel for
+    /// cancellation-aware integration.
     pub async fn respond(&mut self, response: Response) -> Result<()> {
         match self.transaction_type {
             TransactionType::ServerInvite | TransactionType::ServerNonInvite => {}
@@ -468,6 +496,40 @@ impl Transaction {
         }
     }
 
+    /// Send an ACK for a final response on a client INVITE transaction.
+    ///
+    /// Constructs the ACK from `last_ack` (cached) or `last_response` +
+    /// the original INVITE, resolves the destination (Contact for 2xx
+    /// per RFC 3261 §13.2.2.4; Via/Record-Route for 3xx-6xx per §17.1.1.3),
+    /// and sends through either the supplied `connection` argument or, for
+    /// 2xx responses, a transport-layer connection looked up from the
+    /// resolved Contact. If neither path produces a connection, the ACK is
+    /// recorded as `last_ack` (for caller-driven retransmission) but not
+    /// transmitted, and `Ok(())` is still returned. The ACK is recorded as
+    /// `last_ack` regardless of send outcome.
+    ///
+    /// State transitions per RFC 6026 §7.2 + RFC 3261 §17.1.1.3:
+    /// - Completed (3xx-6xx): transitions to Terminated.
+    /// - Accepted (2xx): no transition (Timer M drives Termination so
+    ///   the §7.2 server-retransmitted-2xx absorption window is preserved).
+    ///
+    /// # Errors
+    /// Returns `Error::TransactionError` if:
+    /// - the transaction is not a client INVITE,
+    /// - the state is neither Completed nor Accepted,
+    /// - no `last_response` and no `last_ack` is available,
+    /// - destination resolution or transport send fails.
+    ///
+    /// # Cancel safety
+    ///
+    /// **NOT cancel-safe.** This method has multiple `.await` points
+    /// (locator lookup, transport lookup, transport send) interleaved
+    /// with `last_ack` mutation and state transition. If the future is
+    /// dropped between the ACK transmission and the state transition,
+    /// the ACK will have been sent but the transaction state will remain
+    /// in Completed/Accepted. The next inbound message may trigger
+    /// inappropriate retransmits. Do not place inside `tokio::select!`
+    /// unless this hazard is acceptable.
     pub async fn send_ack(&mut self, connection: Option<SipConnection>) -> Result<()> {
         if self.transaction_type != TransactionType::ClientInvite {
             return Err(Error::TransactionError(
@@ -557,6 +619,31 @@ impl Transaction {
         }
     }
 
+    /// Receive the next SIP message routed to this transaction.
+    ///
+    /// Loops on the transaction's TU receiver, dispatching incoming
+    /// requests/responses through `on_received_request` /
+    /// `on_received_response`, processing timer events via `on_timer`,
+    /// and forwarding `Respond` events through `respond`. Returns
+    /// `Some(msg)` when a request/response should be propagated to the
+    /// dialog/TU layer; returns `None` when the transaction is
+    /// terminated by a `Terminate` event or the underlying channel
+    /// closes.
+    ///
+    /// # Cancel safety
+    ///
+    /// **NOT cancel-safe.** State mutations may occur around any inner
+    /// `.await` — for example, an incoming response is passed to
+    /// `on_received_response` which transitions state and stores
+    /// `last_response` BEFORE the message is returned to the caller.
+    /// If the future is dropped between those mutations and the
+    /// `return Some(msg)`, the TU will not observe the response while
+    /// the transaction has already advanced state. Drive
+    /// `Transaction::receive` from an owning task; do not place it
+    /// directly inside `tokio::select!` / `tokio::time::timeout` unless
+    /// dropped state is acceptable. If timeout is required, prefer a
+    /// dedicated cancellation channel that the transaction itself
+    /// observes via `TransactionEvent::Terminate`.
     pub async fn receive(&mut self) -> Option<SipMessage> {
         while let Some(event) = self.tu_receiver.recv().await {
             match event {
@@ -1037,11 +1124,15 @@ impl Transaction {
                         // ignored by the transaction state machine itself —
                         // see Accepted-self-loop edge in can_transition).
                         //
-                        // The ACK for the 2xx is the TU's responsibility per
-                        // RFC 3261 §17.1.1.3 + RFC 6026 §7.2; the transaction
-                        // layer no longer auto-sends ACK for 2xx (3xx-6xx
-                        // ACKs continue to be sent by the transaction layer
-                        // through the Completed → Confirmed path).
+                        // Strict RFC 3261 §17.1.1.3 + RFC 6026 §7.2 make
+                        // the ACK for 2xx the TU's responsibility. For
+                        // rsipstack 0.5.x backward compatibility, the
+                        // auto_ack_client_invite gate at the tail of
+                        // on_received_response still emits that ACK after
+                        // entering Accepted; see lib.rs Standards Compliance
+                        // for the disclaimer. 3xx-6xx ACKs continue to be
+                        // sent by the transaction layer through the
+                        // Completed → Terminated path.
                         let timer_m = self.endpoint_inner.timers.timeout(
                             self.endpoint_inner.option.t1x64,
                             TransactionTimer::TimerM(self.key.clone()),
