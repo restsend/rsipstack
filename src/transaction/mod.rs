@@ -31,7 +31,8 @@ pub type TransactionSender = UnboundedSender<Transaction>;
 ///
 /// `TransactionState` represents the various states a SIP transaction can be in
 /// during its lifecycle. These states implement the transaction state machines
-/// defined in RFC 3261 for both client and server transactions.
+/// defined in RFC 3261 for both client and server transactions, with the RFC 6026
+/// `Accepted` state for INVITE 2xx response handling.
 ///
 /// # States
 ///
@@ -39,29 +40,39 @@ pub type TransactionSender = UnboundedSender<Transaction>;
 /// * `Calling` - Initial state for client transactions when request is sent or received
 /// * `Trying` - Request has been sent/received, waiting for response/processing
 /// * `Proceeding` - Provisional response received/sent (1xx except 100 Trying)
-/// * `Completed` - Final response received/sent, waiting for ACK (INVITE) or cleanup
-/// * `Confirmed` - ACK received/sent for INVITE transactions
+/// * `Accepted` - INVITE transaction received/sent a 2xx final response (RFC 6026 §7.1/§7.2);
+///   server transaction waits for ACKs and absorbs 2xx retransmissions from the TU until
+///   Timer L fires; client transaction absorbs 2xx retransmissions from the server until
+///   Timer M fires.
+/// * `Completed` - Final non-2xx response received/sent (RFC 3261 §17), waiting for ACK (server INVITE)
+///   or response retransmissions (client). For INVITE 2xx, see `Accepted` (RFC 6026 supersedes RFC 3261 §17.2.1 paragraph 4 / §17.1.1.2).
+/// * `Confirmed` - ACK received/sent for INVITE non-2xx (3xx-6xx) transactions
 /// * `Terminated` - Transaction has completed and is being cleaned up
 ///
 /// # State Transitions
 ///
-/// ## Client Non-INVITE Transaction
+/// ## Client Non-INVITE Transaction (RFC 3261 §17.1.2)
 /// ```text
 /// Nothing → Calling → Trying → Proceeding → Completed → Terminated
 /// ```
 ///
-/// ## Client INVITE Transaction  
+/// ## Client INVITE Transaction (RFC 3261 §17.1.1 + RFC 6026 §7.2)
 /// ```text
-/// Nothing → Calling → Trying → Proceeding → Completed → Terminated
-///                                      ↓
-///                                   Confirmed → Terminated
+/// Nothing → Calling → Trying → Proceeding ──2xx──→ Accepted ──Timer M──→ Terminated
+///                                       │
+///                                       └──3xx-6xx──→ Completed → Confirmed → Terminated
 /// ```
 ///
-/// ## Server Transactions
+/// ## Server INVITE Transaction (RFC 3261 §17.2.1 + RFC 6026 §7.1)
+/// ```text
+/// Calling → Trying → Proceeding ──2xx──→ Accepted ──Timer L──→ Terminated
+///                              │
+///                              └──3xx-6xx──→ Completed ──ACK──→ Confirmed → Terminated
+/// ```
+///
+/// ## Server Non-INVITE Transaction (RFC 3261 §17.2.2)
 /// ```text
 /// Calling → Trying → Proceeding → Completed → Terminated
-///                           ↓
-///                         Confirmed → Terminated (INVITE only)
 /// ```
 ///
 /// # Examples
@@ -75,17 +86,28 @@ pub type TransactionSender = UnboundedSender<Transaction>;
 ///     TransactionState::Calling => println!("Request sent"),
 ///     TransactionState::Trying => println!("Request sent/received"),
 ///     TransactionState::Proceeding => println!("Provisional response"),
-///     TransactionState::Completed => println!("Final response"),
+///     TransactionState::Accepted => println!("2xx accepted; waiting for Timer L/M"),
+///     TransactionState::Completed => println!("Final non-2xx response"),
 ///     TransactionState::Confirmed => println!("ACK received/sent"),
 ///     TransactionState::Terminated => println!("Transaction complete"),
+///     // `#[non_exhaustive]`: downstream code MUST keep a wildcard arm to
+///     // remain forward-compatible with future state additions.
+///     _ => println!("future RFC-extension state"),
 /// }
 /// ```
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum TransactionState {
     Nothing,
     Calling,
     Trying,
     Proceeding,
+    /// RFC 6026 §7.1 (server) / §7.2 (client): an INVITE transaction has sent or received
+    /// a 2xx final response. The server absorbs 2xx retransmissions from the TU and waits
+    /// for ACK until Timer L (= 64*T1) fires; the client absorbs server-retransmitted 2xx
+    /// responses until Timer M (= 64*T1) fires. Replaces the RFC 3261 §17.1.1.2 / §17.2.1
+    /// behaviour that incorrectly routed 2xx through the `Completed` state.
+    Accepted,
     Completed,
     Confirmed,
     Terminated,
@@ -98,6 +120,7 @@ impl std::fmt::Display for TransactionState {
             TransactionState::Calling => write!(f, "Calling"),
             TransactionState::Trying => write!(f, "Trying"),
             TransactionState::Proceeding => write!(f, "Proceeding"),
+            TransactionState::Accepted => write!(f, "Accepted"),
             TransactionState::Completed => write!(f, "Completed"),
             TransactionState::Confirmed => write!(f, "Confirmed"),
             TransactionState::Terminated => write!(f, "Terminated"),
@@ -174,21 +197,22 @@ impl std::fmt::Display for TransactionType {
 /// SIP Transaction Timers
 ///
 /// `TransactionTimer` represents the various timers used in SIP transactions
-/// as defined in RFC 3261. These timers ensure reliable message delivery
-/// and proper transaction cleanup.
+/// as defined in RFC 3261 and RFC 6026. These timers ensure reliable message
+/// delivery and proper transaction cleanup.
 ///
 /// # Timer Types
 ///
 /// * `TimerA` - Retransmission timer for client transactions (unreliable transport)
 /// * `TimerB` - Transaction timeout timer for client transactions
+/// * `TimerC` - Proceeding timeout for client INVITE
 /// * `TimerD` - Wait timer for response retransmissions (client)
-/// * `TimerE` - Retransmission timer for non-INVITE server transactions
-/// * `TimerF` - Transaction timeout timer for non-INVITE server transactions
-/// * `TimerK` - Wait timer for ACK (server INVITE transactions)
-/// * `TimerG` - Retransmission timer for INVITE server transactions
+/// * `TimerK` - Wait timer for ACK (server INVITE non-2xx) / cleanup (client non-INVITE)
+/// * `TimerG` - Retransmission timer for INVITE server transactions (non-2xx only per RFC 6026 §7.1)
+/// * `TimerL` - RFC 6026 §7.1 server INVITE Accepted-state timer (64*T1)
+/// * `TimerM` - RFC 6026 §7.2 client INVITE Accepted-state timer (64*T1)
 /// * `TimerCleanup` - Internal cleanup timer for transaction removal
 ///
-/// # Timer Values (RFC 3261)
+/// # Timer Values (RFC 3261 + RFC 6026)
 ///
 /// * T1 = 500ms (RTT estimate)
 /// * T2 = 4s (maximum retransmit interval)
@@ -200,8 +224,10 @@ impl std::fmt::Display for TransactionType {
 /// * Timer D: 32 seconds for unreliable, 0 for reliable transports
 /// * Timer E: starts at T1, doubles up to T2
 /// * Timer F: 64*T1 (32 seconds)
-/// * Timer G: starts at T1, doubles up to T2
+/// * Timer G: starts at T1, doubles up to T2 (non-2xx final response retransmits only)
 /// * Timer K: T4 for unreliable, 0 for reliable transports
+/// * **Timer L: 64*T1 (32 seconds) — RFC 6026 §7.1**
+/// * **Timer M: 64*T1 (32 seconds) — RFC 6026 §7.2**
 ///
 /// # Examples
 ///
@@ -233,6 +259,9 @@ impl std::fmt::Display for TransactionType {
 ///     TransactionTimer::TimerB(key) => {
 ///         println!("Transaction {} timed out", key);
 ///     },
+///     // `#[non_exhaustive]`: downstream code MUST keep a wildcard arm to
+///     // remain forward-compatible with future timer additions (e.g. RFC
+///     // extensions like Timer L / Timer M / future RFC variants).
 ///     _ => {}
 /// }
 /// # Ok(())
@@ -246,6 +275,7 @@ impl std::fmt::Display for TransactionType {
 /// * Cancelled when leaving states or receiving responses
 /// * Fire events that drive state machine transitions
 /// * Handle retransmissions and timeouts
+#[non_exhaustive]
 pub enum TransactionTimer {
     TimerA(TransactionKey, Duration),
     TimerB(TransactionKey),
@@ -253,6 +283,17 @@ pub enum TransactionTimer {
     TimerD(TransactionKey),
     TimerK(TransactionKey),
     TimerG(TransactionKey, Duration),
+    /// RFC 6026 §7.1: server INVITE Accepted-state timer. Fires once at 64*T1
+    /// after a 2xx final response is sent, then transitions the transaction to
+    /// Terminated. Absorbs ACKs for the 2xx and late 2xx retransmissions from
+    /// the TU. Replaces the RFC 3261 §17.2.1 Timer K (T4) usage for 2xx
+    /// responses, which was too short to handle proxy-chain ACK fan-in.
+    TimerL(TransactionKey),
+    /// RFC 6026 §7.2: client INVITE Accepted-state timer. Fires once at 64*T1
+    /// after a 2xx final response is received, then transitions the
+    /// transaction to Terminated. Absorbs server-retransmitted 2xx responses
+    /// (the TU is responsible for the ACK).
+    TimerM(TransactionKey),
     TimerCleanup(TransactionKey),
 }
 
@@ -265,6 +306,8 @@ impl TransactionTimer {
             TransactionTimer::TimerD(key) => key,
             TransactionTimer::TimerG(key, _) => key,
             TransactionTimer::TimerK(key) => key,
+            TransactionTimer::TimerL(key) => key,
+            TransactionTimer::TimerM(key) => key,
             TransactionTimer::TimerCleanup(key) => key,
         }
     }
@@ -283,6 +326,8 @@ impl std::fmt::Display for TransactionTimer {
                 write!(f, "TimerG: {} {}", key, duration.as_millis())
             }
             TransactionTimer::TimerK(key) => write!(f, "TimerK: {}", key),
+            TransactionTimer::TimerL(key) => write!(f, "TimerL: {}", key),
+            TransactionTimer::TimerM(key) => write!(f, "TimerM: {}", key),
             TransactionTimer::TimerCleanup(key) => write!(f, "TimerCleanup: {}", key),
         }
     }
