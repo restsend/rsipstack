@@ -3,7 +3,7 @@ use crate::sip::headers::auth::{Algorithm, AuthQop, Qop};
 use crate::sip::prelude::{HasHeaders, HeadersExt, ToTypedHeader};
 use crate::sip::typed::{Authorization, ProxyAuthorization};
 use crate::sip::DigestGenerator;
-use crate::sip::{Header, Method, Param, Response};
+use crate::sip::{Header, Method, Param, Response, StatusCode};
 use crate::transaction::key::{TransactionKey, TransactionRole};
 use crate::transaction::transaction::Transaction;
 use crate::transaction::{make_via_branch, random_text, CNONCE_LEN};
@@ -190,18 +190,40 @@ pub async fn handle_client_authenticate(
     resp: Response,
     cred: &Credential,
 ) -> Result<Transaction> {
-    let header = match resp.www_authenticate_header() {
-        Some(h) => Header::WwwAuthenticate(h.clone()),
+    // RFC 3261 ties the authentication mechanism to the status code:
+    //   - 407 Proxy Authentication Required -> Proxy-Authenticate (§22.27),
+    //     answered with Proxy-Authorization (§22.28)
+    //   - 401 Unauthorized                  -> WWW-Authenticate (§22.31),
+    //     answered with Authorization (§22.3)
+    // We therefore select the challenge header by status code rather than by
+    // which header happens to appear first: some servers (e.g. rustpbx) emit
+    // both WWW-Authenticate and Proxy-Authenticate in a 407, and choosing by
+    // header order would wrongly answer a 407 with Authorization.
+    let code = resp.status_code.clone();
+    let use_proxy = matches!(code, StatusCode::ProxyAuthenticationRequired);
+    let www_header = resp.www_authenticate_header();
+    let proxy_header = crate::sip_header_opt!(resp.headers().iter(), Header::ProxyAuthenticate);
+
+    let header = if use_proxy {
+        proxy_header
+            .cloned()
+            .map(Header::ProxyAuthenticate)
+            .or_else(|| www_header.cloned().map(Header::WwwAuthenticate))
+    } else {
+        www_header
+            .cloned()
+            .map(Header::WwwAuthenticate)
+            .or_else(|| proxy_header.cloned().map(Header::ProxyAuthenticate))
+    };
+
+    let header = match header {
+        Some(h) => h,
         None => {
-            let code = resp.status_code.clone();
-            let proxy_header =
-                crate::sip_header_opt!(resp.headers().iter(), Header::ProxyAuthenticate);
-            let proxy_header = proxy_header.ok_or(crate::Error::DialogError(
+            return Err(crate::Error::DialogError(
                 "missing proxy/www authenticate".to_string(),
                 DialogId::try_from(tx)?,
-                code,
-            ))?;
-            Header::ProxyAuthenticate(proxy_header.clone())
+                resp.status_code.clone(),
+            ));
         }
     };
 
