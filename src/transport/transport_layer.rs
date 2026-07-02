@@ -8,7 +8,7 @@ use crate::transport::connection::TransportReceiver;
 use crate::{transport::TransportEvent, Result};
 use async_trait::async_trait;
 use parking_lot::{Mutex, RwLock};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::Arc;
 use tokio::select;
@@ -100,6 +100,7 @@ impl DomainResolver for DefaultDomainResolver {
 pub struct TransportLayerInner {
     pub(crate) cancel_token: CancellationToken,
     listens: Arc<RwLock<Vec<SipConnection>>>, // listening transports
+    served_listens: Mutex<HashSet<SipAddr>>,  // addresses already being served
     connections: Arc<RwLock<HashMap<SipAddr, SipConnection>>>, // outbound/inbound connections
     pub(crate) transport_tx: TransportSender,
     pub(crate) transport_rx: Mutex<Option<TransportReceiver>>,
@@ -124,6 +125,7 @@ impl TransportLayer {
         let inner = TransportLayerInner {
             cancel_token,
             listens: Arc::new(RwLock::new(Vec::new())),
+            served_listens: Mutex::new(HashSet::new()),
             connections: Arc::new(RwLock::new(HashMap::new())),
             transport_tx,
             transport_rx: Mutex::new(Some(transport_rx)),
@@ -166,6 +168,10 @@ impl TransportLayer {
         self.inner.lookup(target, self.outbound.as_ref(), key).await
     }
 
+    /// Serve all registered listeners. Idempotent: listeners whose address is
+    /// already being served are skipped, so calling this explicitly before
+    /// `Endpoint::serve()` (which also calls it) does not attempt a duplicate
+    /// bind that would fail with AddrInUse.
     pub async fn serve_listens(&self) -> Result<()> {
         let listens = self.inner.listens.read().clone();
         for transport in listens {
@@ -246,6 +252,7 @@ impl TransportLayerInner {
 
     pub(super) fn del_listener(&self, addr: &SipAddr) {
         self.listens.write().retain(|t| t.get_addr() != addr);
+        self.served_listens.lock().remove(addr);
     }
 
     pub(super) fn add_connection(&self, connection: SipConnection) {
@@ -354,8 +361,13 @@ impl TransportLayerInner {
     }
 
     pub(super) async fn serve_listener(self: Arc<Self>, transport: SipConnection) -> Result<()> {
+        let addr = transport.get_addr().clone();
+        if !self.served_listens.lock().insert(addr.clone()) {
+            debug!(%addr, "listener already served, skipping");
+            return Ok(());
+        }
         let sender = self.transport_tx.clone();
-        match transport {
+        let result = match transport {
             SipConnection::Udp(transport) => {
                 let transport_layer_inner = self.clone();
                 tokio::spawn(async move {
@@ -380,7 +392,11 @@ impl TransportLayerInner {
                 );
                 Ok(())
             }
+        };
+        if result.is_err() {
+            self.served_listens.lock().remove(&addr);
         }
+        result
     }
 
     pub fn serve_connection(&self, transport: SipConnection) {
@@ -428,7 +444,7 @@ mod tests {
     use crate::sip::uri::ParamsExt;
     use crate::sip::{Host, HostWithPort, Transport};
     use crate::{
-        transport::{udp::UdpConnection, SipAddr},
+        transport::{tcp_listener::TcpListenerConnection, udp::UdpConnection, SipAddr},
         Result,
     };
 
@@ -551,6 +567,44 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
         drop(tl);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_serve_listener_is_idempotent() -> Result<()> {
+        let tl = super::TransportLayer::new(tokio_util::sync::CancellationToken::new());
+
+        // Reserve a concrete port so a duplicate bind on it would fail
+        let probe = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let local_addr = probe.local_addr()?;
+        drop(probe);
+
+        let listener = TcpListenerConnection::new(
+            SipAddr {
+                r#type: Some(Transport::Tcp),
+                addr: local_addr.into(),
+            },
+            None,
+        )
+        .await?;
+        let connection: super::SipConnection = listener.into();
+        tl.add_transport(connection.clone());
+
+        // First serve binds the listener
+        super::TransportLayerInner::serve_listener(tl.inner.clone(), connection.clone()).await?;
+
+        // Serving the same listener again must be a no-op instead of a
+        // second bind that fails with AddrInUse
+        super::TransportLayerInner::serve_listener(tl.inner.clone(), connection.clone()).await?;
+
+        // The listener must still accept connections
+        tokio::net::TcpStream::connect(local_addr).await?;
+
+        // Removing the listener frees its address for a future serve
+        tl.del_transport(connection.get_addr());
+        assert!(tl.inner.served_listens.lock().is_empty());
+
+        drop(tl);
         Ok(())
     }
 }
