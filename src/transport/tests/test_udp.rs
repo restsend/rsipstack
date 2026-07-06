@@ -86,3 +86,58 @@ async fn test_udp_recv_sip_message() -> Result<()> {
     };
     Ok(())
 }
+
+#[tokio::test]
+async fn test_udp_recv_binary_body_sip_message() -> Result<()> {
+    let peer_bob = UdpConnection::create_connection("127.0.0.1:0".parse()?, None, None).await?;
+    let peer_alice = UdpConnection::create_connection("127.0.0.1:0".parse()?, None, None).await?;
+    let (bob_tx, mut bob_rx) = unbounded_channel();
+
+    let send_loop = async {
+        sleep(Duration::from_millis(20)).await;
+        let mut datagram = b"MESSAGE sip:bob@example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP 192.0.2.1:5060;branch=z9hG4bK1\r\n\
+CSeq: 1 MESSAGE\r\n\
+Content-Type: application/isup\r\n\
+Content-Length: 3\r\n\r\n"
+            .to_vec();
+        datagram.extend_from_slice(&[0x00, 0x91, 0x01]);
+        assert!(std::str::from_utf8(&datagram).is_err());
+
+        peer_alice
+            .send_raw(&datagram, peer_bob.get_addr())
+            .await
+            .expect("send_raw");
+        sleep(Duration::from_secs(3)).await;
+    };
+
+    select! {
+        _ = peer_bob.serve_loop(bob_tx) => {
+            assert!(false, "bob serve_loop exited");
+        }
+        _ = send_loop => {}
+        event = bob_rx.recv() => {
+            match event {
+                Some(TransportEvent::Incoming(msg, _, from)) => {
+                    assert!(msg.is_request());
+                    assert_eq!(from, peer_alice.get_addr().to_owned());
+                    match msg {
+                        crate::sip::SipMessage::Request(req) => {
+                            assert_eq!(req.body, vec![0x00, 0x91, 0x01]);
+                        }
+                        crate::sip::SipMessage::Response(_) => {
+                            assert!(false, "expected request");
+                        }
+                    }
+                }
+                _ => {
+                    assert!(false, "unexpected event");
+                }
+            }
+        }
+        _= sleep(Duration::from_millis(500)) => {
+            assert!(false, "timeout waiting for binary body message");
+        }
+    };
+    Ok(())
+}
