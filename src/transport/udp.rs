@@ -126,39 +126,30 @@ impl UdpConnection {
                 }
             }
 
-            match &buf[..len] {
+            let packet = &buf[..len];
+
+            match packet {
                 KEEPALIVE_REQUEST => {
                     self.inner.conn.send_to(KEEPALIVE_RESPONSE, addr).await.ok();
                     continue;
                 }
                 KEEPALIVE_RESPONSE => continue,
                 _ => {
-                    if buf.iter().all(|&b| b.is_ascii_whitespace()) {
+                    if packet.iter().all(|&b| b.is_ascii_whitespace()) {
                         continue;
                     }
                 }
             }
 
-            let undecoded = match std::str::from_utf8(&buf[..len]) {
-                Ok(s) => s,
-                Err(e) => {
-                    debug!(
-                        src = %addr,
-                        error = %e,
-                        buf = ?&buf[..len],
-                        "decoding text error"
-                    );
-                    continue;
-                }
-            };
+            let raw_message = String::from_utf8_lossy(packet);
 
-            let msg = match crate::sip::SipMessage::try_from(undecoded) {
+            let msg = match crate::sip::SipMessage::try_from(packet) {
                 Ok(msg) => msg,
                 Err(e) => {
                     debug!(
                         src = %addr,
                         error = %e,
-                        raw_message = %undecoded,
+                        raw_message = %raw_message,
                         "error parsing SIP message"
                     );
                     continue;
@@ -175,14 +166,14 @@ impl UdpConnection {
                     debug!(
                         src = %addr,
                         error = ?e,
-                        raw_message = %undecoded,
+                        raw_message = %raw_message,
                         "error updating SIP via"
                     );
                     continue;
                 }
             };
 
-            debug!(len, src=%addr, dest=%self.get_addr(), raw_message=undecoded, "udp received");
+            debug!(len, src=%addr, dest=%self.get_addr(), raw_message = %raw_message, "udp received");
 
             let from = SipAddr {
                 r#type: Some(crate::sip::transport::Transport::Udp),
