@@ -11,6 +11,7 @@ mod timer;
 pub mod transaction;
 pub use endpoint::Endpoint;
 pub use endpoint::EndpointBuilder;
+pub use endpoint::EndpointOption;
 #[cfg(test)]
 mod tests;
 

@@ -1,4 +1,4 @@
-use super::{endpoint::Endpoint, EndpointBuilder};
+use super::{endpoint::Endpoint, EndpointBuilder, EndpointOption};
 use crate::{
     transport::{udp::UdpConnection, TransportLayer},
     Result,
@@ -23,6 +23,26 @@ pub(super) async fn create_test_endpoint(addr: Option<&str>) -> Result<Endpoint>
     let endpoint = EndpointBuilder::new()
         .with_user_agent("rsipstack-test")
         .with_transport_layer(tl)
+        .build();
+    Ok(endpoint)
+}
+
+pub(super) async fn create_test_proxy_endpoint(addr: Option<&str>) -> Result<Endpoint> {
+    let token = CancellationToken::new();
+    let tl = TransportLayer::new(token.child_token());
+
+    if let Some(addr) = addr {
+        let peer = UdpConnection::create_connection(addr.parse()?, None, None).await?;
+        tl.add_transport(peer.into());
+    }
+
+    let endpoint = EndpointBuilder::new()
+        .with_user_agent("rsipstack-test")
+        .with_transport_layer(tl)
+        .with_option(EndpointOption {
+            proxy_mode: true,
+            ..Default::default()
+        })
         .build();
     Ok(endpoint)
 }

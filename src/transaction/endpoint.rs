@@ -43,6 +43,11 @@ pub struct EndpointOption {
     pub t1x64: Duration,
     pub timerc: Duration,
     pub callid_suffix: Option<String>,
+    /// Act as a proxy rather than a UA for INVITE ACK handling: don't auto-ACK a 2xx on
+    /// the client transaction, don't absorb the ACK on the server transaction, and deliver
+    /// otherwise-unmatched ACKs to the application so it can forward them. Default `false`
+    /// (UA behavior unchanged).
+    pub proxy_mode: bool,
 }
 
 impl Default for EndpointOption {
@@ -53,6 +58,7 @@ impl Default for EndpointOption {
             t1x64: Duration::from_millis(64 * 500),
             timerc: Duration::from_secs(180),
             callid_suffix: None,
+            proxy_mode: false,
         }
     }
 }
@@ -475,7 +481,9 @@ impl EndpointInner {
                 connection.send(resp, dest.as_ref()).await?;
                 return Ok(());
             }
-            crate::sip::Method::Ack => return Ok(()),
+            // A UA has nothing to do with an ACK that matches no transaction. A proxy must
+            // forward it (a 2xx ACK is a fresh end-to-end request), so deliver it to the TU.
+            crate::sip::Method::Ack if !self.option.proxy_mode => return Ok(()),
             _ => {}
         }
 

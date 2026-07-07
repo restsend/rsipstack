@@ -112,3 +112,62 @@ async fn test_endpoint_recvrequests() {
         }
     }
 }
+
+// In proxy mode an ACK that matches no transaction must be delivered to the application
+// so it can be forwarded (a 2xx ACK is a fresh end-to-end request). A UA drops it.
+#[tokio::test]
+async fn test_proxy_mode_delivers_unmatched_ack() {
+    let endpoint = super::create_test_proxy_endpoint(Some("127.0.0.1:0"))
+        .await
+        .expect("create_test_proxy_endpoint");
+    let addr = endpoint.get_addrs().get(0).expect("addr").to_owned();
+
+    let send_loop = async {
+        let test_conn = crate::transport::udp::UdpConnection::create_connection(
+            "127.0.0.1:0".parse().unwrap(),
+            None,
+            None,
+        )
+        .await
+        .expect("create_connection");
+        let ack = crate::sip::message::Request {
+            method: crate::sip::method::Method::Ack,
+            uri: crate::sip::Uri::try_from("sip:bob@example.com").expect("uri"),
+            headers: vec![
+                Via::new("SIP/2.0/UDP 127.0.0.1:5060;branch=z9hG4bKproxyack").into(),
+                CSeq::new("1 ACK").into(),
+                From::new("<sip:alice@example.com>;tag=from-tag").into(),
+                To::new("<sip:bob@example.com>;tag=to-tag").into(),
+                CallId::new("proxy-ack@example.com").into(),
+                MaxForwards::new("70").into(),
+            ]
+            .into(),
+            version: crate::sip::Version::V2,
+            body: Default::default(),
+        };
+        let buf: String = ack.try_into().expect("try_into");
+        test_conn.send_raw(buf.as_bytes(), &addr).await.expect("send_raw");
+        sleep(Duration::from_secs(1)).await;
+    };
+
+    let incoming_loop = async {
+        let mut incoming = endpoint
+            .incoming_transactions()
+            .expect("incoming_transactions");
+        incoming.recv().await.expect("incoming").original.clone()
+    };
+
+    select! {
+        _ = send_loop => {
+            assert!(false, "ACK was not delivered to the application (dropped?)");
+        }
+        _ = endpoint.serve() => {}
+        req = incoming_loop => {
+            assert_eq!(
+                req.method,
+                crate::sip::method::Method::Ack,
+                "proxy mode must deliver an unmatched ACK to the application"
+            );
+        }
+    }
+}

@@ -685,7 +685,10 @@ impl Transaction {
 
         self.transition(new_state).ok();
 
-        if is_completed_client_invite {
+        // In proxy mode we forward the UAC's own ACK end-to-end rather than generating one
+        // here (which would use the dialog route set — for a record-routing proxy that
+        // includes our own address, looping the ACK back).
+        if is_completed_client_invite && !self.endpoint_inner.option.proxy_mode {
             self.send_ack(connection).await.ok();
         }
 
@@ -865,11 +868,15 @@ impl Transaction {
                         self.timer_g.replace(timer_g);
                     }
                     debug!(key=%self.key, last = self.last_response.is_none(), "entered confirmed state, waiting for ACK");
+                    // In proxy mode a 2xx ACK is forwarded end-to-end by the TU, not absorbed
+                    // here, so don't claim the dialog's ACK for this server transaction.
                     if let Some(ref resp) = self.last_response {
-                        let dialog_id = DialogId::try_from((resp, TransactionRole::Server))?;
-                        self.endpoint_inner
-                            .waiting_ack
-                            .insert(dialog_id, self.key.clone());
+                        if !self.endpoint_inner.option.proxy_mode {
+                            let dialog_id = DialogId::try_from((resp, TransactionRole::Server))?;
+                            self.endpoint_inner
+                                .waiting_ack
+                                .insert(dialog_id, self.key.clone());
+                        }
                     }
                     // start Timer K, wait for ACK
                     let timer_k = self.endpoint_inner.timers.timeout(
