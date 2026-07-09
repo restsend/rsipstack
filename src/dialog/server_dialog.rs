@@ -8,7 +8,7 @@ use crate::{
 };
 use std::sync::atomic::Ordering;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 /// Server-side INVITE Dialog (UAS)
 ///
@@ -361,9 +361,12 @@ impl ServerInviteDialog {
             self.inner
                 .make_request(crate::sip::Method::Bye, None, None, None, headers, None)?;
 
+        if let Err(e) = self.inner.do_request(request).await {
+            info!(error = %e, "bye error");
+        }
         self.inner
             .transition(DialogState::Terminated(self.id(), TerminatedReason::UasBye))?;
-        self.inner.do_request(request).await.map(|_| ())
+        Ok(())
     }
 
     /// Send a BYE request with a SIP `Reason` header.
