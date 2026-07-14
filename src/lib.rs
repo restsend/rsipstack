@@ -208,7 +208,13 @@
 //!
 //! * **RFC 3261** - SIP: Session Initiation Protocol (core specification)
 //! * **RFC 3581** - Symmetric Response Routing (rport)
-//! * **RFC 6026** - Correct Transaction Handling for 2xx Responses to INVITE
+//! * **RFC 6026** - Correct Transaction Handling for 2xx Responses to INVITE.
+//!   Server `Accepted` state + Timer L (§7.1); client `Accepted` state + Timer M
+//!   (§7.2); server transactions do not retransmit 2xx (§7.1). Client-side ACK
+//!   for 2xx is currently auto-issued by the transaction layer for rsipstack
+//!   0.5.x backward compatibility — strict §7.2 + RFC 3261 §17.1.1.3 places
+//!   that responsibility on the TU and the auto-ACK is a candidate for
+//!   migration to the dialog layer in a follow-up release.
 //!
 //! ## Performance
 //!
