@@ -485,6 +485,21 @@ impl DialogLayer {
     /// * Transaction timeouts
     /// * Protocol violations
     ///
+    /// # Important: Cleanup Required
+    ///
+    /// When a 2xx response is received, the confirmed dialog is registered in
+    /// the internal dialog registry. **The caller is responsible for removing it**
+    /// after the dialog terminates by calling [`DialogLayer::remove_dialog`]
+    /// with the dialog's [`DialogId`].
+    ///
+    /// The recommended pattern is to listen for
+    /// [`DialogState::Terminated`](crate::dialog::dialog::DialogState::Terminated)
+    /// on the `state_sender` channel and call `remove_dialog` when received.
+    /// See the "Monitoring Dialog State" example above.
+    ///
+    /// Failure to call `remove_dialog` will cause the dialog to remain in the
+    /// registry indefinitely, resulting in a memory leak.
+    ///
     /// # Authentication
     ///
     /// If credentials are provided in the options, the method will
@@ -540,12 +555,25 @@ impl DialogLayer {
         }
     }
 
-    // Asynchronously executes an INVITE transaction in the background.
+    /// Asynchronously executes an INVITE transaction in the background.
     ///
     /// Registers the dialog under an early dialog ID while the INVITE is in progress.
     /// Once completed, the early entry is removed and, on 2xx response,
     /// the dialog is re-registered under the confirmed dialog ID.
     /// Returns a JoinHandle resolving to the final dialog ID and response.
+    ///
+    /// # Important: Cleanup Required
+    ///
+    /// On a successful (2xx) response the confirmed dialog is registered in
+    /// the internal dialog registry. **The caller must remove it** after the
+    /// dialog terminates by calling [`DialogLayer::remove_dialog`] with the
+    /// confirmed dialog's [`DialogId`].
+    ///
+    /// Listen for
+    /// [`DialogState::Terminated`](crate::dialog::dialog::DialogState::Terminated)
+    /// on the `state_sender` channel and call `remove_dialog` when received.
+    /// Failure to do so will keep the dialog in the registry and cause a
+    /// memory leak.
     pub fn do_invite_async(
         self: &Arc<Self>,
         opt: InviteOption,
