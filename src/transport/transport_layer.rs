@@ -7,8 +7,8 @@ use crate::transaction::key::TransactionKey;
 use crate::transport::connection::TransportReceiver;
 use crate::{transport::TransportEvent, Result};
 use async_trait::async_trait;
+use dashmap::DashMap;
 use parking_lot::{Mutex, RwLock};
-use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Arc;
 use tokio::select;
@@ -100,7 +100,7 @@ impl DomainResolver for DefaultDomainResolver {
 pub struct TransportLayerInner {
     pub(crate) cancel_token: CancellationToken,
     listens: Arc<RwLock<Vec<SipConnection>>>, // listening transports
-    connections: Arc<RwLock<HashMap<SipAddr, SipConnection>>>, // outbound/inbound connections
+    connections: Arc<DashMap<SipAddr, SipConnection>>, // outbound/inbound connections
     pub(crate) transport_tx: TransportSender,
     pub(crate) transport_rx: Mutex<Option<TransportReceiver>>,
     pub domain_resolver: Box<dyn DomainResolver>,
@@ -124,7 +124,7 @@ impl TransportLayer {
         let inner = TransportLayerInner {
             cancel_token,
             listens: Arc::new(RwLock::new(Vec::new())),
-            connections: Arc::new(RwLock::new(HashMap::new())),
+            connections: Arc::new(DashMap::new()),
             transport_tx,
             transport_rx: Mutex::new(Some(transport_rx)),
             domain_resolver,
@@ -188,8 +188,7 @@ impl TransportLayer {
             .iter()
             .map(|t| t.get_addr().to_owned())
             .collect();
-        let connections = self.inner.connections.read();
-        for conn in connections.values() {
+        for conn in self.inner.connections.iter() {
             addrs.push(conn.get_addr().clone());
         }
         addrs
@@ -250,9 +249,8 @@ impl TransportLayerInner {
 
     pub(super) fn add_connection(&self, connection: SipConnection) {
         if let Some(remote_addr) = connection.get_remote_addr().cloned() {
-            let mut connections = self.connections.write();
-            connections.insert(remote_addr, connection.clone());
-            drop(connections);
+            debug!(%remote_addr, "add_connection");
+            self.connections.insert(remote_addr, connection.clone());
             self.serve_connection(connection);
         } else {
             warn!(addr = %connection.get_addr(), "connection has no remote address");
@@ -260,7 +258,8 @@ impl TransportLayerInner {
     }
 
     pub(super) fn del_connection(&self, addr: &SipAddr) {
-        self.connections.write().remove(addr);
+        debug!(%addr, "del_connection");
+        self.connections.remove(addr);
     }
 
     async fn lookup(
@@ -285,11 +284,8 @@ impl TransportLayerInner {
         };
 
         debug!(?key, src = %destination, %target, "lookup target");
-        {
-            let connections = self.connections.read();
-            if let Some(transport) = connections.get(target) {
-                return Ok((transport.clone(), target.clone()));
-            }
+        if let Some(transport) = self.connections.get(target) {
+            return Ok((transport.clone(), target.clone()));
         }
         if let Some(Transport::Tcp | Transport::Tls | Transport::Ws | Transport::Wss) =
             target.r#type
