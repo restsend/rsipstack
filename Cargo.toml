@@ -9,7 +9,14 @@ readme = "README.md"
 keywords = ["sip", "voip", "telephony", "sipstack"]
 authors = ["jinti<shenjindi@fourz.cn>"]
 categories = ["network-programming", "multimedia"]
-exclude = ["examples/"]
+exclude = [
+    "examples/",
+    "assets/*",
+    ".github/*",
+    "Dockerfile*",
+    ".dockerignore",
+    "flake.lock",
+]
 
 
 [lib]
