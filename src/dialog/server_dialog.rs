@@ -362,7 +362,7 @@ impl ServerInviteDialog {
                 .make_request(crate::sip::Method::Bye, None, None, None, headers, None)?;
 
         if let Err(e) = self.inner.do_request(request).await {
-            info!(error = %e, "bye error");
+            info!(dialog_id = %self.id(), error = %e, "bye error");
         }
         self.inner
             .transition(DialogState::Terminated(self.id(), TerminatedReason::UasBye))?;
