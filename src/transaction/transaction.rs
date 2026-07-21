@@ -11,7 +11,7 @@ use crate::transaction::make_tag;
 use crate::transport::SipAddr;
 use crate::{Error, Result};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use tracing::{debug, trace};
+use tracing::{debug, trace, warn};
 
 pub type TransactionEventReceiver = UnboundedReceiver<TransactionEvent>;
 pub type TransactionEventSender = UnboundedSender<TransactionEvent>;
@@ -262,35 +262,26 @@ impl Transaction {
             }
         }
 
-        if self.connection.is_none() {
-            let target_uri = match &self.destination {
-                Some(addr) => addr,
-                None => {
-                    if let Some(locator) = self.endpoint_inner.locator.as_ref() {
-                        &locator.locate(&self.original.uri).await?
-                    } else {
-                        &SipAddr::try_from(&self.original.uri)?
-                    }
-                }
-            };
+        let lookup_result = if self.connection.is_none() {
+            let target_uri = self.resolve_target_uri().await?;
 
-            let (connection, resolved_addr) = self
-                .endpoint_inner
-                .transport_layer
-                .lookup(target_uri, Some(&self.key))
-                .await?;
-            // Store the resolved destination address for all transports so
-            // that before_send inspectors and sipflow recording have the
-            // correct dst_addr (reliable connections like WebSocket already
-            // know where to send, but still need this for logging).
-            self.destination.replace(resolved_addr);
-            self.connection.replace(connection);
+            Some(
+                self.endpoint_inner
+                    .transport_layer
+                    .lookup(&target_uri, Some(&self.key))
+                    .await,
+            )
+        } else {
+            None
+        };
+
+        // Apply successful lookup result before before_send
+        // so inspectors see the resolved destination address
+        if let Some(Ok((connection, resolved_addr))) = &lookup_result {
+            self.connection.replace(connection.clone());
+            self.destination.replace(resolved_addr.clone());
         }
 
-        let connection = self.connection.as_ref().ok_or(Error::TransactionError(
-            "no connection found".to_string(),
-            self.key.clone(),
-        ))?;
         let content_length_header =
             Header::ContentLength(ContentLength::from(self.original.body().len() as u32));
         self.original
@@ -303,8 +294,43 @@ impl Transaction {
             self.original.to_owned().into()
         };
 
-        connection.send(message, self.destination.as_ref()).await?;
+        // Try to send if we have a connection; log errors instead of returning
+        // so the transaction always enters the state machine (Calling) and
+        // timers (Timer A / Timer B) handle retries and timeouts.
+        if let Some(connection) = self.connection.as_ref() {
+            if let Err(e) = connection.send(message, self.destination.as_ref()).await {
+                warn!(key = %self.key, error = %e, "send failed");
+            }
+        } else {
+            debug!(key = %self.key, "no connection, will retry on timer");
+        }
+
+        // Always transition to Calling — the transaction enters the state machine
+        // even when transport is unavailable. Timer A will retry the send (and
+        // redo the transport lookup if needed), and Timer B handles timeout.
         self.transition(TransactionState::Calling).map(|_| ())
+    }
+
+    /// Resolve the target URI for sending a request.
+    ///
+    /// Uses the same rule as `send()`: if `self.destination` is set, use it;
+    /// otherwise consult the locator, then fall back to the request URI.
+    /// Resolve the target URI for sending a request.
+    ///
+    /// Priority: self.destination (pre-set by dialog) >
+    /// Request::destination() (first Route or request URI) + locator fallback.
+    async fn resolve_target_uri(&self) -> Result<SipAddr> {
+        match &self.destination {
+            Some(addr) => Ok(addr.clone()),
+            None => {
+                let dest = self.original.destination();
+                if let Some(locator) = self.endpoint_inner.locator.as_ref() {
+                    locator.locate(&dest).await
+                } else {
+                    SipAddr::try_from(&dest)
+                }
+            }
+        }
     }
 
     pub async fn reply_with(
@@ -445,7 +471,7 @@ impl Transaction {
         }
     }
 
-    pub async fn send_ack(&mut self, connection: Option<SipConnection>) -> Result<()> {
+    pub async fn send_ack(&mut self, mut connection: Option<SipConnection>) -> Result<()> {
         if self.transaction_type != TransactionType::ClientInvite {
             return Err(Error::TransactionError(
                 "send_ack is only valid for client invite transactions".to_string(),
@@ -475,29 +501,40 @@ impl Transaction {
             },
         };
 
-        let mut connection = connection;
+        // Capture locator + transport lookup result
+        // so before_send is called regardless of lookup outcome
         if let Some(resp) = self.last_response.as_ref() {
             if resp.status_code.kind() == StatusCodeKind::Successful {
                 // 2xx response, set destination from request
-                let target = {
-                    let target = ack.destination();
-                    if let Some(locator) = self.endpoint_inner.locator.as_ref() {
-                        Some(locator.locate(&target).await?)
-                    } else {
-                        (&target).try_into().ok()
-                    }
+                let target = ack.destination();
+                let addr = match self.endpoint_inner.locator.as_ref() {
+                    Some(locator) => match locator.locate(&target).await {
+                        Ok(addr) => Some(addr),
+                        Err(e) => {
+                            warn!(key = %self.key, error = %e, "ack locator failed");
+                            None
+                        }
+                    },
+                    None => (&target).try_into().ok(),
                 };
-                if let Some(addr) = target {
-                    let (via_connection, resolved_addr) = self
+                if let Some(addr) = addr {
+                    match self
                         .endpoint_inner
                         .transport_layer
                         .lookup(&addr, Some(&self.key))
-                        .await?;
-                    // For UDP, we need to store the resolved destination address
-                    if !via_connection.is_reliable() {
-                        self.destination.replace(resolved_addr);
+                        .await
+                    {
+                        Ok((via_connection, resolved_addr)) => {
+                            // For UDP, we need to store the resolved destination address
+                            if !via_connection.is_reliable() {
+                                self.destination.replace(resolved_addr);
+                            }
+                            connection = Some(via_connection);
+                        }
+                        Err(e) => {
+                            warn!(key = %self.key, error = %e, "ack lookup failed");
+                        }
                     }
-                    connection = Some(via_connection);
                 }
             }
         }
@@ -509,11 +546,18 @@ impl Transaction {
         };
 
         match ack.clone() {
-            SipMessage::Request(ack) => self.last_ack.replace(ack),
+            SipMessage::Request(ref ack_req) => self.last_ack.replace(ack_req.clone()),
             _ => None,
         };
-        if let Some(conn) = connection {
-            conn.send(ack, self.destination.as_ref()).await?;
+
+        // Try to send if we have a connection; log errors instead of propagating
+        // so the transaction always transitions to Terminated.
+        if let Some(ref conn) = connection {
+            if let Err(e) = conn.send(ack, self.destination.as_ref()).await {
+                warn!(key = %self.key, error = %e, "ack send failed");
+            }
+        } else {
+            debug!(key = %self.key, "no connection for ack");
         }
         // client send ack and transition to Terminated
         self.transition(TransactionState::Terminated).map(|_| ())
@@ -632,11 +676,11 @@ impl Transaction {
                     self.respond(last_response.to_owned()).await.ok();
                 }
             }
-            TransactionState::Completed | TransactionState::Confirmed => {
-                if req.method == Method::Ack {
-                    self.transition(TransactionState::Confirmed).ok();
-                    return Some(req.into());
-                }
+            TransactionState::Completed | TransactionState::Confirmed
+                if req.method == Method::Ack =>
+            {
+                self.transition(TransactionState::Confirmed).ok();
+                return Some(req.into());
             }
             _ => {}
         }
@@ -700,7 +744,23 @@ impl Transaction {
                     TransactionType::ClientInvite | TransactionType::ClientNonInvite
                 ) {
                     if let TransactionTimer::TimerA(key, duration) = timer {
-                        // Resend the INVITE request
+                        // If no connection (initial lookup failed), retry transport lookup
+                        // using the same target resolution rule as send()
+                        if self.connection.is_none() {
+                            if let Ok(target) = self.resolve_target_uri().await {
+                                if let Ok((connection, resolved_addr)) = self
+                                    .endpoint_inner
+                                    .transport_layer
+                                    .lookup(&target, Some(&self.key))
+                                    .await
+                                {
+                                    self.connection.replace(connection);
+                                    self.destination.replace(resolved_addr);
+                                }
+                            }
+                        }
+
+                        // Resend the request if connection available
                         if let Some(connection) = &self.connection {
                             let retry_message = if let Some(ref inspector) =
                                 self.endpoint_inner.message_inspector
@@ -712,9 +772,14 @@ impl Transaction {
                             } else {
                                 self.original.to_owned().into()
                             };
-                            connection
+                            if let Err(e) = connection
                                 .send(retry_message, self.destination.as_ref())
-                                .await?;
+                                .await
+                            {
+                                warn!(key = %self.key, error = %e, "timer A resend failed");
+                            }
+                        } else {
+                            debug!(key = %self.key, "timer A: no connection yet");
                         }
                         // Restart Timer A with an upper limit
                         let duration = (duration * 2).min(self.endpoint_inner.option.t1x64);
@@ -794,24 +859,35 @@ impl Transaction {
         match state {
             TransactionState::Nothing => {}
             TransactionState::Calling => {
-                let connection = self.connection.as_ref().ok_or(Error::TransactionError(
-                    "no connection found".to_string(),
-                    self.key.clone(),
-                ))?;
-
                 if matches!(
                     self.transaction_type,
                     TransactionType::ClientInvite | TransactionType::ClientNonInvite
                 ) {
-                    if !connection.is_reliable() {
-                        let timer_a = self.endpoint_inner.timers.timeout(
-                            self.endpoint_inner.option.t1,
-                            TransactionTimer::TimerA(
-                                self.key.clone(),
+                    match self.connection.as_ref() {
+                        Some(connection) if !connection.is_reliable() => {
+                            // Unreliable transport: start Timer A for retransmission
+                            let timer_a = self.endpoint_inner.timers.timeout(
                                 self.endpoint_inner.option.t1,
-                            ),
-                        );
-                        self.timer_a.replace(timer_a);
+                                TransactionTimer::TimerA(
+                                    self.key.clone(),
+                                    self.endpoint_inner.option.t1,
+                                ),
+                            );
+                            self.timer_a.replace(timer_a);
+                        }
+                        None => {
+                            // No connection yet (e.g., DNS lookup failed).
+                            // Start Timer A to retry transport lookup + send.
+                            let timer_a = self.endpoint_inner.timers.timeout(
+                                self.endpoint_inner.option.t1,
+                                TransactionTimer::TimerA(
+                                    self.key.clone(),
+                                    self.endpoint_inner.option.t1,
+                                ),
+                            );
+                            self.timer_a.replace(timer_a);
+                        }
+                        _ => {} // Reliable transport: no Timer A needed
                     }
                     self.timer_b.replace(self.endpoint_inner.timers.timeout(
                         self.endpoint_inner.option.t1x64,

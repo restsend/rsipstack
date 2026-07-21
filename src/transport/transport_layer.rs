@@ -58,6 +58,15 @@ impl DefaultDomainResolver {
             }
         };
 
+        // RFC 5626: .invalid domains are placeholders for temporary contacts
+        // and must not be resolved via DNS
+        if domain.0 == "invalid" || domain.0.ends_with(".invalid") {
+            return Err(crate::Error::DnsResolutionError(format!(
+                "cannot resolve .invalid domain: {}",
+                domain
+            )));
+        }
+
         // Use new SipResolver
         let secure = matches!(
             target.r#type,
@@ -548,5 +557,39 @@ mod tests {
         drop(tl);
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_resolve_invalid_domain_rejected() {
+        use super::DefaultDomainResolver;
+
+        let resolver = DefaultDomainResolver::new();
+
+        // Test various .invalid domains
+        let cases = vec![
+            ("invalid", "invalid"),
+            ("invalid.invalid", "invalid.invalid"),
+            ("abc123.invalid", "abc123.invalid"),
+        ];
+
+        for (input, expected_in_message) in cases {
+            let target = SipAddr {
+                r#type: Some(Transport::Udp),
+                addr: HostWithPort {
+                    host: Host::Domain(input.into()),
+                    port: Some(5060.into()),
+                },
+            };
+            let result = resolver.resolve_with_lookup(&target).await;
+            assert!(result.is_err(), "expected error for .invalid domain: {}", input);
+            let err = result.unwrap_err();
+            let err_msg = err.to_string();
+            assert!(
+                err_msg.contains(expected_in_message),
+                "error must mention '{}', got: {}",
+                expected_in_message,
+                err_msg
+            );
+        }
     }
 }

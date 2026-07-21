@@ -897,9 +897,9 @@ impl DialogInner {
                 warn!(
                     id = self.id.lock().to_string(),
                     destination = tx.destination.as_ref().map(|d| d.to_string()).as_deref(),
-                    "failed to send request error: {}\n{}",
-                    e,
-                    tx.original
+                    req = %tx.original,
+                    "failed to send request error: {}",
+                    e
                 );
                 return Err(e);
             }

@@ -296,11 +296,8 @@ impl ServerInviteDialog {
             return Ok(());
         }
         debug!(id=%self.id(), ?code, ?reason, "rejecting dialog");
-        let headers = if let Some(reason) = reason {
-            Some(vec![crate::sip::Header::Reason(reason.into())])
-        } else {
-            None
-        };
+        let headers = reason
+            .map(|reason| vec![crate::sip::Header::Reason(reason.into())]);
         let resp = self.inner.make_response(
             &self.initial_request(),
             code.unwrap_or(crate::sip::StatusCode::Decline),

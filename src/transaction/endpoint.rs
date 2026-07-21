@@ -388,11 +388,11 @@ impl EndpointInner {
                                 crate::sip::StatusCodeKind::Provisional => {
                                     return Ok(());
                                 }
-                                crate::sip::StatusCodeKind::Successful => {
-                                    if last_req.to_header()?.tag().ok().is_none() {
-                                        // don't ack 2xx response when ack is placeholder
-                                        return Ok(());
-                                    }
+                                crate::sip::StatusCodeKind::Successful
+                                    if last_req.to_header()?.tag().ok().is_none() =>
+                                {
+                                    // don't ack 2xx response when ack is placeholder
+                                    return Ok(());
                                 }
                                 _ => {}
                             }
