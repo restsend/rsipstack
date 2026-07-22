@@ -366,6 +366,17 @@ impl EndpointInner {
                     .and_then(|v| v.value().clone());
 
                 if let Some(last_message) = last_message {
+                    // ACK for a completed ServerInvite transaction: absorb it silently
+                    // and clean up the waiting_ack entry.
+                    if req.method() == &crate::sip::Method::Ack {
+                        if let Ok(dialog_id) =
+                            DialogId::try_from((req, super::key::TransactionRole::Server))
+                        {
+                            self.waiting_ack.remove(&dialog_id);
+                        }
+                        return Ok(());
+                    }
+                    // For INVITE retransmissions, re-send the last response
                     let dest = if !connection.is_reliable() {
                         self.get_destination_from_request(req).await
                     } else {

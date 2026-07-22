@@ -10,6 +10,7 @@ mod test_client;
 mod test_endpoint;
 mod test_provisional_responses;
 mod test_server;
+mod test_server_invite_drop;
 mod test_transaction_states;
 
 pub(super) async fn create_test_endpoint(addr: Option<&str>) -> Result<Endpoint> {

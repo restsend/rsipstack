@@ -1023,17 +1023,29 @@ impl Transaction {
         self.is_cleaned_up = true;
         self.cleanup_timer();
 
-        match self.last_response {
-            Some(ref resp) => match DialogId::try_from((resp, self.role())) {
-                Ok(dialog_id) => self
-                    .endpoint_inner
-                    .waiting_ack
-                    .remove(&dialog_id)
-                    .map(|_| ()),
-                Err(_) => None,
-            },
-            _ => None,
-        };
+        // For ServerInvite in Completed/Confirmed state, keep the waiting_ack entry
+        // so that incoming ACK can still be routed and absorbed by finished_transactions.
+        // In all other cases (including normal Terminated), remove it.
+        let is_server_invite_waiting_ack = matches!(
+            self.transaction_type,
+            TransactionType::ServerInvite
+        ) && matches!(
+            self.state,
+            TransactionState::Completed | TransactionState::Confirmed
+        );
+        if !is_server_invite_waiting_ack {
+            match self.last_response {
+                Some(ref resp) => match DialogId::try_from((resp, self.role())) {
+                    Ok(dialog_id) => self
+                        .endpoint_inner
+                        .waiting_ack
+                        .remove(&dialog_id)
+                        .map(|_| ()),
+                    Err(_) => None,
+                },
+                _ => None,
+            };
+        }
 
         let last_message = {
             match self.transaction_type {
@@ -1053,7 +1065,8 @@ impl Transaction {
                     }
                     self.last_ack.take().map(SipMessage::Request)
                 }
-                TransactionType::ServerNonInvite => {
+                TransactionType::ServerNonInvite
+                | TransactionType::ServerInvite => {
                     self.last_response.take().map(SipMessage::Response)
                 }
                 _ => None,
