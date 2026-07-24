@@ -599,7 +599,7 @@ pub fn parse_params(s: &str) -> Result<Vec<Param>, Error> {
         return Ok(vec![]);
     }
     let mut params = Vec::new();
-    for part in s.split(';') {
+    for part in split_params_quote_aware(s) {
         let part = part.trim();
         if part.is_empty() {
             continue;
@@ -608,6 +608,30 @@ pub fn parse_params(s: &str) -> Result<Vec<Param>, Error> {
         params.push(param);
     }
     Ok(params)
+}
+
+/// Split a param string on `;`, but never inside a double-quoted span so
+/// RFC 3261 quoted-string param values (`gen-value = token / host /
+/// quoted-string`) survive intact — e.g. `;+sip.instance="<urn:uuid:...>"`
+/// or `;x-route="a;b"`. Unquoted input splits exactly as before; a dangling
+/// (unbalanced) quote disables splitting only for the remainder, degrading
+/// to the previous behavior rather than erroring.
+fn split_params_quote_aware(s: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut in_quotes = false;
+    for (i, c) in s.char_indices() {
+        match c {
+            '"' => in_quotes = !in_quotes,
+            ';' if !in_quotes => {
+                parts.push(&s[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&s[start..]);
+    parts
 }
 
 pub type UriWithParams = Uri;
@@ -826,7 +850,7 @@ impl ParamsExt for Uri {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_uri, Host, Param, ParamsExt, Scheme};
+    use super::{parse_params, parse_uri, Host, Param, ParamsExt, Scheme, Transport};
 
     #[test]
     fn uri_param_value_keeps_colons_and_following_params() {
@@ -1025,5 +1049,41 @@ mod tests {
     fn uri_anonymous() {
         let uri = parse_uri("sip:anonymous@anonymous.invalid").unwrap();
         assert_eq!(uri.auth.unwrap().user, "anonymous");
+    }
+
+    #[test]
+    fn params_with_quoted_semicolon_value() {
+        // RFC 3261 quoted-string param values may contain `;` — the split
+        // must not break the value apart.
+        let params = parse_params(r#"x-route="a;b";transport=udp"#).unwrap();
+        assert_eq!(params.len(), 2, "quoted value was split: {:?}", params);
+        assert!(matches!(
+            &params[0],
+            Param::Other(n, Some(v)) if n.value() == "x-route" && v.value() == "\"a;b\""
+        ));
+        assert!(matches!(&params[1], Param::Transport(Transport::Udp)));
+    }
+
+    #[test]
+    fn params_with_quoted_instance_value() {
+        // Real-world shape: Linphone Contact `;+sip.instance="<urn:uuid:...>"`.
+        let params =
+            parse_params(r#"+sip.instance="<urn:uuid:1cf9ff2a-4c5b-4a6d-8e7f-9a0b1c2d3e4f>""#)
+                .unwrap();
+        assert_eq!(params.len(), 1);
+        assert!(params[0].to_string().contains("urn:uuid:1cf9ff2a"));
+    }
+
+    #[test]
+    fn params_unquoted_split_unchanged() {
+        let params = parse_params("transport=udp;lr;maddr=10.0.0.1").unwrap();
+        assert_eq!(params.len(), 3);
+    }
+
+    #[test]
+    fn params_dangling_quote_degrades_gracefully() {
+        // Unbalanced quote: no split after it — same params survive, no error.
+        let params = parse_params(r#"a=1;b="unterminated"#).unwrap();
+        assert_eq!(params.len(), 2);
     }
 }
