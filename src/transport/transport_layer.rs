@@ -115,6 +115,7 @@ pub struct TransportLayerInner {
     pub domain_resolver: Box<dyn DomainResolver>,
     whitelist: RwLock<Option<TransportWhitelistRef>>,
     tls_config: RwLock<Option<TlsConfig>>,
+    ws_path: RwLock<Option<String>>,
 }
 pub(crate) type TransportLayerInnerRef = Arc<TransportLayerInner>;
 
@@ -139,6 +140,7 @@ impl TransportLayer {
             domain_resolver,
             whitelist: RwLock::new(None),
             tls_config: RwLock::new(None),
+            ws_path: RwLock::new(None),
         };
         Self {
             outbound: None,
@@ -225,6 +227,17 @@ impl TransportLayer {
     pub fn clear_tls_config(&self) {
         self.inner.set_tls_config(None);
     }
+
+    /// Set the WebSocket path used for future outbound WebSocket connections.
+    /// Defaults to `/` if not set.
+    pub fn set_ws_path(&self, path: impl Into<String>) {
+        self.inner.set_ws_path(Some(path.into()));
+    }
+
+    /// Remove the WebSocket path override, reverting to default `/`.
+    pub fn clear_ws_path(&self) {
+        self.inner.set_ws_path(None);
+    }
 }
 
 impl TransportLayerInner {
@@ -246,6 +259,14 @@ impl TransportLayerInner {
 
     fn tls_config(&self) -> Option<TlsConfig> {
         self.tls_config.read().clone()
+    }
+
+    fn set_ws_path(&self, path: Option<String>) {
+        *self.ws_path.write() = path;
+    }
+
+    fn ws_path(&self) -> Option<String> {
+        self.ws_path.read().clone()
     }
 
     pub fn add_listener(&self, connection: SipConnection) {
@@ -322,9 +343,13 @@ impl TransportLayerInner {
                     SipConnection::Tls(connection)
                 }
                 Some(Transport::Ws | Transport::Wss) => {
-                    let connection =
-                        WebSocketConnection::connect(target, Some(self.cancel_token.child_token()))
-                            .await?;
+                    let ws_path = self.ws_path();
+                    let connection = WebSocketConnection::connect_with_path(
+                        target,
+                        ws_path.as_deref(),
+                        Some(self.cancel_token.child_token()),
+                    )
+                    .await?;
                     SipConnection::WebSocket(connection)
                 }
                 _ => {

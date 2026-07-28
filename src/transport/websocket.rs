@@ -215,6 +215,18 @@ impl WebSocketConnection {
         remote: &SipAddr,
         cancel_token: Option<CancellationToken>,
     ) -> Result<Self> {
+        Self::connect_with_path(remote, None, cancel_token).await
+    }
+
+    /// Connect to a WebSocket server with an optional URL path.
+    ///
+    /// `path` defaults to `/` when `None` is passed, allowing callers to
+    /// specify a custom path such as `/ws` for rustpbx-style endpoints.
+    pub async fn connect_with_path(
+        remote: &SipAddr,
+        path: Option<&str>,
+        cancel_token: Option<CancellationToken>,
+    ) -> Result<Self> {
         let scheme = match remote.r#type {
             Some(crate::sip::transport::Transport::Wss) => "wss",
             _ => "ws",
@@ -226,8 +238,8 @@ impl WebSocketConnection {
         };
 
         let port = remote.addr.port.as_ref().map_or(5060, |p| p.value());
-
-        let url = format!("{}://{}:{}/", scheme, host, port);
+        let ws_path = path.unwrap_or("/");
+        let url = format!("{}://{}:{}{}", scheme, host, port, ws_path);
         let mut request = url.into_client_request()?;
         request
             .headers_mut()
