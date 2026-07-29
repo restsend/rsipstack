@@ -11,14 +11,22 @@ use crate::sip::{Method, StatusCode, Version};
 use crate::transaction::key::{TransactionKey, TransactionRole};
 use crate::transaction::transaction::Transaction;
 use crate::transaction::TransactionType;
-use crate::transport::SipConnection;
-use crate::{
-    transport::{udp::UdpConnection, TransportLayer},
-    EndpointBuilder,
-};
+use crate::transport::transport_layer::DomainResolver;
+use crate::transport::udp::UdpConnection;
+use crate::transport::{SipConnection, TransportLayer};
+use crate::{EndpointBuilder, Result};
 use std::time::Duration;
 use tokio::time::{sleep, timeout};
 use tokio_util::sync::CancellationToken;
+
+/// A resolver that always fails — avoids DNS dependency in unit tests.
+struct NoopResolver;
+#[async_trait::async_trait]
+impl DomainResolver for NoopResolver {
+    async fn resolve(&self, _target: &crate::transport::SipAddr) -> Result<crate::transport::SipAddr> {
+        Err(crate::Error::DnsResolutionError("noop resolver".into()))
+    }
+}
 
 fn make_invite(branch: &str, to_tag: &str) -> crate::sip::Request {
     crate::sip::Request {
@@ -498,13 +506,8 @@ async fn test_server_invite_normal_termination_registers_finished() {
             "finished_transactions should contain the response after normal termination"
         );
 
-        // waiting_ack should have been cleaned up (ACK was processed via Confirmed path
-        // but the drop happens while state is Confirmed before TimerK fires, so
-        // cleanup keeps it — then the ACK absorption in on_received_message cleaned it.
-        // Actually, the ACK was processed by the transaction's receive() loop,
-        // transitioning to Confirmed. Then tx is dropped from Confirmed state.
-        // Our fix keeps waiting_ack in Confirmed state, but the TimerCleanup
-        // will eventually remove it. This is acceptable.)
+        // waiting_ack was already removed when the transaction transitioned to
+        // Confirmed (ACK received). cleanup() on drop from Confirmed also removes it.
     };
 
     let client_loop = async {
@@ -611,4 +614,129 @@ async fn test_finished_transactions_replies_correct_status() {
     );
 
     serve_handle.abort();
+}
+
+/// Unit test: verify that a ServerInvite dropped in Confirmed state (after ACK
+/// was received) removes the waiting_ack entry. Prior to the fix, cleanup()
+/// preserved the entry because self.state was Confirmed, causing a leak.
+#[tokio::test]
+async fn test_cleanup_server_invite_confirmed_drop_removes_waiting_ack() -> crate::Result<()> {
+    let cancel_token = CancellationToken::new();
+    let tl = TransportLayer::new_with_domain_resolver(cancel_token, Box::new(NoopResolver));
+    let endpoint = EndpointBuilder::new()
+        .with_user_agent("rsipstack-test")
+        .with_transport_layer(tl)
+        .build();
+
+    let invite = make_invite("z9hG4bK-confirmed-drop", "serverTagConfirmedDrop");
+    let key = TransactionKey::from_request(&invite, TransactionRole::Server)?;
+
+    let mut tx = Transaction::new_server(key.clone(), invite.clone(), endpoint.inner.clone(), None);
+
+    let resp = crate::sip::Response {
+        status_code: StatusCode::ServiceUnavailable,
+        version: Version::V2,
+        headers: invite.headers.clone(),
+        body: Default::default(),
+    };
+    tx.last_response = Some(resp.clone());
+    // Set state to Confirmed (simulating ACK received after Completed)
+    tx.state = crate::transaction::TransactionState::Confirmed;
+
+    let dialog_id = crate::dialog::DialogId::try_from((&resp, TransactionRole::Server))?;
+    endpoint
+        .inner
+        .waiting_ack
+        .insert(dialog_id.clone(), key.clone());
+
+    // Drop the transaction from Confirmed state.
+    // Before the fix: cleanup() sees state == Confirmed, preserves waiting_ack → LEAK
+    // After the fix:  cleanup() removes the entry (Confirmed no longer matches)
+    drop(tx);
+    sleep(Duration::from_millis(50)).await;
+
+    // waiting_ack MUST be removed after dropping from Confirmed state (ACK already received)
+    assert!(
+        !endpoint.inner.waiting_ack.contains_key(&dialog_id),
+        "waiting_ack must be removed when ServerInvite is dropped in Confirmed state (ACK already received)"
+    );
+
+    Ok(())
+}
+
+/// Unit test: TimerCleanup is the last-resort safety net that removes orphaned
+/// waiting_ack entries. Scenario: ServerInvite dropped from Completed state
+/// (ACK never arrived) → cleanup preserves waiting_ack → TimerCleanup fires
+/// → waiting_ack must be cleaned up.
+#[tokio::test]
+async fn test_timer_cleanup_removes_orphaned_waiting_ack() -> crate::Result<()> {
+    use crate::transaction::endpoint::EndpointOption;
+
+    let cancel_token = CancellationToken::new();
+    let tl = TransportLayer::new_with_domain_resolver(cancel_token.clone(), Box::new(NoopResolver));
+    let endpoint = EndpointBuilder::new()
+        .with_user_agent("rsipstack-test")
+        .with_transport_layer(tl)
+        .with_option(EndpointOption {
+            t1x64: Duration::from_millis(100),
+            ..Default::default()
+        })
+        .build();
+
+    // Start the timer loop so TimerCleanup can fire
+    let inner = endpoint.inner.clone();
+    let serve_handle = tokio::spawn(async move {
+        let _ = inner.serve().await;
+    });
+
+    let invite = make_invite("z9hG4bK-timer-cleanup", "serverTagTimerCleanup");
+    let key = TransactionKey::from_request(&invite, TransactionRole::Server)?;
+
+    let mut tx = Transaction::new_server(key.clone(), invite.clone(), endpoint.inner.clone(), None);
+
+    let resp = crate::sip::Response {
+        status_code: StatusCode::ServiceUnavailable,
+        version: Version::V2,
+        headers: invite.headers.clone(),
+        body: Default::default(),
+    };
+    tx.last_response = Some(resp.clone());
+    // Completed state: ACK has NOT arrived yet
+    tx.state = crate::transaction::TransactionState::Completed;
+
+    let dialog_id = crate::dialog::DialogId::try_from((&resp, TransactionRole::Server))?;
+    endpoint
+        .inner
+        .waiting_ack
+        .insert(dialog_id.clone(), key.clone());
+
+    // Drop from Completed: cleanup preserves waiting_ack (correct — late ACK may arrive)
+    drop(tx);
+    sleep(Duration::from_millis(50)).await;
+
+    assert!(
+        endpoint.inner.waiting_ack.contains_key(&dialog_id),
+        "waiting_ack should still exist after drop from Completed (waiting for ACK)"
+    );
+    assert!(
+        endpoint.inner.finished_transactions.contains_key(&key),
+        "finished_transactions should exist after drop"
+    );
+
+    // Wait for TimerCleanup to fire (t1x64 = 100ms)
+    sleep(Duration::from_millis(500)).await;
+
+    // TimerCleanup must clean up both finished_transactions and waiting_ack
+    assert!(
+        !endpoint.inner.finished_transactions.contains_key(&key),
+        "finished_transactions should be cleaned up by TimerCleanup"
+    );
+    assert!(
+        !endpoint.inner.waiting_ack.contains_key(&dialog_id),
+        "waiting_ack must be cleaned up by TimerCleanup (orphaned entry safety net)"
+    );
+
+    serve_handle.abort();
+    cancel_token.cancel();
+    Ok(())
 }

@@ -294,6 +294,7 @@ impl EndpointInner {
                     trace!(%key, "TimerCleanup");
                     self.transactions.remove(&key);
                     self.finished_transactions.remove(&key);
+                    self.waiting_ack.retain(|_, v| v != &key);
                     continue;
                 }
 

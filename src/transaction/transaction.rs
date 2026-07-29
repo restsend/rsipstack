@@ -962,6 +962,14 @@ impl Transaction {
             }
             TransactionState::Confirmed => {
                 self.cleanup_timer();
+                // ACK was received; remove waiting_ack entry since it's no longer needed.
+                if self.transaction_type == TransactionType::ServerInvite {
+                    if let Some(ref resp) = self.last_response {
+                        if let Ok(dialog_id) = DialogId::try_from((resp, self.role())) {
+                            self.endpoint_inner.waiting_ack.remove(&dialog_id);
+                        }
+                    }
+                }
                 let timer_k = self.endpoint_inner.timers.timeout(
                     self.endpoint_inner.option.t4,
                     TransactionTimer::TimerK(self.key.clone()),
@@ -1022,15 +1030,12 @@ impl Transaction {
         self.is_cleaned_up = true;
         self.cleanup_timer();
 
-        // For ServerInvite in Completed/Confirmed state, keep the waiting_ack entry
+        // For ServerInvite in Completed state, keep the waiting_ack entry
         // so that incoming ACK can still be routed and absorbed by finished_transactions.
-        // In all other cases (including normal Terminated), remove it.
+        // Confirmed state means the ACK was already received, so the entry is no longer needed.
         let is_server_invite_waiting_ack =
             matches!(self.transaction_type, TransactionType::ServerInvite)
-                && matches!(
-                    self.state,
-                    TransactionState::Completed | TransactionState::Confirmed
-                );
+                && self.state == TransactionState::Completed;
         if !is_server_invite_waiting_ack {
             match self.last_response {
                 Some(ref resp) => match DialogId::try_from((resp, self.role())) {
