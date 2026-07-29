@@ -25,11 +25,7 @@ fn make_invite(branch: &str, to_tag: &str) -> crate::sip::Request {
         method: Method::Invite,
         uri: crate::sip::Uri::try_from("sip:bob@example.com").unwrap(),
         headers: vec![
-            Via::new(&format!(
-                "SIP/2.0/UDP 127.0.0.1:5060;branch={}",
-                branch
-            ))
-            .into(),
+            Via::new(&format!("SIP/2.0/UDP 127.0.0.1:5060;branch={}", branch)).into(),
             CSeq::new("1 INVITE").into(),
             From::new("Alice <sip:alice@example.com>;tag=aliceTag123").into(),
             To::new(&format!("Bob <sip:bob@example.com>;tag={}", to_tag)).into(),
@@ -67,12 +63,7 @@ async fn test_cleanup_server_invite_completed_registers_finished() -> crate::Res
 
     let invite = make_invite("z9hG4bK-drop-unit-1", "serverTagAAA");
     let key = TransactionKey::from_request(&invite, TransactionRole::Server)?;
-    let tx = Transaction::new_server(
-        key.clone(),
-        invite.clone(),
-        endpoint.inner.clone(),
-        None,
-    );
+    let tx = Transaction::new_server(key.clone(), invite.clone(), endpoint.inner.clone(), None);
     assert_eq!(tx.transaction_type, TransactionType::ServerInvite);
 
     // Simulate the Completed transition by setting state + last_response directly.
@@ -98,12 +89,7 @@ async fn test_cleanup_server_invite_completed_keeps_waiting_ack() -> crate::Resu
     let invite = make_invite("z9hG4bK-drop-unit-2", "serverTagBBB");
     let key = TransactionKey::from_request(&invite, TransactionRole::Server)?;
 
-    let mut tx = Transaction::new_server(
-        key.clone(),
-        invite.clone(),
-        endpoint.inner.clone(),
-        None,
-    );
+    let mut tx = Transaction::new_server(key.clone(), invite.clone(), endpoint.inner.clone(), None);
 
     // Manually set the fields that would be set during respond() + transition(Completed)
     let resp = crate::sip::Response {
@@ -117,7 +103,10 @@ async fn test_cleanup_server_invite_completed_keeps_waiting_ack() -> crate::Resu
 
     // Manually insert into waiting_ack (as transition(Completed) would do)
     let dialog_id = crate::dialog::DialogId::try_from((&resp, TransactionRole::Server))?;
-    endpoint.inner.waiting_ack.insert(dialog_id.clone(), key.clone());
+    endpoint
+        .inner
+        .waiting_ack
+        .insert(dialog_id.clone(), key.clone());
 
     // Drop the transaction - cleanup() should run
     drop(tx);
@@ -154,12 +143,7 @@ async fn test_cleanup_server_invite_terminated_removes_waiting_ack() -> crate::R
     let invite = make_invite("z9hG4bK-drop-unit-3", "serverTagCCC");
     let key = TransactionKey::from_request(&invite, TransactionRole::Server)?;
 
-    let mut tx = Transaction::new_server(
-        key.clone(),
-        invite.clone(),
-        endpoint.inner.clone(),
-        None,
-    );
+    let mut tx = Transaction::new_server(key.clone(), invite.clone(), endpoint.inner.clone(), None);
 
     let resp = crate::sip::Response {
         status_code: StatusCode::BusyHere,
@@ -172,7 +156,10 @@ async fn test_cleanup_server_invite_terminated_removes_waiting_ack() -> crate::R
     tx.state = crate::transaction::TransactionState::Terminated;
 
     let dialog_id = crate::dialog::DialogId::try_from((&resp, TransactionRole::Server))?;
-    endpoint.inner.waiting_ack.insert(dialog_id.clone(), key.clone());
+    endpoint
+        .inner
+        .waiting_ack
+        .insert(dialog_id.clone(), key.clone());
 
     drop(tx);
     sleep(Duration::from_millis(50)).await;
@@ -202,10 +189,9 @@ async fn test_server_invite_drop_retransmission_and_ack() {
     let token = CancellationToken::new();
 
     // Server endpoint
-    let server_conn =
-        UdpConnection::create_connection("127.0.0.1:0".parse().unwrap(), None, None)
-            .await
-            .expect("create server connection");
+    let server_conn = UdpConnection::create_connection("127.0.0.1:0".parse().unwrap(), None, None)
+        .await
+        .expect("create server connection");
     let server_conn_sip: SipConnection = server_conn.clone().into();
     let server_addr = server_conn_sip.get_addr().clone();
 
@@ -218,10 +204,9 @@ async fn test_server_invite_drop_retransmission_and_ack() {
         .build();
 
     // Client socket
-    let client_conn =
-        UdpConnection::create_connection("127.0.0.1:0".parse().unwrap(), None, None)
-            .await
-            .expect("create client connection");
+    let client_conn = UdpConnection::create_connection("127.0.0.1:0".parse().unwrap(), None, None)
+        .await
+        .expect("create client connection");
     let client_conn_sip: SipConnection = client_conn.clone().into();
 
     // Start endpoint serve loop
@@ -326,7 +311,10 @@ async fn test_server_invite_drop_retransmission_and_ack() {
         Err(_) => { /* good - no response for ACK, timed out */ }
         Ok(Ok((len, _))) => {
             let resp_str = String::from_utf8_lossy(&buf[..len]);
-            panic!("should not receive anything after ACK, got: {}", &resp_str[..resp_str.len().min(200)]);
+            panic!(
+                "should not receive anything after ACK, got: {}",
+                &resp_str[..resp_str.len().min(200)]
+            );
         }
         Ok(Err(e)) => {
             panic!("unexpected error waiting after ACK: {:?}", e);
@@ -342,10 +330,9 @@ async fn test_server_invite_drop_retransmission_and_ack() {
 async fn test_cancel_after_final_response_does_not_reach_tu() {
     let token = CancellationToken::new();
 
-    let server_conn =
-        UdpConnection::create_connection("127.0.0.1:0".parse().unwrap(), None, None)
-            .await
-            .expect("create server connection");
+    let server_conn = UdpConnection::create_connection("127.0.0.1:0".parse().unwrap(), None, None)
+        .await
+        .expect("create server connection");
     let server_conn_sip: SipConnection = server_conn.clone().into();
     let server_addr = server_conn_sip.get_addr().clone();
 
@@ -357,10 +344,9 @@ async fn test_cancel_after_final_response_does_not_reach_tu() {
         .with_transport_layer(tl)
         .build();
 
-    let client_conn =
-        UdpConnection::create_connection("127.0.0.1:0".parse().unwrap(), None, None)
-            .await
-            .expect("create client connection");
+    let client_conn = UdpConnection::create_connection("127.0.0.1:0".parse().unwrap(), None, None)
+        .await
+        .expect("create client connection");
     let client_conn_sip: SipConnection = client_conn.clone().into();
 
     let endpoint_inner = endpoint.inner.clone();
@@ -426,7 +412,9 @@ async fn test_cancel_after_final_response_does_not_reach_tu() {
         "CANCEL should receive 200 OK, got: {response}"
     );
     assert_eq!(
-        tx.last_response.as_ref().map(|response| &response.status_code),
+        tx.last_response
+            .as_ref()
+            .map(|response| &response.status_code),
         Some(&StatusCode::TemporarilyUnavailable),
         "late CANCEL must not replace the INVITE final response"
     );
@@ -440,10 +428,9 @@ async fn test_cancel_after_final_response_does_not_reach_tu() {
 async fn test_server_invite_normal_termination_registers_finished() {
     let token = CancellationToken::new();
 
-    let server_conn =
-        UdpConnection::create_connection("127.0.0.1:0".parse().unwrap(), None, None)
-            .await
-            .expect("create server connection");
+    let server_conn = UdpConnection::create_connection("127.0.0.1:0".parse().unwrap(), None, None)
+        .await
+        .expect("create server connection");
     let server_conn_sip: SipConnection = server_conn.clone().into();
     let server_addr = server_conn_sip.get_addr().clone();
 
@@ -455,10 +442,9 @@ async fn test_server_invite_normal_termination_registers_finished() {
         .with_transport_layer(tl)
         .build();
 
-    let client_conn =
-        UdpConnection::create_connection("127.0.0.1:0".parse().unwrap(), None, None)
-            .await
-            .expect("create client connection");
+    let client_conn = UdpConnection::create_connection("127.0.0.1:0".parse().unwrap(), None, None)
+        .await
+        .expect("create client connection");
     let client_conn_sip: SipConnection = client_conn.clone().into();
 
     let endpoint_inner = endpoint.inner.clone();
@@ -552,10 +538,9 @@ async fn test_server_invite_normal_termination_registers_finished() {
 async fn test_finished_transactions_replies_correct_status() {
     let token = CancellationToken::new();
 
-    let server_conn =
-        UdpConnection::create_connection("127.0.0.1:0".parse().unwrap(), None, None)
-            .await
-            .expect("create server connection");
+    let server_conn = UdpConnection::create_connection("127.0.0.1:0".parse().unwrap(), None, None)
+        .await
+        .expect("create server connection");
     let server_conn_sip: SipConnection = server_conn.clone().into();
     let server_addr = server_conn_sip.get_addr().clone();
 
@@ -567,10 +552,9 @@ async fn test_finished_transactions_replies_correct_status() {
         .with_transport_layer(tl)
         .build();
 
-    let client_conn =
-        UdpConnection::create_connection("127.0.0.1:0".parse().unwrap(), None, None)
-            .await
-            .expect("create client connection");
+    let client_conn = UdpConnection::create_connection("127.0.0.1:0".parse().unwrap(), None, None)
+        .await
+        .expect("create client connection");
     let client_conn_sip: SipConnection = client_conn.clone().into();
 
     let endpoint_inner = endpoint.inner.clone();

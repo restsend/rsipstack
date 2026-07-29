@@ -606,7 +606,11 @@ mod tests {
                 },
             };
             let result = resolver.resolve_with_lookup(&target).await;
-            assert!(result.is_err(), "expected error for .invalid domain: {}", input);
+            assert!(
+                result.is_err(),
+                "expected error for .invalid domain: {}",
+                input
+            );
             let err = result.unwrap_err();
             let err_msg = err.to_string();
             assert!(
