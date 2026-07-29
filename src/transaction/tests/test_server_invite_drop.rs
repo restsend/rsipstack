@@ -336,6 +336,104 @@ async fn test_server_invite_drop_retransmission_and_ack() {
     serve_handle.abort();
 }
 
+/// RFC 3261 Section 9.2: a matching CANCEL received after the original
+/// INVITE's final response gets 200 OK but has no effect on the INVITE.
+#[tokio::test]
+async fn test_cancel_after_final_response_does_not_reach_tu() {
+    let token = CancellationToken::new();
+
+    let server_conn =
+        UdpConnection::create_connection("127.0.0.1:0".parse().unwrap(), None, None)
+            .await
+            .expect("create server connection");
+    let server_conn_sip: SipConnection = server_conn.clone().into();
+    let server_addr = server_conn_sip.get_addr().clone();
+
+    let tl = TransportLayer::new(token.child_token());
+    tl.add_transport(server_conn_sip);
+
+    let endpoint = EndpointBuilder::new()
+        .with_user_agent("rsipstack-test")
+        .with_transport_layer(tl)
+        .build();
+
+    let client_conn =
+        UdpConnection::create_connection("127.0.0.1:0".parse().unwrap(), None, None)
+            .await
+            .expect("create client connection");
+    let client_conn_sip: SipConnection = client_conn.clone().into();
+
+    let endpoint_inner = endpoint.inner.clone();
+    let serve_handle = tokio::spawn(async move {
+        let _ = endpoint_inner.serve().await;
+    });
+
+    let invite = make_invite("z9hG4bK-late-cancel", "serverTagLateCancel");
+    client_conn_sip
+        .send(invite.clone().into(), Some(&server_addr))
+        .await
+        .expect("send invite");
+
+    let mut incoming = endpoint.incoming_transactions().expect("incoming");
+    let mut tx = timeout(Duration::from_secs(2), incoming.recv())
+        .await
+        .expect("timeout waiting for incoming transaction")
+        .expect("no incoming transaction");
+
+    tx.reply(StatusCode::TemporarilyUnavailable)
+        .await
+        .expect("reply 480");
+
+    let mut buf = vec![0u8; 4096];
+    let (len, _) = timeout(Duration::from_secs(2), client_conn.recv_raw(&mut buf))
+        .await
+        .expect("timeout waiting for 480 response")
+        .expect("recv failed");
+    let response = String::from_utf8_lossy(&buf[..len]);
+    assert!(response.contains("480"), "expected 480, got: {response}");
+
+    let mut cancel_headers = invite.headers.clone();
+    for header in cancel_headers.iter_mut() {
+        if let crate::sip::Header::CSeq(cseq) = header {
+            *cseq = CSeq::new("1 CANCEL").into();
+        }
+    }
+    let cancel = crate::sip::Request {
+        method: Method::Cancel,
+        uri: invite.uri.clone(),
+        headers: cancel_headers,
+        version: invite.version.clone(),
+        body: Default::default(),
+    };
+    client_conn_sip
+        .send(cancel.into(), Some(&server_addr))
+        .await
+        .expect("send cancel");
+
+    let delivered = timeout(Duration::from_millis(100), tx.receive()).await;
+    assert!(
+        delivered.is_err(),
+        "CANCEL after a final response must not reach the TU"
+    );
+
+    let (len, _) = timeout(Duration::from_secs(2), client_conn.recv_raw(&mut buf))
+        .await
+        .expect("timeout waiting for CANCEL 200 response")
+        .expect("recv failed");
+    let response = String::from_utf8_lossy(&buf[..len]);
+    assert!(
+        response.contains("200"),
+        "CANCEL should receive 200 OK, got: {response}"
+    );
+    assert_eq!(
+        tx.last_response.as_ref().map(|response| &response.status_code),
+        Some(&StatusCode::TemporarilyUnavailable),
+        "late CANCEL must not replace the INVITE final response"
+    );
+
+    serve_handle.abort();
+}
+
 /// Integration test: ServerInvite normal termination (ACK received via dialog/handle)
 /// also registers in finished_transactions for Timer J.
 #[tokio::test]

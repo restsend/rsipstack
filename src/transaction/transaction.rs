@@ -629,26 +629,11 @@ impl Transaction {
             self.connection = connection;
         }
         if req.method == Method::Cancel {
-            match self.state {
-                TransactionState::Proceeding
-                | TransactionState::Trying
-                | TransactionState::Completed => {
-                    if let Some(connection) = &self.connection {
-                        let resp = self
-                            .endpoint_inner
-                            .make_response(&req, StatusCode::OK, None);
-
-                        let resp =
-                            if let Some(ref inspector) = self.endpoint_inner.message_inspector {
-                                inspector.before_send(resp.into(), self.destination.as_ref())
-                            } else {
-                                resp.into()
-                            };
-
-                        connection.send(resp, self.destination.as_ref()).await.ok();
-                    }
-                    return Some(req.into()); // into dialog
-                }
+            let forward_to_tu = match self.state {
+                TransactionState::Proceeding | TransactionState::Trying => true,
+                // RFC 3261 Section 9.2: after a final response, CANCEL has no
+                // effect on the original request, its responses, or session state.
+                TransactionState::Completed => false,
                 _ => {
                     if let Some(connection) = &self.connection {
                         let resp = self.endpoint_inner.make_response(
@@ -662,11 +647,25 @@ impl Transaction {
                             } else {
                                 resp.into()
                             };
+
                         connection.send(resp, self.destination.as_ref()).await.ok();
                     }
+                    return None;
                 }
             };
-            return None;
+
+            if let Some(connection) = &self.connection {
+                let resp = self
+                    .endpoint_inner
+                    .make_response(&req, StatusCode::OK, None);
+                let resp = if let Some(ref inspector) = self.endpoint_inner.message_inspector {
+                    inspector.before_send(resp.into(), self.destination.as_ref())
+                } else {
+                    resp.into()
+                };
+                connection.send(resp, self.destination.as_ref()).await.ok();
+            }
+            return forward_to_tu.then(|| req.into());
         }
 
         match self.state {
