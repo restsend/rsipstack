@@ -350,6 +350,16 @@ impl ServerInviteDialog {
     /// * `Err(Error)` - Failed to build/send BYE request.
     pub async fn bye_with_headers(&self, headers: Option<Vec<crate::sip::Header>>) -> Result<()> {
         if !self.inner.is_confirmed() && !self.inner.waiting_ack() {
+            // Silent success here is a footgun for B2BUA hangup paths: callers
+            // cannot tell BYE was never sent. Log when we skip so operators can
+            // correlate stuck endpoints with dialog state divergence.
+            if !self.inner.is_terminated() {
+                warn!(
+                    id = %self.id(),
+                    state = %self.state(),
+                    "bye skipped: dialog not Confirmed/WaitAck"
+                );
+            }
             return Ok(());
         }
 
