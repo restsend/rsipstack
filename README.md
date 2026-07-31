@@ -105,9 +105,8 @@ connection
 ### 2. Using Transport Listeners
 
 ```rust
-use rsipstack::sip::{HostWithPort, Transport};
 use rsipstack::transport::{
-    SipAddr, TcpListenerConnection, TransportEvent, TransportLayer,
+    TcpListenerConnection, TransportEvent, TransportLayer,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -116,10 +115,7 @@ let cancel_token = CancellationToken::new();
 let transport_layer = TransportLayer::new(cancel_token.clone());
 
 let tcp_listener = TcpListenerConnection::new(
-    SipAddr::new(
-        Transport::Tcp,
-        HostWithPort::try_from("0.0.0.0:5060")?,
-    ),
+    "0.0.0.0:5060".parse()?,
     None,
 )
 .await?;

@@ -12,6 +12,8 @@ use crate::transaction::{
 use crate::transport::{
     tcp_listener::TcpListenerConnection, udp::UdpConnection, SipAddr, TransportLayer,
 };
+#[cfg(feature = "rustls")]
+use crate::transport::{TlsConfig, TlsListenerConnection};
 use tokio::sync::mpsc::unbounded_channel;
 use tokio_util::sync::CancellationToken;
 
@@ -409,16 +411,8 @@ async fn test_server_invite_dialog_with_tcp_transport() -> crate::Result<()> {
     let dialog_layer = DialogLayer::new(endpoint.inner.clone());
 
     // Create a TCP listener connection (without binding a socket)
-    let tcp_addr = SipAddr {
-        r#type: Some(Transport::Tcp),
-        addr: HostWithPort {
-            host: crate::sip::Host::IpAddr(std::net::IpAddr::V4(std::net::Ipv4Addr::new(
-                127, 0, 0, 1,
-            ))),
-            port: Some(5060.into()),
-        },
-    };
-    let tcp_listener = TcpListenerConnection::new(tcp_addr.clone(), None).await?;
+    let tcp_addr = "127.0.0.1:5060".parse()?;
+    let tcp_listener = TcpListenerConnection::new(tcp_addr, None).await?;
     let conn: crate::transport::SipConnection = tcp_listener.into();
 
     // Create INVITE request
@@ -459,16 +453,8 @@ async fn test_make_invite_request_with_tcp_transport() -> crate::Result<()> {
     let tl = TransportLayer::new(token.child_token());
 
     // Add a TCP listener address to the transport layer
-    let tcp_addr = SipAddr {
-        r#type: Some(Transport::Tcp),
-        addr: HostWithPort {
-            host: crate::sip::Host::IpAddr(std::net::IpAddr::V4(std::net::Ipv4Addr::new(
-                192, 168, 1, 10,
-            ))),
-            port: Some(5060.into()),
-        },
-    };
-    let tcp_listener = TcpListenerConnection::new(tcp_addr.clone(), None).await?;
+    let tcp_addr = "192.168.1.10:5060".parse()?;
+    let tcp_listener = TcpListenerConnection::new(tcp_addr, None).await?;
     tl.add_transport(crate::transport::SipConnection::TcpListener(tcp_listener));
 
     let endpoint = EndpointBuilder::new()
@@ -500,7 +486,8 @@ async fn test_make_invite_request_with_tcp_transport() -> crate::Result<()> {
     // Verify Contact header has the transport layer's TCP address and transport param
     let contact = request.contact_header()?.typed()?;
     assert_eq!(
-        contact.uri.host_with_port, tcp_addr.addr,
+        contact.uri.host_with_port,
+        tcp_addr.into(),
         "Contact URI should use the transport layer's TCP address"
     );
     assert!(
@@ -555,23 +542,16 @@ async fn test_make_invite_request_without_transport_uses_contact_as_is() -> crat
     Ok(())
 }
 
+#[cfg(feature = "rustls")]
 #[tokio::test]
 async fn test_make_invite_request_with_tls_transport_uses_sips_scheme() -> crate::Result<()> {
     let token = CancellationToken::new();
     let tl = TransportLayer::new(token.child_token());
 
     // Add a TLS listener address
-    let tls_addr = SipAddr {
-        r#type: Some(Transport::Tls),
-        addr: HostWithPort {
-            host: crate::sip::Host::IpAddr(std::net::IpAddr::V4(std::net::Ipv4Addr::new(
-                192, 168, 1, 10,
-            ))),
-            port: Some(5061.into()),
-        },
-    };
-    let tcp_listener = TcpListenerConnection::new(tls_addr.clone(), None).await?;
-    tl.add_transport(crate::transport::SipConnection::TcpListener(tcp_listener));
+    let tls_addr = "192.168.1.10:5061".parse()?;
+    let tls_listener = TlsListenerConnection::new(tls_addr, None, TlsConfig::default()).await?;
+    tl.add_transport(crate::transport::SipConnection::TlsListener(tls_listener));
 
     let endpoint = EndpointBuilder::new()
         .with_user_agent("rsipstack-test")

@@ -524,13 +524,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_transport_tcp_listener_returns_tcp() -> crate::Result<()> {
-        let addr = SipAddr {
-            r#type: Some(Transport::Tcp),
-            addr: HostWithPort {
-                host: crate::sip::Host::IpAddr(std::net::IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))),
-                port: Some(5060.into()),
-            },
-        };
+        let addr = SocketAddr::from((Ipv4Addr::new(127, 0, 0, 1), 5060));
         let listener = TcpListenerConnection::new(addr, None).await?;
         let sip_conn = SipConnection::TcpListener(listener);
         assert_eq!(sip_conn.transport(), Transport::Tcp);
