@@ -7,6 +7,10 @@
     clippy::wrong_self_convention,
     clippy::large_enum_variant
 )]
+// The legacy ServerInviteDialog / ClientInviteDialog wrappers are retained
+// (deprecated) only for compatibility; internal code and the From/TryFrom
+// conversions keep using them during the transition to InviteDialog.
+#![allow(deprecated)]
 
 //! # RSIPStack - A SIP Stack Implementation in Rust
 //!

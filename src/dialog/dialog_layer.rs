@@ -2,8 +2,8 @@ use super::authenticate::Credential;
 use super::dialog::{DialogSnapshot, DialogStateSender};
 use super::publication::{ClientPublicationDialog, ServerPublicationDialog};
 use super::subscription::{ClientSubscriptionDialog, ServerSubscriptionDialog};
-use super::{dialog::Dialog, server_dialog::ServerInviteDialog, DialogId};
-use crate::dialog::client_dialog::ClientInviteDialog;
+use super::{dialog::Dialog, invite_dialog::InviteDialog, DialogId};
+
 use crate::dialog::dialog::{DialogInner, DialogStateReceiver};
 use crate::sip::prelude::HeadersExt;
 use crate::transaction::key::TransactionRole;
@@ -152,12 +152,12 @@ impl DialogLayer {
         state_sender: DialogStateSender,
         credential: Option<Credential>,
         local_contact: Option<crate::sip::Uri>,
-    ) -> Result<ServerInviteDialog> {
+    ) -> Result<InviteDialog> {
         let mut id = DialogId::try_from(tx)?;
         if !id.local_tag.is_empty() {
             let dlg = self.inner.dialogs.get(&id.to_string()).map(|d| d.clone());
             match dlg {
-                Some(Dialog::ServerInvite(dlg)) => return Ok(dlg),
+                Some(Dialog::Invite(dlg)) => return Ok(dlg),
                 _ => {
                     return Err(crate::Error::DialogError(
                         "the dialog not found".to_string(),
@@ -205,12 +205,10 @@ impl DialogLayer {
             }
         }
 
-        let dialog = ServerInviteDialog {
-            inner: Arc::new(dlg_inner),
-        };
+        let dialog = InviteDialog::from_inner(Arc::new(dlg_inner));
         self.inner
             .dialogs
-            .insert(id.to_string(), Dialog::ServerInvite(dialog.clone()));
+            .insert(id.to_string(), Dialog::Invite(dialog.clone()));
         debug!(%id, "server invite dialog created");
         Ok(dialog)
     }
@@ -449,16 +447,16 @@ impl DialogLayer {
     ///
     /// In a forking scenario, multiple client dialogs can exist for the same
     /// Call-ID (same local From-tag, different remote To-tags). This helper
-    /// scans the internal dialog registry and returns all `ClientInviteDialog`
+    /// scans the internal dialog registry and returns all `InviteDialog`
     /// instances whose `DialogId.call_id` equals the provided `call_id`.
     ///
     /// The returned vector may be empty if no matching client dialogs are found.
-    pub fn get_client_dialog_by_call_id(&self, call_id: &str) -> Vec<ClientInviteDialog> {
+    pub fn get_client_dialog_by_call_id(&self, call_id: &str) -> Vec<InviteDialog> {
         self.inner
             .dialogs
             .iter()
             .filter_map(|e| match e.value() {
-                Dialog::ClientInvite(client_dlg) if client_dlg.id().call_id == call_id => {
+                Dialog::Invite(client_dlg) if client_dlg.id().call_id == call_id => {
                     Some(client_dlg.clone())
                 }
                 _ => None,

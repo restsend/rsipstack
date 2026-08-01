@@ -4,7 +4,7 @@ use rsip::prelude::HeadersExt;
 use rsipstack::dialog::dialog::{Dialog, DialogState, DialogStateReceiver, DialogStateSender};
 use rsipstack::dialog::dialog_layer::DialogLayer;
 use rsipstack::dialog::invitation::InviteOption;
-use rsipstack::dialog::server_dialog::ServerInviteDialog;
+use rsipstack::dialog::invite_dialog::InviteDialog;
 use rsipstack::sip as rsip;
 use rsipstack::transaction::endpoint::EndpointInnerRef;
 use rsipstack::Result;
@@ -374,14 +374,14 @@ async fn process_dialog(
                     }
                 };
                 match dialog {
-                    Dialog::ServerInvite(d) => {
+                    Dialog::Invite(d) if d.role() == rsipstack::transaction::key::TransactionRole::Server => {
                         // play example pcmu of handling incoming call
                         //
                         // [A] Ai answer, [R] Reject, [E] Play example pcmu
                         let opt_clone = opt.clone();
                         tokio::spawn(async move { process_invite(&opt_clone, d).await.ok() });
                     }
-                    Dialog::ClientInvite(_) => {
+                    Dialog::Invite(_) => {
                         info!("Client invite dialog {}", id);
                     }
                     Dialog::ServerSubscription(_) => {
@@ -480,11 +480,11 @@ async fn make_call(
     )
     .await
     .expect("play example file");
-    dialog.bye().await.expect("send BYE");
+    dialog.bye_with_headers(None).await.expect("send BYE");
     Ok(())
 }
 
-async fn process_invite(opt: &MediaSessionOption, dialog: ServerInviteDialog) -> Result<()> {
+async fn process_invite(opt: &MediaSessionOption, dialog: InviteDialog) -> Result<()> {
     let ssrc = rand::random::<u32>();
 
     let body = String::from_utf8_lossy(dialog.initial_request().body()).to_string();
@@ -638,7 +638,7 @@ async fn process_invite(opt: &MediaSessionOption, dialog: ServerInviteDialog) ->
                 info!("answer receiver finished");
             }
         }
-        dialog.bye().await.expect("send BYE");
+        dialog.bye_with_headers(None).await.expect("send BYE");
     });
     Ok(())
 }

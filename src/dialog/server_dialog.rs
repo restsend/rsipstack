@@ -86,6 +86,7 @@ use tracing::{debug, info, trace, warn};
 /// ServerInviteDialog is thread-safe and can be cloned and shared across tasks.
 /// All operations are atomic and properly synchronized.
 #[derive(Clone)]
+#[deprecated(note = "use rsipstack::dialog::invite_dialog::InviteDialog instead")]
 pub struct ServerInviteDialog {
     pub(super) inner: DialogInnerRef,
 }
@@ -895,7 +896,9 @@ impl TryFrom<&Dialog> for ServerInviteDialog {
 
     fn try_from(dlg: &Dialog) -> Result<Self> {
         match dlg {
-            Dialog::ServerInvite(dlg) => Ok(dlg.clone()),
+            Dialog::Invite(dlg) if dlg.role() == crate::transaction::key::TransactionRole::Server => {
+                dlg.clone().try_into()
+            }
             _ => Err(crate::Error::DialogError(
                 "Dialog is not a ServerInviteDialog".to_string(),
                 dlg.id(),

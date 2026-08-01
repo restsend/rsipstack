@@ -1,6 +1,6 @@
 use super::{
     authenticate::Credential,
-    client_dialog::ClientInviteDialog,
+    invite_dialog::InviteDialog,
     dialog::{DialogInner, DialogStateSender},
     dialog_layer::DialogLayer,
 };
@@ -183,7 +183,7 @@ impl<'a> Drop for DialogGuardForUnconfirmed<'a> {
             debug!(%self.id, "unconfirmed dialog dropped, cancelling it");
             let invite_tx = self.invite_tx.take();
             let _handle = tokio::spawn(async move {
-                if let Dialog::ClientInvite(ref client_dialog) = dlg {
+                if let Dialog::Invite(ref client_dialog) = dlg {
                     if client_dialog.inner.can_cancel() {
                         if let Err(e) = client_dialog.cancel().await {
                             warn!(id = %client_dialog.id(), error = %e, "dialog cancel failed");
@@ -399,7 +399,7 @@ impl DialogLayer {
     ///
     /// # Returns
     ///
-    /// * `Ok((ClientInviteDialog, Option<Response>))` - Created dialog and final response
+    /// * `Ok((InviteDialog, Option<Response>))` - Created dialog and final response
     /// * `Err(Error)` - Failed to send INVITE or process responses
     ///
     /// # Call Flow
@@ -509,13 +509,13 @@ impl DialogLayer {
         &self,
         opt: InviteOption,
         state_sender: DialogStateSender,
-    ) -> Result<(ClientInviteDialog, Option<Response>)> {
+    ) -> Result<(InviteDialog, Option<Response>)> {
         let (dialog, tx) = self.create_client_invite_dialog(opt, state_sender)?;
         let id = dialog.id();
 
         self.inner
             .dialogs
-            .insert(id.to_string(), Dialog::ClientInvite(dialog.clone()));
+            .insert(id.to_string(), Dialog::Invite(dialog.clone()));
 
         debug!(%id, "client invite dialog created");
         let mut guard = DialogGuardForUnconfirmed {
@@ -544,7 +544,7 @@ impl DialogLayer {
                         );
                         self.inner.dialogs.insert(
                             new_dialog_id.to_string(),
-                            Dialog::ClientInvite(dialog.clone()),
+                            Dialog::Invite(dialog.clone()),
                         );
                     }
                     _ => {}
@@ -579,7 +579,7 @@ impl DialogLayer {
         opt: InviteOption,
         state_sender: DialogStateSender,
     ) -> Result<(
-        ClientInviteDialog,
+        InviteDialog,
         tokio::task::JoinHandle<InviteAsyncResult>,
     )> {
         let (dialog, mut tx) = self.create_client_invite_dialog(opt, state_sender)?;
@@ -588,7 +588,7 @@ impl DialogLayer {
         // 1) register early key (so in-dialog requests can be matched)
         self.inner
             .dialogs
-            .insert(id0.to_string(), Dialog::ClientInvite(dialog.clone()));
+            .insert(id0.to_string(), Dialog::Invite(dialog.clone()));
 
         debug!(%id0, "client invite dialog created (async)");
 
@@ -615,7 +615,7 @@ impl DialogLayer {
                         debug!("client invite dialog confirmed: {} => {}", id0, new_id);
                         inner.dialogs.insert(
                             new_id.to_string(),
-                            Dialog::ClientInvite(dialog_clone.clone()),
+                            Dialog::Invite(dialog_clone.clone()),
                         );
                     }
                 }
@@ -632,7 +632,7 @@ impl DialogLayer {
         &self,
         opt: InviteOption,
         state_sender: DialogStateSender,
-    ) -> Result<(ClientInviteDialog, Transaction)> {
+    ) -> Result<(InviteDialog, Transaction)> {
         let mut request = self.make_invite_request(&opt)?;
         request.body = opt.offer.unwrap_or_default();
         request
@@ -676,9 +676,7 @@ impl DialogLayer {
             let uri = destination.clone().into();
             *dlg_inner.remote_uri.lock() = uri;
         }
-        let dialog = ClientInviteDialog {
-            inner: Arc::new(dlg_inner),
-        };
+        let dialog = InviteDialog::from_inner(Arc::new(dlg_inner));
         Ok((dialog, tx))
     }
 }

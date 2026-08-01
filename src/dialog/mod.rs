@@ -8,6 +8,7 @@ pub mod authenticate;
 pub mod client_dialog;
 pub mod dialog;
 pub mod dialog_layer;
+pub mod invite_dialog;
 pub mod invitation;
 pub mod publication;
 pub mod registration;

@@ -91,6 +91,7 @@ use tracing::{debug, info, trace};
 /// ClientInviteDialog is thread-safe and can be cloned and shared across tasks.
 /// All operations are atomic and properly synchronized.
 #[derive(Clone)]
+#[deprecated(note = "use rsipstack::dialog::invite_dialog::InviteDialog instead")]
 pub struct ClientInviteDialog {
     pub(super) inner: DialogInnerRef,
 }

@@ -1,8 +1,7 @@
 use super::{
     authenticate::{handle_client_authenticate, Credential},
-    client_dialog::ClientInviteDialog,
+    invite_dialog::InviteDialog,
     publication::{ClientPublicationDialog, ServerPublicationDialog},
-    server_dialog::ServerInviteDialog,
     subscription::{ClientSubscriptionDialog, ServerSubscriptionDialog},
     DialogId,
 };
@@ -215,11 +214,8 @@ impl ReferStatus {
 ///
 /// # fn handle_dialog(dialog: Dialog) {
 /// match dialog {
-///     Dialog::ServerInvite(server_dialog) => {
-///         // Handle server dialog
-///     },
-///     Dialog::ClientInvite(client_dialog) => {
-///         // Handle client dialog
+///     Dialog::Invite(invite_dialog) => {
+///         // Handle invite dialog (role via invite_dialog.role())
 ///     },
 ///     Dialog::ServerSubscription(server_dialog) => {
 ///         // Handle server subscription dialog
@@ -238,8 +234,7 @@ impl ReferStatus {
 /// ```
 #[derive(Clone)]
 pub enum Dialog {
-    ServerInvite(ServerInviteDialog),
-    ClientInvite(ClientInviteDialog),
+    Invite(InviteDialog),
     ServerSubscription(ServerSubscriptionDialog),
     ClientSubscription(ClientSubscriptionDialog),
     ServerPublication(ServerPublicationDialog),
@@ -249,8 +244,7 @@ pub enum Dialog {
 impl Dialog {
     pub fn state(&self) -> DialogState {
         match self {
-            Dialog::ServerInvite(d) => d.state(),
-            Dialog::ClientInvite(d) => d.state(),
+            Dialog::Invite(d) => d.state(),
             Dialog::ServerSubscription(d) => d.state(),
             Dialog::ClientSubscription(d) => d.state(),
             Dialog::ServerPublication(d) => d.state(),
@@ -262,8 +256,7 @@ impl Dialog {
     /// For INVITE dialogs, this creates a subscription dialog sharing the same inner state.
     pub fn as_subscription(&self) -> Option<Dialog> {
         match self {
-            Dialog::ServerInvite(d) => Some(Dialog::ServerSubscription(d.as_subscription())),
-            Dialog::ClientInvite(d) => Some(Dialog::ClientSubscription(d.as_subscription())),
+            Dialog::Invite(d) => Some(d.as_subscription()),
             Dialog::ServerSubscription(_) => Some(self.clone()),
             Dialog::ClientSubscription(_) => Some(self.clone()),
             _ => None,
@@ -1260,8 +1253,7 @@ impl std::fmt::Display for DialogState {
 impl Dialog {
     pub fn id(&self) -> DialogId {
         match self {
-            Dialog::ServerInvite(d) => d.inner.id.lock().clone(),
-            Dialog::ClientInvite(d) => d.inner.id.lock().clone(),
+            Dialog::Invite(d) => d.inner.id.lock().clone(),
             Dialog::ServerSubscription(d) => d.inner.id.lock().clone(),
             Dialog::ClientSubscription(d) => d.inner.id.lock().clone(),
             Dialog::ServerPublication(d) => d.inner.id.lock().clone(),
@@ -1271,8 +1263,7 @@ impl Dialog {
 
     pub fn from(&self) -> &crate::sip::typed::From {
         match self {
-            Dialog::ServerInvite(d) => &d.inner.from,
-            Dialog::ClientInvite(d) => &d.inner.from,
+            Dialog::Invite(d) => &d.inner.from,
             Dialog::ServerSubscription(d) => &d.inner.from,
             Dialog::ClientSubscription(d) => &d.inner.from,
             Dialog::ServerPublication(d) => &d.inner.from,
@@ -1282,8 +1273,7 @@ impl Dialog {
 
     pub fn to(&self) -> crate::sip::typed::To {
         match self {
-            Dialog::ServerInvite(d) => d.inner.to.lock().clone(),
-            Dialog::ClientInvite(d) => d.inner.to.lock().clone(),
+            Dialog::Invite(d) => d.inner.to.lock().clone(),
             Dialog::ServerSubscription(d) => d.inner.to.lock().clone(),
             Dialog::ClientSubscription(d) => d.inner.to.lock().clone(),
             Dialog::ServerPublication(d) => d.inner.to.lock().clone(),
@@ -1292,19 +1282,12 @@ impl Dialog {
     }
 
     pub fn from_inner(role: TransactionRole, inner: DialogInnerRef) -> Self {
-        match role {
-            TransactionRole::Client => Dialog::ClientInvite(ClientInviteDialog::from_inner(inner)),
-            TransactionRole::Server => Dialog::ServerInvite(ServerInviteDialog::from_inner(inner)),
-        }
+        let _ = role;
+        Dialog::Invite(InviteDialog::from_inner(inner))
     }
     pub fn remote_contact(&self) -> Option<crate::sip::Uri> {
         match self {
-            Dialog::ServerInvite(d) => d.inner.remote_contact.lock().as_ref().and_then(|c| {
-                crate::sip::typed::Contact::parse(c.value())
-                    .ok()
-                    .map(|c| c.uri)
-            }),
-            Dialog::ClientInvite(d) => d.inner.remote_contact.lock().as_ref().and_then(|c| {
+            Dialog::Invite(d) => d.inner.remote_contact.lock().as_ref().and_then(|c| {
                 crate::sip::typed::Contact::parse(c.value())
                     .ok()
                     .map(|c| c.uri)
@@ -1334,8 +1317,7 @@ impl Dialog {
 
     pub async fn handle(&mut self, tx: &mut Transaction) -> Result<()> {
         match self {
-            Dialog::ServerInvite(d) => d.handle(tx).await,
-            Dialog::ClientInvite(d) => d.handle(tx).await,
+            Dialog::Invite(d) => d.handle(tx).await,
             Dialog::ServerSubscription(d) => d.handle(tx).await,
             Dialog::ClientSubscription(d) => d.handle(tx).await,
             Dialog::ServerPublication(d) => d.handle(tx).await,
@@ -1344,10 +1326,7 @@ impl Dialog {
     }
     pub fn on_remove(&self) {
         match self {
-            Dialog::ServerInvite(d) => {
-                d.inner.cancel_token.cancel();
-            }
-            Dialog::ClientInvite(d) => {
+            Dialog::Invite(d) => {
                 d.inner.cancel_token.cancel();
             }
             Dialog::ServerSubscription(d) => {
@@ -1374,8 +1353,7 @@ impl Dialog {
         headers: Option<Vec<crate::sip::Header>>,
     ) -> Result<()> {
         match self {
-            Dialog::ServerInvite(d) => d.bye_with_headers(headers).await,
-            Dialog::ClientInvite(d) => d.hangup_with_headers(headers).await,
+            Dialog::Invite(d) => d.hangup_with_headers(headers).await,
             Dialog::ServerSubscription(d) => d.unsubscribe_with_headers(headers).await,
             Dialog::ClientSubscription(d) => d.unsubscribe_with_headers(headers).await,
             Dialog::ServerPublication(d) => d.close_with_headers(headers).await,
@@ -1385,8 +1363,7 @@ impl Dialog {
 
     pub fn can_cancel(&self) -> bool {
         match self {
-            Dialog::ServerInvite(d) => d.inner.can_cancel(),
-            Dialog::ClientInvite(d) => d.inner.can_cancel(),
+            Dialog::Invite(d) => d.inner.can_cancel(),
             Dialog::ServerSubscription(d) => d.inner.can_cancel(),
             Dialog::ClientSubscription(d) => d.inner.can_cancel(),
             Dialog::ServerPublication(d) => d.inner.can_cancel(),
@@ -1402,8 +1379,7 @@ impl Dialog {
         contact: Option<crate::sip::headers::untyped::Contact>,
     ) {
         match self {
-            Dialog::ServerInvite(d) => d.inner.set_remote_target(uri, contact),
-            Dialog::ClientInvite(d) => d.inner.set_remote_target(uri, contact),
+            Dialog::Invite(d) => d.inner.set_remote_target(uri, contact),
             Dialog::ServerSubscription(d) => d.inner.set_remote_target(uri, contact),
             Dialog::ClientSubscription(d) => d.inner.set_remote_target(uri, contact),
             Dialog::ServerPublication(d) => d.inner.set_remote_target(uri, contact),
@@ -1418,8 +1394,7 @@ impl Dialog {
         body: Option<Vec<u8>>,
     ) -> Result<Option<crate::sip::Response>> {
         match self {
-            Dialog::ServerInvite(d) => d.request(method, headers, body).await,
-            Dialog::ClientInvite(d) => d.request(method, headers, body).await,
+            Dialog::Invite(d) => d.request(method, headers, body).await,
             Dialog::ServerSubscription(d) => d.request(method, headers, body).await,
             Dialog::ClientSubscription(d) => d.request(method, headers, body).await,
             Dialog::ServerPublication(d) => d.request(method, headers, body).await,
@@ -1434,8 +1409,7 @@ impl Dialog {
         body: Option<Vec<u8>>,
     ) -> Result<Option<crate::sip::Response>> {
         match self {
-            Dialog::ServerInvite(d) => d.refer(refer_to, headers, body).await,
-            Dialog::ClientInvite(d) => d.refer(refer_to, headers, body).await,
+            Dialog::Invite(d) => d.refer(refer_to, headers, body).await,
             Dialog::ServerSubscription(d) => d.refer(refer_to, headers, body).await,
             Dialog::ClientSubscription(d) => d.refer(refer_to, headers, body).await,
             Dialog::ServerPublication(d) => d.refer(refer_to, headers, body).await,
@@ -1449,8 +1423,7 @@ impl Dialog {
         body: Option<Vec<u8>>,
     ) -> Result<Option<crate::sip::Response>> {
         match self {
-            Dialog::ServerInvite(d) => d.message(headers, body).await,
-            Dialog::ClientInvite(d) => d.message(headers, body).await,
+            Dialog::Invite(d) => d.message(headers, body).await,
             Dialog::ServerSubscription(d) => d.message(headers, body).await,
             Dialog::ClientSubscription(d) => d.message(headers, body).await,
             Dialog::ServerPublication(d) => d.message(headers, body).await,

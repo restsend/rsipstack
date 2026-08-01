@@ -203,7 +203,7 @@ async fn run_client(
                     };
                     let duration = Duration::from_secs(rand::random_range(3..=10));
                     sleep(duration).await;
-                    dialog.bye().await.ok();
+                    dialog.bye_with_headers(None).await.ok();
                 });
             }
         }
@@ -265,7 +265,7 @@ async fn process_dialog_state(
     while let Some(state) = state_receiver.recv().await {
         match state {
             DialogState::Calling(id) => {
-                if let Some(Dialog::ServerInvite(dialog)) = dialog_layer.get_dialog(&id) {
+                if let Some(Dialog::Invite(dialog)) = dialog_layer.get_dialog(&id) {
                     dialog.accept(None, None).ok();
                 }
             }
