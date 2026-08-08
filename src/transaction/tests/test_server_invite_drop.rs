@@ -23,7 +23,10 @@ use tokio_util::sync::CancellationToken;
 struct NoopResolver;
 #[async_trait::async_trait]
 impl DomainResolver for NoopResolver {
-    async fn resolve(&self, _target: &crate::transport::SipAddr) -> Result<crate::transport::SipAddr> {
+    async fn resolve(
+        &self,
+        _target: &crate::transport::SipAddr,
+    ) -> Result<crate::transport::SipAddr> {
         Err(crate::Error::DnsResolutionError("noop resolver".into()))
     }
 }
