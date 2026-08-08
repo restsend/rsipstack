@@ -273,12 +273,15 @@ pub struct TlsListenerConnection {
 
 impl TlsListenerConnection {
     pub async fn new(
-        local_addr: SipAddr,
+        local_addr: SocketAddr,
         external: Option<SocketAddr>,
         config: TlsConfig,
     ) -> Result<Self> {
         let inner = TlsListenerConnectionInner {
-            local_addr,
+            local_addr: SipAddr {
+                r#type: Some(crate::sip::transport::Transport::Tls),
+                addr: local_addr.into(),
+            },
             external: external.map(|addr| SipAddr {
                 r#type: Some(crate::sip::transport::Transport::Tls),
                 addr: addr.into(),

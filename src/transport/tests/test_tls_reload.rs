@@ -152,12 +152,11 @@ async fn test_reload_error_handling_invalid_key() -> Result<()> {
 #[cfg(feature = "rustls")]
 #[tokio::test]
 async fn test_tls_listener_connection_with_config() -> Result<()> {
-    use crate::transport::{SipAddr, TlsConfig, TlsListenerConnection};
+    use crate::transport::{TlsConfig, TlsListenerConnection};
     use std::net::SocketAddr;
 
     let (cert, key) = generate_test_cert("test.example.com")?;
     let socket_addr: SocketAddr = "127.0.0.1:0".parse()?;
-    let local_addr = SipAddr::new(crate::sip::transport::Transport::Tls, socket_addr.into());
 
     let config = TlsConfig {
         cert: Some(cert.into_bytes()),
@@ -165,7 +164,11 @@ async fn test_tls_listener_connection_with_config() -> Result<()> {
         ..Default::default()
     };
 
-    let _tls_listener = TlsListenerConnection::new(local_addr, None, config).await?;
+    let tls_listener = TlsListenerConnection::new(socket_addr, None, config).await?;
+    assert_eq!(
+        tls_listener.get_addr().r#type,
+        Some(crate::sip::transport::Transport::Tls)
+    );
 
     Ok(())
 }

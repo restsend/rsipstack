@@ -19,9 +19,12 @@ pub struct TcpListenerConnection {
 }
 
 impl TcpListenerConnection {
-    pub async fn new(local_addr: SipAddr, external: Option<SocketAddr>) -> Result<Self> {
+    pub async fn new(local_addr: SocketAddr, external: Option<SocketAddr>) -> Result<Self> {
         let inner = TcpListenerConnectionInner {
-            local_addr,
+            local_addr: SipAddr {
+                r#type: Some(crate::sip::transport::Transport::Tcp),
+                addr: local_addr.into(),
+            },
             external: external.map(|addr| SipAddr {
                 r#type: Some(crate::sip::transport::Transport::Tcp),
                 addr: addr.into(),

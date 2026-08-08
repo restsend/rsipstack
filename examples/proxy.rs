@@ -134,20 +134,15 @@ async fn main() -> Result<()> {
     info!(addr = %addr, port = args.port, "Added UDP transport");
 
     if let Some(tcp_port) = args.tcp_port {
-        let local_addr = SipAddr {
-            addr: format!("{}:{}", addr, tcp_port)
-                .parse::<std::net::SocketAddr>()?
-                .into(),
-            r#type: Some(rsip::transport::Transport::Tcp),
-        };
+        let local_addr = format!("{}:{}", addr, tcp_port).parse::<std::net::SocketAddr>()?;
         let external_addr = if !external_ip.is_empty() {
             Some(format!("{}:{}", external_ip, tcp_port).parse::<std::net::SocketAddr>()?)
         } else {
             None
         };
-        let tcp_listener = TcpListenerConnection::new(local_addr.clone(), external_addr).await?;
+        let tcp_listener = TcpListenerConnection::new(local_addr, external_addr).await?;
         transport_layer.add_transport(tcp_listener.into());
-        info!(addr = %local_addr.addr, "Added TCP transport");
+        info!(addr = %local_addr, "Added TCP transport");
     }
 
     let endpoint = EndpointBuilder::new()
@@ -183,26 +178,21 @@ async fn main() -> Result<()> {
     if let Some(ws_port) = args.ws_port {
         #[cfg(feature = "websocket")]
         {
-            let local_addr = SipAddr {
-                addr: format!("{}:{}", addr, ws_port)
-                    .parse::<std::net::SocketAddr>()?
-                    .into(),
-                r#type: Some(rsip::transport::Transport::Ws),
-            };
+            let local_addr = format!("{}:{}", addr, ws_port).parse::<std::net::SocketAddr>()?;
             let external_addr = if !external_ip.is_empty() {
                 Some(format!("{}:{}", external_ip, ws_port).parse::<std::net::SocketAddr>()?)
             } else {
                 None
             };
             let ws_listener =
-                WebSocketListenerConnection::new(local_addr.clone(), external_addr, false).await?;
+                WebSocketListenerConnection::new(local_addr, external_addr, false).await?;
             app_state
                 .inner
                 .endpoint_ref
                 .transport_layer
                 .add_transport(ws_listener.into());
 
-            info!(addr = %local_addr.addr, "Added WebSocket transport");
+            info!(addr = %local_addr, "Added WebSocket transport");
         }
         #[cfg(not(feature = "websocket"))]
         {

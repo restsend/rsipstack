@@ -47,7 +47,7 @@ pub struct WebSocketListenerConnection {
 
 impl WebSocketListenerConnection {
     pub async fn new(
-        local_addr: SipAddr,
+        local_addr: SocketAddr,
         external: Option<SocketAddr>,
         is_secure: bool,
     ) -> Result<Self> {
@@ -58,7 +58,10 @@ impl WebSocketListenerConnection {
         };
 
         let inner = WebSocketListenerConnectionInner {
-            local_addr,
+            local_addr: SipAddr {
+                r#type: Some(transport_type),
+                addr: local_addr.into(),
+            },
             external: external.map(|addr| SipAddr {
                 r#type: Some(transport_type),
                 addr: addr.into(),
