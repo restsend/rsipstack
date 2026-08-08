@@ -505,34 +505,46 @@ impl Transaction {
         // so before_send is called regardless of lookup outcome
         if let Some(resp) = self.last_response.as_ref() {
             if resp.status_code.kind() == StatusCodeKind::Successful {
-                // 2xx response, set destination from request
-                let target = ack.destination();
-                let addr = match self.endpoint_inner.locator.as_ref() {
-                    Some(locator) => match locator.locate(&target).await {
-                        Ok(addr) => Some(addr),
-                        Err(e) => {
-                            warn!(key = %self.key, error = %e, "ack locator failed");
-                            None
-                        }
-                    },
-                    None => (&target).try_into().ok(),
-                };
-                if let Some(addr) = addr {
-                    match self
-                        .endpoint_inner
-                        .transport_layer
-                        .lookup(&addr, Some(&self.key))
-                        .await
-                    {
-                        Ok((via_connection, resolved_addr)) => {
-                            // For UDP, we need to store the resolved destination address
-                            if !via_connection.is_reliable() {
-                                self.destination.replace(resolved_addr);
+                // Per RFC 7118 §5 and general connection-oriented transport handling,
+                // the 2xx ACK must reuse the existing flow the response arrived on
+                // instead of dialing the Record-Route/Contact target (which may be
+                // unreachable from the client) via lookup(). Only resolve a new
+                // destination for UDP (connectionless) or when no connection is given.
+                let reuse_existing = connection
+                    .as_ref()
+                    .map(|conn| conn.is_reliable())
+                    .unwrap_or(false);
+
+                if !reuse_existing {
+                    // 2xx response, set destination from request
+                    let target = ack.destination();
+                    let addr = match self.endpoint_inner.locator.as_ref() {
+                        Some(locator) => match locator.locate(&target).await {
+                            Ok(addr) => Some(addr),
+                            Err(e) => {
+                                warn!(key = %self.key, error = %e, "ack locator failed");
+                                None
                             }
-                            connection = Some(via_connection);
-                        }
-                        Err(e) => {
-                            warn!(key = %self.key, error = %e, "ack lookup failed");
+                        },
+                        None => (&target).try_into().ok(),
+                    };
+                    if let Some(addr) = addr {
+                        match self
+                            .endpoint_inner
+                            .transport_layer
+                            .lookup(&addr, Some(&self.key))
+                            .await
+                        {
+                            Ok((via_connection, resolved_addr)) => {
+                                // For UDP, we need to store the resolved destination address
+                                if !via_connection.is_reliable() {
+                                    self.destination.replace(resolved_addr);
+                                }
+                                connection = Some(via_connection);
+                            }
+                            Err(e) => {
+                                warn!(key = %self.key, error = %e, "ack lookup failed");
+                            }
                         }
                     }
                 }

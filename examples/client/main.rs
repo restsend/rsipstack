@@ -374,7 +374,9 @@ async fn process_dialog(
                     }
                 };
                 match dialog {
-                    Dialog::Invite(d) if d.role() == rsipstack::transaction::key::TransactionRole::Server => {
+                    Dialog::Invite(d)
+                        if d.role() == rsipstack::transaction::key::TransactionRole::Server =>
+                    {
                         // play example pcmu of handling incoming call
                         //
                         // [A] Ai answer, [R] Reject, [E] Play example pcmu

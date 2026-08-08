@@ -21,7 +21,7 @@ use crate::transaction::transaction::{Transaction, TransactionEvent};
 use crate::Result;
 use std::sync::atomic::Ordering;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, trace, warn};
 
 /// Unified INVITE dialog that can act as either a UAS (Server) or UAC (Client).
 ///
@@ -99,16 +99,14 @@ impl InviteDialog {
         if self.role() != TransactionRole::Server {
             return Ok(());
         }
-        let resp = self.inner.make_response(
-            &self.initial_request(),
-            StatusCode::OK,
-            headers,
-            body,
-        );
+        let resp = self
+            .inner
+            .make_response(&self.initial_request(), StatusCode::OK, headers, body);
         self.inner
             .tu_sender
             .send(TransactionEvent::Respond(resp.clone()))?;
-        self.inner.transition(DialogState::WaitAck(self.id(), resp))?;
+        self.inner
+            .transition(DialogState::WaitAck(self.id(), resp))?;
         Ok(())
     }
 
@@ -135,11 +133,7 @@ impl InviteDialog {
 
     /// Reject the incoming INVITE (default `603 Decline`).
     /// No-op for UAC dialogs.
-    pub fn reject(
-        &self,
-        code: Option<StatusCode>,
-        reason: Option<String>,
-    ) -> Result<()> {
+    pub fn reject(&self, code: Option<StatusCode>, reason: Option<String>) -> Result<()> {
         if self.role() != TransactionRole::Server {
             return Ok(());
         }
@@ -175,10 +169,7 @@ impl InviteDialog {
     /// Terminate the dialog: send BYE when confirmed, CANCEL when still early.
     /// Role-agnostic — `cancel()` internally guards against non-UAC dialogs,
     /// and `bye_with_headers()` handles the confirmed UAS/UAC case uniformly.
-    pub async fn hangup_with_headers(
-        &self,
-        headers: Option<Vec<Header>>,
-    ) -> Result<()> {
+    pub async fn hangup_with_headers(&self, headers: Option<Vec<Header>>) -> Result<()> {
         if self.inner.can_cancel() {
             self.cancel().await
         } else {
@@ -221,10 +212,7 @@ impl InviteDialog {
 
     /// Send an OPTIONS request within the dialog.
     /// No-op for UAS dialogs.
-    pub async fn options(
-        &self,
-        headers: Option<Vec<Header>>,
-    ) -> Result<Option<Response>> {
+    pub async fn options(&self, headers: Option<Vec<Header>>) -> Result<Option<Response>> {
         if self.role() != TransactionRole::Client {
             return Ok(None);
         }
@@ -363,20 +351,38 @@ impl InviteDialog {
     }
 
     /// Send a BYE request with custom headers (role-aware termination reason).
+    ///
+    /// BYE can only be sent from `Confirmed` (or `WaitAck` for a server dialog).
+    /// Calling BYE in any other non-terminated state returns an error; terminated
+    /// dialogs remain a silent no-op.
+    ///
+    /// # Returns
+    /// * `Ok(())` - BYE was sent successfully or dialog is already terminated.
+    /// * `Err(Error)` - Failed to build/send BYE request, or dialog is in a state where BYE does not apply.
     pub async fn bye_with_headers(&self, headers: Option<Vec<Header>>) -> Result<()> {
         let confirmed_or_waiting_ack = self.inner.is_confirmed()
             || (self.role() == TransactionRole::Server && self.inner.waiting_ack());
         if !confirmed_or_waiting_ack {
+            if !self.inner.is_terminated() {
+                warn!(
+                    dialog_id = %self.id(),
+                    state = ?self.state(),
+                    "bye skipped: dialog not confirmed or waiting ack"
+                );
+                return Err(crate::Error::Error(format!(
+                    "dialog {} cannot send BYE in state {:?}",
+                    self.id(),
+                    self.state()
+                )));
+            }
             return Ok(());
         }
 
-        let request =
-            self.inner
-                .make_request(Method::Bye, None, None, None, headers, None)?;
+        let request = self
+            .inner
+            .make_request(Method::Bye, None, None, None, headers, None)?;
 
-        if let Err(e) = self.inner.do_request(request).await {
-            info!(dialog_id = %self.id(), error = %e, "bye error");
-        }
+        self.inner.do_request(request).await?;
         let reason = match self.role() {
             TransactionRole::Server => TerminatedReason::UasBye,
             TransactionRole::Client => TerminatedReason::UacBye,
@@ -406,9 +412,9 @@ impl InviteDialog {
             body = ?body.as_deref().map(String::from_utf8_lossy),
             "sending re-invite request"
         );
-        let request =
-            self.inner
-                .make_request(Method::Invite, None, None, None, headers, body)?;
+        let request = self
+            .inner
+            .make_request(Method::Invite, None, None, None, headers, body)?;
         self.inner.do_request(request).await
     }
 
@@ -426,9 +432,9 @@ impl InviteDialog {
             body = ?body.as_deref().map(String::from_utf8_lossy),
             "sending update request"
         );
-        let request =
-            self.inner
-                .make_request(Method::Update, None, None, None, headers, body)?;
+        let request = self
+            .inner
+            .make_request(Method::Update, None, None, None, headers, body)?;
         self.inner.do_request(request.clone()).await
     }
 
@@ -446,9 +452,9 @@ impl InviteDialog {
             body = ?body.as_deref().map(String::from_utf8_lossy),
             "sending info request"
         );
-        let request =
-            self.inner
-                .make_request(Method::Info, None, None, None, headers, body)?;
+        let request = self
+            .inner
+            .make_request(Method::Info, None, None, None, headers, body)?;
         self.inner.do_request(request.clone()).await
     }
 
@@ -463,9 +469,9 @@ impl InviteDialog {
             return Ok(None);
         }
         debug!(id = %self.id(), %method, "sending request");
-        let request =
-            self.inner
-                .make_request(method, None, None, None, headers, body)?;
+        let request = self
+            .inner
+            .make_request(method, None, None, None, headers, body)?;
         self.inner.do_request(request).await
     }
 
@@ -519,16 +525,12 @@ impl InviteDialog {
     /// Convert this INVITE dialog to a subscription dialog (role-aware).
     pub fn as_subscription(&self) -> super::dialog::Dialog {
         match self.role() {
-            TransactionRole::Server => {
-                Dialog::ServerSubscription(ServerSubscriptionDialog {
-                    inner: self.inner.clone(),
-                })
-            }
-            TransactionRole::Client => {
-                Dialog::ClientSubscription(ClientSubscriptionDialog {
-                    inner: self.inner.clone(),
-                })
-            }
+            TransactionRole::Server => Dialog::ServerSubscription(ServerSubscriptionDialog {
+                inner: self.inner.clone(),
+            }),
+            TransactionRole::Client => Dialog::ClientSubscription(ClientSubscriptionDialog {
+                inner: self.inner.clone(),
+            }),
         }
     }
 

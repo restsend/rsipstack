@@ -111,7 +111,7 @@ impl TransactionHandle {
 /// }
 /// # }
 /// ```
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum DialogState {
     Calling(DialogId),
     Trying(DialogId),

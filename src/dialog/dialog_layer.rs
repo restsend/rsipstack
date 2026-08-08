@@ -506,7 +506,6 @@ impl DialogLayer {
     }
 
     pub fn remove_dialog(&self, id: &DialogId) {
-        debug!(%id, "remove dialog");
         if let Some((_, d)) = self.inner.dialogs.remove(&id.to_string()) {
             d.on_remove()
         }

@@ -106,7 +106,7 @@ connection
 
 ```rust
 use rsipstack::transport::{
-    TcpListenerConnection, TransportEvent, TransportLayer,
+    TcpListenerConnection, TransportLayer,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -120,40 +120,15 @@ let tcp_listener = TcpListenerConnection::new(
 )
 .await?;
 transport_layer.add_transport(tcp_listener.into());
-
-// Access the transport event stream
-let mut events = transport_layer
-    .inner
-    .transport_rx
-    .lock()
-    .unwrap()
-    .take()
-    .expect("transport receiver");
-
-tokio::spawn(async move {
-    while let Some(event) = events.recv().await {
-        match event {
-            TransportEvent::New(connection) => println!("New connection: {}", connection),
-            TransportEvent::Incoming(msg, connection, source) => {
-                println!("Received message from {}: {}", source, msg);
-                // Use `connection` to reply if needed
-            }
-            TransportEvent::Closed(connection) => {
-                println!("Connection closed: {}", connection);
-            }
-        }
-    }
-});
-
-// Start accepting connections (this is normally driven by `Endpoint::serve`)
-transport_layer
-    .serve_listens()
-    .await
-    .expect("failed to start listeners");
 ```
 
 To add TLS or WebSocket listeners, construct a `TlsListenerConnection` or
 `WebSocketListenerConnection` and register it with `transport_layer.add_transport(...)`.
+
+The raw `TransportEvent` stream is an internal API consumed by `Endpoint::serve`.
+To process incoming SIP messages, build an `Endpoint` around the transport layer and
+drive it with `endpoint.serve()` while consuming transactions via
+`endpoint.incoming_transactions()` (see the next section).
 
 ### 3. Using Endpoint and Transactions
 
@@ -199,11 +174,11 @@ while let Some(transaction) = incoming.recv().await {
 ### 4. Creating a User Agent Client
 
 ```rust
-use rsipstack::dialog::{DialogLayer, registration::Registration};
+use rsipstack::dialog::dialog_layer::DialogLayer;
+use rsipstack::dialog::registration::Registration;
 use rsipstack::dialog::authenticate::Credential;
 use rsipstack::dialog::invitation::InviteOption;
 use std::sync::Arc;
-use tokio::sync::mpsc::unbounded_channel;
 
 // Create dialog layer
 let dialog_layer = Arc::new(DialogLayer::new(endpoint.inner.clone()));
@@ -227,9 +202,11 @@ let invite_option = InviteOption {
     contact: "sip:alice@192.168.1.100:5060".parse()?,
     credential: Some(credential),
     headers: None,
+    ..Default::default()
 };
 
-let (state_sender, _state_receiver) = unbounded_channel();
+// Create the dialog state channel (drives `process_dialog`-style loops)
+let (state_sender, _state_receiver) = dialog_layer.new_dialog_state_channel();
 let (invite_dialog, response) = dialog_layer.do_invite(invite_option, state_sender).await?;
 ```
 
@@ -278,6 +255,11 @@ while let Some(mut transaction) = incoming.recv().await {
     }
 }
 ```
+
+This is a simplified sketch: `User`, `users` and `incoming` are types/values you define yourself
+(`incoming` comes from `endpoint.incoming_transactions()?`, and `User` is a struct you implement
+that holds the registered user's username and destination `SipAddr`). A complete, working proxy
+is provided in [`examples/proxy.rs`](./examples/proxy.rs).
 
 ## Running Tests
 

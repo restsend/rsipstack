@@ -1,4 +1,5 @@
 use super::{connection::TransportSender, SipAddr, SipConnection};
+use crate::sip::prelude::HeadersExt;
 use crate::{
     transport::transport_layer::TransportLayerInnerRef,
     transport::{
@@ -173,7 +174,11 @@ impl UdpConnection {
                 }
             };
 
-            debug!(len, src=%addr, dest=%self.get_addr(), raw_message = %raw_message, "udp received");
+            let cseq = msg
+                .cseq_header()
+                .map(|c| c.value().to_string())
+                .unwrap_or_default();
+            debug!(len, src=%addr, dest=%self.get_addr(), cseq = %cseq, raw_message = %msg.start_line(), "udp received");
 
             let from = SipAddr {
                 r#type: Some(crate::sip::transport::Transport::Udp),
@@ -206,7 +211,11 @@ impl UdpConnection {
         // byte-for-byte; a SIP body is opaque octets (RFC 3261 §7.4).
         let buf = msg.to_bytes();
 
-        debug!(len=buf.len(), dest=%destination, src=%self.get_addr(), raw_message=%msg, "udp send");
+        let cseq = msg
+            .cseq_header()
+            .map(|c| c.value().to_string())
+            .unwrap_or_default();
+        debug!(len=buf.len(), dest=%destination, src=%self.get_addr(), cseq = %cseq, raw_message=%msg.start_line(), "udp send");
 
         self.inner
             .conn

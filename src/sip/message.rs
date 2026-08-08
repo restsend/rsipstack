@@ -619,6 +619,22 @@ impl SipMessage {
     pub fn is_response(&self) -> bool {
         matches!(self, SipMessage::Response(_))
     }
+
+    /// The start line (request/status line) of the message — the first line of
+    /// its on-wire representation, e.g. `CANCEL sip:2001@localhost SIP/2.0` or
+    /// `SIP/2.0 200 OK`. Useful for single-line transport logging without
+    /// spilling the multi-line headers/body into the log.
+    pub fn start_line(&self) -> String {
+        match self {
+            SipMessage::Request(r) => format!("{} {} {}", r.method, r.uri, r.version),
+            SipMessage::Response(r) => format!(
+                "{} {} {}",
+                r.version,
+                r.status_code.code(),
+                r.status_code.text()
+            ),
+        }
+    }
 }
 
 impl HasHeaders for SipMessage {

@@ -2,8 +2,7 @@ use crate::transport::{SipAddr, SipConnection};
 use key::TransactionKey;
 use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use transaction::Transaction;
-
+pub use transaction::Transaction;
 pub mod endpoint;
 pub mod key;
 pub mod message;

@@ -15,7 +15,7 @@ use crate::{
 };
 use std::sync::atomic::Ordering;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, trace};
+use tracing::{debug, trace, warn};
 
 /// Client-side INVITE Dialog (UAC)
 ///
@@ -147,17 +147,30 @@ impl ClientInviteDialog {
     /// This is the low-level variant used to add SIP headers (e.g. `Reason`)
     /// to the outgoing BYE request.
     ///
-    /// The dialog must be in `Confirmed` state for BYE to be sent; otherwise
-    /// this method is a no-op.
+    /// The dialog must be in `Confirmed` state for BYE to be sent.
+    /// Calling BYE in any other non-terminated state returns an error; terminated
+    /// dialogs remain a silent no-op.
     ///
     /// # Parameters
     /// * `headers` - Optional extra SIP headers to include in the BYE request.
     ///
     /// # Returns
-    /// * `Ok(())` - BYE was sent successfully or dialog is not confirmed.
-    /// * `Err(Error)` - Failed to build/send BYE request.
+    /// * `Ok(())` - BYE was sent successfully or dialog is already terminated.
+    /// * `Err(Error)` - Failed to build/send BYE request, or dialog is in a state where BYE does not apply.
     pub async fn bye_with_headers(&self, headers: Option<Vec<crate::sip::Header>>) -> Result<()> {
         if !self.inner.is_confirmed() {
+            if !self.inner.is_terminated() {
+                warn!(
+                    dialog_id = %self.id(),
+                    state = ?self.state(),
+                    "bye skipped: dialog not confirmed"
+                );
+                return Err(crate::Error::Error(format!(
+                    "dialog {} cannot send BYE in state {:?}",
+                    self.id(),
+                    self.state()
+                )));
+            }
             return Ok(());
         }
 
@@ -165,10 +178,7 @@ impl ClientInviteDialog {
             self.inner
                 .make_request(crate::sip::Method::Bye, None, None, None, headers, None)?;
 
-        if let Err(e) = self.inner.do_request(request).await {
-            info!(dialog_id = %self.id(), error = %e, "bye error");
-        }
-
+        self.inner.do_request(request).await?;
         self.inner
             .transition(DialogState::Terminated(self.id(), TerminatedReason::UacBye))?;
         Ok(())

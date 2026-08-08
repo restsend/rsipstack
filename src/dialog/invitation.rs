@@ -1,8 +1,8 @@
 use super::{
     authenticate::Credential,
-    invite_dialog::InviteDialog,
     dialog::{DialogInner, DialogStateSender},
     dialog_layer::DialogLayer,
+    invite_dialog::InviteDialog,
 };
 use crate::sip::{
     prelude::{HeadersExt, ToTypedHeader},
@@ -517,7 +517,6 @@ impl DialogLayer {
             .dialogs
             .insert(id.to_string(), Dialog::Invite(dialog.clone()));
 
-        debug!(%id, "client invite dialog created");
         let mut guard = DialogGuardForUnconfirmed {
             dialog_layer_inner: &self.inner,
             id: &id,
@@ -542,10 +541,9 @@ impl DialogLayer {
                             "client invite dialog confirmed: {} => {}",
                             id, new_dialog_id
                         );
-                        self.inner.dialogs.insert(
-                            new_dialog_id.to_string(),
-                            Dialog::Invite(dialog.clone()),
-                        );
+                        self.inner
+                            .dialogs
+                            .insert(new_dialog_id.to_string(), Dialog::Invite(dialog.clone()));
                     }
                     _ => {}
                 }
@@ -578,10 +576,7 @@ impl DialogLayer {
         self: &Arc<Self>,
         opt: InviteOption,
         state_sender: DialogStateSender,
-    ) -> Result<(
-        InviteDialog,
-        tokio::task::JoinHandle<InviteAsyncResult>,
-    )> {
+    ) -> Result<(InviteDialog, tokio::task::JoinHandle<InviteAsyncResult>)> {
         let (dialog, mut tx) = self.create_client_invite_dialog(opt, state_sender)?;
         let id0 = dialog.id();
 
@@ -589,8 +584,6 @@ impl DialogLayer {
         self.inner
             .dialogs
             .insert(id0.to_string(), Dialog::Invite(dialog.clone()));
-
-        debug!(%id0, "client invite dialog created (async)");
 
         let inner = self.inner.clone();
         let dialog_clone = dialog.clone();
@@ -613,10 +606,9 @@ impl DialogLayer {
 
                     if is_2xx {
                         debug!("client invite dialog confirmed: {} => {}", id0, new_id);
-                        inner.dialogs.insert(
-                            new_id.to_string(),
-                            Dialog::Invite(dialog_clone.clone()),
-                        );
+                        inner
+                            .dialogs
+                            .insert(new_id.to_string(), Dialog::Invite(dialog_clone.clone()));
                     }
                 }
                 Err(e) => debug!(%id0, error = %e, "async invite failed"),
