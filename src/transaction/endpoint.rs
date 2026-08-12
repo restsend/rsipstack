@@ -521,13 +521,21 @@ impl EndpointInner {
         self.transport_layer.get_addrs()
     }
 
-    pub fn get_record_route(&self) -> Result<crate::sip::typed::RecordRoute> {
-        let first_addr = self
-            .transport_layer
-            .get_addrs()
-            .first()
-            .ok_or(Error::EndpointError("not sipaddrs".to_string()))
-            .cloned()?;
+    /// `addr` overrides which local address is advertised, without it the endpoint's
+    /// first listener is used.
+    pub fn get_record_route(
+        &self,
+        addr: Option<SipAddr>,
+    ) -> Result<crate::sip::typed::RecordRoute> {
+        let first_addr = match addr {
+            Some(addr) => addr,
+            None => self
+                .transport_layer
+                .get_addrs()
+                .first()
+                .ok_or(Error::EndpointError("not sipaddrs".to_string()))
+                .cloned()?,
+        };
         let mut uri: crate::sip::Uri = first_addr.into();
         uri.params.push(crate::sip::Param::Lr);
         Ok(crate::sip::typed::RecordRoute {
