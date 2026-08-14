@@ -178,57 +178,93 @@ pub(super) struct DialogGuardForUnconfirmed<'a> {
 
 impl<'a> Drop for DialogGuardForUnconfirmed<'a> {
     fn drop(&mut self) {
-        // If the dialog is still unconfirmed, we should try to cancel it
-        if let Some((_, dlg)) = self.dialog_layer_inner.dialogs.remove(&self.id.to_string()) {
-            debug!(%self.id, "unconfirmed dialog dropped, cancelling it");
-            let invite_tx = self.invite_tx.take();
-            let _handle = tokio::spawn(async move {
-                if let Dialog::Invite(ref client_dialog) = dlg {
-                    if client_dialog.inner.can_cancel() {
-                        if let Err(e) = client_dialog.cancel().await {
-                            warn!(id = %client_dialog.id(), error = %e, "dialog cancel failed");
-                            return;
-                        }
+        let Some((_, dlg)) = self.dialog_layer_inner.dialogs.remove(&self.id.to_string()) else {
+            return;
+        };
 
-                        if let Some(mut invite_tx) = invite_tx {
-                            let duration = tokio::time::Duration::from_secs(2);
-                            let timeout = tokio::time::sleep(duration);
-                            tokio::pin!(timeout);
-                            loop {
-                                tokio::select! {
-                                    _ = &mut timeout => break,
-                                    msg = invite_tx.receive() => {
-                                        if let Some(msg) = msg{
-                                            if let SipMessage::Response(resp) = msg {
-                                                if resp.status_code.kind() != StatusCodeKind::Provisional {
-                                                    debug!(
-                                                        id = %client_dialog.id(),
-                                                        status = %resp.status_code,
-                                                        "received final response"
-                                                    );
-                                                    break;
-                                                }
-                                            }
-                                        }else{
-                                            break;
-                                        }
+        let Dialog::Invite(client_dialog) = dlg else {
+            return;
+        };
+
+        match client_dialog.state() {
+            // CANCEL cannot be sent before a provisional response. Dropping the
+            // INVITE transaction here also removes its retransmission timers.
+            DialogState::Calling(_) => {
+                drop(self.invite_tx.take());
+                let _ = client_dialog.inner.transition(DialogState::Terminated(
+                    client_dialog.id(),
+                    TerminatedReason::UacCancel,
+                ));
+                debug!(id = %client_dialog.id(), "dialog terminated before provisional response");
+            }
+            DialogState::Terminated(_, _) => {}
+            DialogState::Trying(_) | DialogState::Early(_, _) => {
+                let Some(mut invite_tx) = self.invite_tx.take() else {
+                    let _ = client_dialog.inner.transition(DialogState::Terminated(
+                        client_dialog.id(),
+                        TerminatedReason::UacCancel,
+                    ));
+                    return;
+                };
+
+                debug!(%self.id, "unconfirmed dialog dropped, cancelling it");
+                let _handle = tokio::spawn(async move {
+                    let timeout = tokio::time::sleep(tokio::time::Duration::from_secs(2));
+                    tokio::pin!(timeout);
+                    invite_tx.stop_retransmissions();
+
+                    let mut cancel_done = false;
+                    let cancel = client_dialog.cancel();
+                    tokio::pin!(cancel);
+
+                    loop {
+                        tokio::select! {
+                            _ = &mut timeout => break,
+                            result = &mut cancel, if !cancel_done => {
+                                match result {
+                                    Ok(()) => cancel_done = true,
+                                    Err(e) => {
+                                        warn!(id = %client_dialog.id(), error = %e, "dialog cancel failed");
+                                        break;
                                     }
                                 }
                             }
+                            msg = invite_tx.receive() => {
+                                match msg {
+                                    Some(SipMessage::Response(resp))
+                                        if resp.status_code.kind() != StatusCodeKind::Provisional =>
+                                    {
+                                        debug!(
+                                            id = %client_dialog.id(),
+                                            status = %resp.status_code,
+                                            "received final response"
+                                        );
+                                        break;
+                                    }
+                                    Some(_) => {}
+                                    None => break,
+                                }
+                            }
                         }
-                        let _ = client_dialog.inner.transition(DialogState::Terminated(
-                            client_dialog.id(),
-                            TerminatedReason::UacCancel,
-                        ));
-                        debug!(id = %client_dialog.id(), "dialog terminated");
-                        return;
                     }
-                }
 
-                if let Err(e) = dlg.hangup().await {
-                    info!(id = %dlg.id(), error = %e, "failed to hangup unconfirmed dialog");
-                }
-            });
+                    drop(cancel);
+                    drop(invite_tx);
+                    let _ = client_dialog.inner.transition(DialogState::Terminated(
+                        client_dialog.id(),
+                        TerminatedReason::UacCancel,
+                    ));
+                    debug!(id = %client_dialog.id(), "dialog terminated");
+                });
+            }
+            DialogState::Confirmed(_, _) => {
+                let _handle = tokio::spawn(async move {
+                    if let Err(e) = client_dialog.hangup().await {
+                        info!(id = %client_dialog.id(), error = %e, "failed to hangup confirmed dialog");
+                    }
+                });
+            }
+            _ => {}
         }
     }
 }

@@ -617,6 +617,9 @@ async fn test_cancel_conforms_to_rfc3261_section_9_1() -> crate::Result<()> {
     let invite_req: Request = crate::sip::SipMessage::try_from(invite_msg)?.try_into()?;
     assert_eq!(invite_req.method, crate::sip::Method::Invite);
 
+    client_dialog
+        .inner
+        .transition(DialogState::Trying(client_dialog.id()))?;
     let dialog_clone = client_dialog.clone();
     tokio::spawn(async move { dialog_clone.cancel().await });
 
@@ -1098,17 +1101,18 @@ async fn test_ack_sent_to_websocket_channel_via_locator() -> crate::Result<()> {
     Ok(())
 }
 
-/// Test that dropping an invitation correctly cancels the INVITE
-/// and waiting for the final response and send ACK.
+/// A successful CANCEL must leave the cleanup task polling the original
+/// INVITE transaction for its final response and ACK.
 ///
 /// This test simulates:
 /// 1. UAC sends INVITE
-/// 2. UAS sends 100 Trying (dialog in Early state)
-/// 3. UAC drops the invite future (triggers CANCEL)
-/// 4. UAS responds with 200 OK to CANCEL and 487 to INVITE
-/// 5. Verify the drop completes correctly
+/// 2. UAS sends 100 Trying, enabling CANCEL
+/// 3. UAC drops the invite future
+/// 4. UAS sends 180 while CANCEL is pending
+/// 5. UAS accepts CANCEL with 200, then sends 487 to INVITE
+/// 6. Verify that the UAC still ACKs the 487
 #[tokio::test]
-async fn test_drop_unconfirmed_dialog_with_487_response() -> crate::Result<()> {
+async fn test_drop_polls_invite_after_cancel_success() -> crate::Result<()> {
     use crate::dialog::{dialog_layer::DialogLayer, invitation::InviteOption};
     // Start a UDP socket to simulate UAS
     let uas_socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
@@ -1173,7 +1177,7 @@ async fn test_drop_unconfirmed_dialog_with_487_response() -> crate::Result<()> {
     let invite_req: Request = crate::sip::SipMessage::try_from(invite_msg)?.try_into()?;
     assert_eq!(invite_req.method, crate::sip::Method::Invite);
 
-    // Send 100 Trying to put dialog in Early state
+    // A provisional response permits CANCEL.
     let trying_resp = format!(
         "SIP/2.0 100 Trying\r\n\
          Via: {}\r\n\
@@ -1190,14 +1194,22 @@ async fn test_drop_unconfirmed_dialog_with_487_response() -> crate::Result<()> {
     );
     uas_socket.send_to(trying_resp.as_bytes(), uac_addr).await?;
 
-    // Wait for Trying state
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            match state_receiver.recv().await {
+                Some(DialogState::Trying(_)) => break,
+                Some(_) => {}
+                None => panic!("dialog state channel closed before Trying"),
+            }
+        }
+    })
+    .await
+    .expect("timeout waiting for Trying state");
 
-    // Abort the invite handle to trigger drop
+    // Only dialogs that have received a provisional response spawn async
+    // CANCEL cleanup.
     invite_handle.abort();
-
-    // Small delay for drop to start
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let _ = invite_handle.await;
 
     // Receive the CANCEL request
     let (len, _) = tokio::time::timeout(
@@ -1212,7 +1224,28 @@ async fn test_drop_unconfirmed_dialog_with_487_response() -> crate::Result<()> {
     let cancel_req: Request = crate::sip::SipMessage::try_from(cancel_msg)?.try_into()?;
     assert_eq!(cancel_req.method, crate::sip::Method::Cancel);
 
-    // Send 200 OK to CANCEL
+    // A further provisional response must not end INVITE polling while the
+    // CANCEL transaction is pending.
+    let ringing_resp = format!(
+        "SIP/2.0 180 Ringing\r\n\
+         Via: {}\r\n\
+         From: {}\r\n\
+         To: {};tag=uas-tag-180\r\n\
+         Call-ID: {}\r\n\
+         CSeq: {}\r\n\
+         Content-Length: 0\r\n\r\n",
+        invite_req.via_header()?.value(),
+        invite_req.from_header()?.value(),
+        invite_req.to_header()?.value(),
+        invite_req.call_id_header()?.value(),
+        invite_req.cseq_header()?.value(),
+    );
+    uas_socket
+        .send_to(ringing_resp.as_bytes(), uac_addr)
+        .await?;
+
+    // Complete the CANCEL transaction. The original INVITE transaction remains
+    // independent and still needs to consume and ACK its final response.
     let cancel_ok_resp = format!(
         "SIP/2.0 200 OK\r\n\
          Via: {}\r\n\
@@ -1313,25 +1346,21 @@ async fn test_drop_unconfirmed_dialog_with_487_response() -> crate::Result<()> {
     Ok(())
 }
 
-/// Test that dropping an unconfirmed dialog completes even when the UAS
-/// only responds to CANCEL with 200 OK but never sends a final response to INVITE.
-///
-/// This test simulates a misbehaving UAS that doesn't send 487 after CANCEL.
-/// The drop should still complete without hanging.
+/// A failed CANCEL exits through the common dialog/transaction cleanup path.
 ///
 /// This test has an internal 3-second timeout - if the drop hangs, the test will fail.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_drop_unconfirmed_dialog_without_final_response() -> crate::Result<()> {
+async fn test_drop_cleans_up_after_cancel_failure() -> crate::Result<()> {
     // Wrap entire test in timeout to fail fast if drop hangs
     tokio::time::timeout(std::time::Duration::from_secs(3), async {
-        test_drop_unconfirmed_dialog_without_final_response_impl().await
+        test_drop_cleans_up_after_cancel_failure_impl().await
     })
     .await
     .expect("Test timed out - drop handler is likely hanging")?;
     Ok(())
 }
 
-async fn test_drop_unconfirmed_dialog_without_final_response_impl() -> crate::Result<()> {
+async fn test_drop_cleans_up_after_cancel_failure_impl() -> crate::Result<()> {
     use crate::dialog::dialog::DialogState;
     use crate::dialog::{dialog_layer::DialogLayer, invitation::InviteOption};
 
@@ -1437,9 +1466,9 @@ async fn test_drop_unconfirmed_dialog_without_final_response_impl() -> crate::Re
     let cancel_req: Request = crate::sip::SipMessage::try_from(cancel_msg)?.try_into()?;
     assert_eq!(cancel_req.method, crate::sip::Method::Cancel);
 
-    // Send 200 OK to CANCEL only - deliberately don't send 487 to INVITE
-    let cancel_ok_resp = format!(
-        "SIP/2.0 200 OK\r\n\
+    // Fail CANCEL and do not send a final response to INVITE.
+    let cancel_error_resp = format!(
+        "SIP/2.0 500 Server Internal Error\r\n\
          Via: {}\r\n\
          From: {}\r\n\
          To: {}\r\n\
@@ -1453,12 +1482,10 @@ async fn test_drop_unconfirmed_dialog_without_final_response_impl() -> crate::Re
         cancel_req.cseq_header()?.value(),
     );
     uas_socket
-        .send_to(cancel_ok_resp.as_bytes(), uac_addr)
+        .send_to(cancel_error_resp.as_bytes(), uac_addr)
         .await?;
 
-    // Wait for the drop handler to complete (with its internal 500ms timeout)
-    // The drop should transition the dialog to Terminated state
-    let terminated_received = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+    let reason = tokio::time::timeout(std::time::Duration::from_secs(1), async {
         while let Some(state) = state_receiver.recv().await {
             if let DialogState::Terminated(_, reason) = state {
                 return Some(reason);
@@ -1466,28 +1493,205 @@ async fn test_drop_unconfirmed_dialog_without_final_response_impl() -> crate::Re
         }
         None
     })
-    .await;
+    .await
+    .expect("drop cleanup did not terminate after CANCEL failure")
+    .expect("dialog state channel closed before Terminated");
+    assert!(
+        matches!(reason, TerminatedReason::UacCancel),
+        "expected UacCancel termination reason, got {reason:?}"
+    );
 
-    // Assert that dialog was properly terminated
-    match terminated_received {
-        Ok(Some(reason)) => {
-            assert!(
-                matches!(reason, TerminatedReason::UacCancel),
-                "Expected UacCancel termination reason, got {:?}",
-                reason
-            );
+    Ok(())
+}
+
+/// Dropping an INVITE before any provisional response must not send CANCEL,
+/// and must remove the INVITE retransmission timers immediately.
+#[tokio::test]
+async fn test_drop_unconfirmed_dialog_before_provisional_stops_requests() -> crate::Result<()> {
+    use crate::dialog::{dialog_layer::DialogLayer, invitation::InviteOption};
+    use crate::transaction::endpoint::EndpointOption;
+
+    let uas_socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
+    let uas_port = uas_socket.local_addr()?.port();
+    let token = CancellationToken::new();
+    let transport_layer = TransportLayer::new(token.child_token());
+    let endpoint = EndpointBuilder::new()
+        .with_user_agent("rsipstack-test")
+        .with_transport_layer(transport_layer)
+        .with_option(EndpointOption {
+            t1x64: std::time::Duration::from_millis(600),
+            ..Default::default()
+        })
+        .build();
+
+    let udp = UdpConnection::create_connection(
+        "127.0.0.1:0".parse().unwrap(),
+        None,
+        Some(
+            endpoint
+                .inner
+                .transport_layer
+                .inner
+                .cancel_token
+                .child_token(),
+        ),
+    )
+    .await?;
+    let uac_port = udp.get_addr().addr.port.map(u16::from).unwrap_or(0);
+    endpoint.inner.transport_layer.add_transport(udp.into());
+    endpoint.inner.transport_layer.serve_listens().await?;
+
+    let endpoint_inner = endpoint.inner.clone();
+    tokio::spawn(async move {
+        let _ = endpoint_inner.serve().await;
+    });
+
+    let dialog_layer = Arc::new(DialogLayer::new(endpoint.inner.clone()));
+    let invite_option = InviteOption {
+        caller: Uri::try_from("sip:alice@example.com")?,
+        callee: Uri::try_from(format!("sip:bob@127.0.0.1:{}", uas_port).as_str())?,
+        contact: Uri::try_from(format!("sip:alice@127.0.0.1:{}", uac_port).as_str())?,
+        ..Default::default()
+    };
+    let (state_sender, mut state_receiver) = unbounded_channel();
+
+    let invite_handle = {
+        let dialog_layer = dialog_layer.clone();
+        tokio::spawn(async move { dialog_layer.do_invite(invite_option, state_sender).await })
+    };
+
+    let mut buf = [0u8; 4096];
+    let (len, _) = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        uas_socket.recv_from(&mut buf),
+    )
+    .await
+    .expect("timeout receiving initial INVITE")?;
+    let initial: Request =
+        crate::sip::SipMessage::try_from(std::str::from_utf8(&buf[..len]).unwrap())?.try_into()?;
+    assert_eq!(initial.method, crate::sip::Method::Invite);
+
+    invite_handle.abort();
+    let _ = invite_handle.await;
+
+    let reason = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while let Some(state) = state_receiver.recv().await {
+            if let DialogState::Terminated(_, reason) = state {
+                return Some(reason);
+            }
         }
-        Ok(None) => {
-            // Channel closed without Terminated state - acceptable if dialog was removed
-        }
-        Err(_) => {
-            // Timeout waiting for state - also acceptable since the drop may have completed
-            // without sending state (e.g., if state_sender was already dropped)
-        }
+        None
+    })
+    .await
+    .expect("drop cleanup did not terminate before provisional response")
+    .expect("dialog state channel closed before Terminated");
+    assert!(
+        matches!(reason, TerminatedReason::UacCancel),
+        "expected UacCancel termination reason, got {reason:?}"
+    );
+
+    // Wait beyond the shortened transaction timeout. The old sequential
+    // cleanup emitted CANCEL immediately and then a queued INVITE Timer A
+    // retransmission after the CANCEL transaction timed out.
+    if let Ok(Ok((len, _))) = tokio::time::timeout(
+        std::time::Duration::from_millis(750),
+        uas_socket.recv_from(&mut buf),
+    )
+    .await
+    {
+        let unexpected: Request =
+            crate::sip::SipMessage::try_from(std::str::from_utf8(&buf[..len]).unwrap())?
+                .try_into()?;
+        panic!(
+            "received unexpected {} after dropping INVITE before provisional response",
+            unexpected.method
+        );
     }
 
-    // If we reach here without the test timeout (3s), the drop completed successfully
-    // The drop mechanism properly handles the case where no 487 is received
+    Ok(())
+}
+
+/// A locally generated 408 from the CANCEL transaction is an error, not a
+/// successful cancellation result.
+#[tokio::test]
+async fn test_cancel_returns_error_on_transaction_timeout() -> crate::Result<()> {
+    use crate::dialog::{dialog_layer::DialogLayer, invitation::InviteOption};
+    use crate::transaction::endpoint::EndpointOption;
+
+    let uas_socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
+    let uas_port = uas_socket.local_addr()?.port();
+    let token = CancellationToken::new();
+    let transport_layer = TransportLayer::new(token.child_token());
+    let endpoint = EndpointBuilder::new()
+        .with_user_agent("rsipstack-test")
+        .with_transport_layer(transport_layer)
+        .with_timer_interval(std::time::Duration::from_millis(5))
+        .with_option(EndpointOption {
+            t1: std::time::Duration::from_millis(10),
+            t1x64: std::time::Duration::from_millis(80),
+            ..Default::default()
+        })
+        .build();
+
+    let udp = UdpConnection::create_connection(
+        "127.0.0.1:0".parse().unwrap(),
+        None,
+        Some(
+            endpoint
+                .inner
+                .transport_layer
+                .inner
+                .cancel_token
+                .child_token(),
+        ),
+    )
+    .await?;
+    let uac_port = udp.get_addr().addr.port.map(u16::from).unwrap_or(0);
+    endpoint.inner.transport_layer.add_transport(udp.into());
+    endpoint.inner.transport_layer.serve_listens().await?;
+
+    let endpoint_inner = endpoint.inner.clone();
+    tokio::spawn(async move {
+        let _ = endpoint_inner.serve().await;
+    });
+
+    let dialog_layer = DialogLayer::new(endpoint.inner.clone());
+    let (state_sender, _state_receiver) = unbounded_channel();
+    let (dialog, _invite_tx) = dialog_layer.create_client_invite_dialog(
+        InviteOption {
+            caller: Uri::try_from("sip:alice@example.com")?,
+            callee: Uri::try_from(format!("sip:bob@127.0.0.1:{}", uas_port).as_str())?,
+            contact: Uri::try_from(format!("sip:alice@127.0.0.1:{}", uac_port).as_str())?,
+            ..Default::default()
+        },
+        state_sender,
+    )?;
+
+    dialog.cancel().await?;
+    let mut buf = [0u8; 4096];
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(25),
+            uas_socket.recv_from(&mut buf),
+        )
+        .await
+        .is_err(),
+        "CANCEL must not be sent before a provisional response"
+    );
+
+    dialog.inner.transition(DialogState::Trying(dialog.id()))?;
+
+    let error = tokio::time::timeout(std::time::Duration::from_secs(1), dialog.cancel())
+        .await
+        .expect("CANCEL transaction did not time out")
+        .expect_err("CANCEL timeout must return an error");
+    assert!(
+        matches!(
+            error,
+            crate::Error::DialogError(_, _, StatusCode::RequestTimeout)
+        ),
+        "unexpected CANCEL error: {error}"
+    );
 
     Ok(())
 }

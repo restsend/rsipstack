@@ -15,7 +15,7 @@ use super::dialog::{Dialog, DialogInnerRef, DialogState, TerminatedReason, Trans
 use super::subscription::{ClientSubscriptionDialog, ServerSubscriptionDialog};
 use super::DialogId;
 use crate::sip::prelude::{HasHeaders, HeadersExt};
-use crate::sip::{Header, Method, Request, Response, SipMessage, StatusCode};
+use crate::sip::{Header, Method, Request, Response, SipMessage, StatusCode, StatusCodeKind};
 use crate::transaction::key::TransactionRole;
 use crate::transaction::transaction::{Transaction, TransactionEvent};
 use crate::Result;
@@ -187,10 +187,12 @@ impl InviteDialog {
     /// Send a CANCEL request to abort an unanswered INVITE.
     /// No-op for UAS dialogs.
     pub async fn cancel(&self) -> Result<()> {
-        if self.role() != TransactionRole::Client {
-            return Ok(());
-        }
-        if self.inner.is_confirmed() {
+        if self.role() != TransactionRole::Client
+            || !matches!(
+                self.state(),
+                DialogState::Trying(_) | DialogState::Early(_, _)
+            )
+        {
             return Ok(());
         }
         debug!(id = %self.id(), "sending cancel request");
@@ -206,7 +208,17 @@ impl InviteDialog {
             .mut_seq(invite_seq)?
             .mut_method(Method::Cancel)?;
         cancel_request.body = vec![];
-        self.inner.do_request(cancel_request).await?;
+        let Some(response) = self.inner.do_request(cancel_request).await? else {
+            return Ok(());
+        };
+        let status = response.status_code;
+        if status.kind() != StatusCodeKind::Successful {
+            return Err(crate::Error::DialogError(
+                format!("CANCEL failed with response {status}"),
+                self.id(),
+                status,
+            ));
+        }
         Ok(())
     }
 
@@ -770,12 +782,13 @@ impl InviteDialog {
 
     async fn handle_invite(&mut self, tx: &mut Transaction) -> Result<()> {
         let handle_loop = async {
-            if !self.inner.is_confirmed()
+            if matches!(self.state(), DialogState::Calling(_))
                 && matches!(tx.original.method, Method::Invite)
                 && self
                     .inner
                     .transition(DialogState::Calling(self.id()))
                     .is_ok()
+                && tx.last_response.is_none()
             {
                 tx.send_trying().await.ok();
             }

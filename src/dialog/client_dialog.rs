@@ -1,7 +1,6 @@
 use super::dialog::DialogInnerRef;
 use super::DialogId;
-use crate::sip::prelude::HasHeaders;
-use crate::sip::{prelude::HeadersExt, Header};
+use crate::sip::prelude::HeadersExt;
 use crate::sip::{Response, SipMessage, StatusCode};
 use crate::transaction::transaction::Transaction;
 use crate::Result;
@@ -265,24 +264,9 @@ impl ClientInviteDialog {
     /// # }
     /// ```
     pub async fn cancel(&self) -> Result<()> {
-        if self.inner.is_confirmed() {
-            return Ok(());
-        }
-        debug!(id = %self.id(), "sending cancel request");
-        let mut cancel_request = self.inner.initial_request.lock().clone();
-        let invite_seq = cancel_request.cseq_header()?.seq()?;
-        cancel_request
-            .headers_mut()
-            .retain(|h| !matches!(h, Header::ContentLength(_) | Header::ContentType(_)));
-
-        cancel_request.method = crate::sip::Method::Cancel;
-        cancel_request
-            .cseq_header_mut()?
-            .mut_seq(invite_seq)?
-            .mut_method(crate::sip::Method::Cancel)?;
-        cancel_request.body = vec![];
-        self.inner.do_request(cancel_request).await?;
-        Ok(())
+        super::invite_dialog::InviteDialog::from_inner(self.inner.clone())
+            .cancel()
+            .await
     }
 
     /// Send a re-INVITE request to modify the session

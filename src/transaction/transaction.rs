@@ -179,6 +179,7 @@ pub struct Transaction {
     pub timer_d: Option<u64>,
     pub timer_k: Option<u64>, // server invite only
     pub timer_g: Option<u64>, // server invite only
+    retransmission: bool,
     is_cleaned_up: bool,
 }
 
@@ -216,6 +217,7 @@ impl Transaction {
             timer_d: None,
             timer_k: None,
             timer_g: None,
+            retransmission: true,
             tu_receiver,
             tu_sender,
             is_cleaned_up: false,
@@ -603,6 +605,15 @@ impl Transaction {
         None
     }
 
+    /// Stop request retransmissions while keeping the transaction alive to
+    /// consume a provisional or final response already in flight.
+    pub(crate) fn stop_retransmissions(&mut self) {
+        self.retransmission = false;
+        self.timer_a
+            .take()
+            .map(|id| self.endpoint_inner.timers.cancel(id));
+    }
+
     pub async fn send_trying(&mut self) -> Result<()> {
         let response = self
             .endpoint_inner
@@ -755,6 +766,9 @@ impl Transaction {
                     TransactionType::ClientInvite | TransactionType::ClientNonInvite
                 ) {
                     if let TransactionTimer::TimerA(key, duration) = timer {
+                        if !self.retransmission {
+                            return Ok(());
+                        }
                         // If no connection (initial lookup failed), retry transport lookup
                         // using the same target resolution rule as send()
                         if self.connection.is_none() {
