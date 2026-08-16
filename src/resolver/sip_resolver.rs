@@ -1,5 +1,10 @@
 use crate::sip::{Domain, Port, Transport};
-use hickory_resolver::{config::LookupIpStrategy, proto::rr::RData, TokioResolver};
+use hickory_resolver::{
+    config::{LookupIpStrategy, NameServerConfig, ResolverConfig},
+    net::runtime::TokioRuntimeProvider,
+    proto::rr::RData,
+    TokioResolver,
+};
 use rand::RngExt;
 use std::net::IpAddr;
 use std::net::SocketAddr;
@@ -14,7 +19,13 @@ pub struct Target {
 
 #[derive(Debug, Clone)]
 pub struct SipResolver {
-    resolver: Arc<TokioResolver>,
+    backend: ResolverBackend,
+}
+
+#[derive(Debug, Clone)]
+enum ResolverBackend {
+    Hickory(Arc<TokioResolver>),
+    System,
 }
 
 impl Default for SipResolver {
@@ -25,14 +36,59 @@ impl Default for SipResolver {
 
 impl SipResolver {
     pub fn new() -> Self {
-        let mut builder = TokioResolver::builder_tokio()
-            .expect("Error reading system config to build DNS resolver");
+        match Self::try_hickory() {
+            Ok(resolver) => resolver,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "Failed to build hickory DNS resolver, falling back to system resolver"
+                );
+                Self::system()
+            }
+        }
+    }
+
+    /// Build a resolver that queries the given nameservers, bypassing the
+    /// system DNS configuration (which may contain unparseable entries such
+    /// as IPv6 link-local addresses with a `%zone` scope suffix).
+    pub fn with_nameservers(nameservers: Vec<IpAddr>) -> Self {
+        let mut config = ResolverConfig::default();
+        for ip in nameservers {
+            config.add_name_server(NameServerConfig::udp_and_tcp(ip));
+        }
+
+        let mut builder =
+            TokioResolver::builder_with_config(config, TokioRuntimeProvider::default());
         builder.options_mut().ip_strategy = LookupIpStrategy::Ipv4thenIpv6;
 
-        let resolver = builder.build().expect("Error building DNS resolver");
-        Self {
-            resolver: Arc::new(resolver),
+        match builder.build() {
+            Ok(resolver) => Self {
+                backend: ResolverBackend::Hickory(Arc::new(resolver)),
+            },
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "Failed to build hickory DNS resolver with custom nameservers, falling back to system resolver"
+                );
+                Self::system()
+            }
         }
+    }
+
+    fn system() -> Self {
+        Self {
+            backend: ResolverBackend::System,
+        }
+    }
+
+    fn try_hickory() -> Result<Self, String> {
+        let mut builder = TokioResolver::builder_tokio().map_err(|e| e.to_string())?;
+        builder.options_mut().ip_strategy = LookupIpStrategy::Ipv4thenIpv6;
+
+        let resolver = builder.build().map_err(|e| e.to_string())?;
+        Ok(Self {
+            backend: ResolverBackend::Hickory(Arc::new(resolver)),
+        })
     }
 
     /// Main lookup function implementing core of RFC 3263 (SRV + Fallback)
@@ -43,8 +99,16 @@ impl SipResolver {
         transport: Option<Transport>,
         secure: bool,
     ) -> Result<Vec<Target>, String> {
-        let source = HickorySource(self.resolver.clone());
-        resolve_logic(&source, domain, port, transport, secure).await
+        match &self.backend {
+            ResolverBackend::Hickory(resolver) => {
+                let source = HickorySource(resolver.clone());
+                resolve_logic(&source, domain, port, transport, secure).await
+            }
+            ResolverBackend::System => {
+                let source = SystemLookupSource;
+                resolve_logic(&source, domain, port, transport, secure).await
+            }
+        }
     }
 }
 
@@ -93,6 +157,30 @@ impl LookupSource for HickorySource {
         match self.0.lookup_ip(name).await {
             Ok(records) => Ok(records.iter().collect()),
             Err(e) => Err(e.to_string()),
+        }
+    }
+}
+
+/// Fallback lookup source backed by the OS resolver (`getaddrinfo` via
+/// `tokio::net::lookup_host`). Does not support SRV lookups; callers should
+/// fall back to A/AAAA resolution.
+struct SystemLookupSource;
+
+#[async_trait::async_trait]
+impl LookupSource for SystemLookupSource {
+    async fn lookup_srv(&self, name: &str) -> Result<Vec<SrvRecord>, String> {
+        Err(format!(
+            "SRV lookup not supported by system resolver: {}",
+            name
+        ))
+    }
+
+    async fn lookup_a_aaaa(&self, name: &str) -> Result<Vec<IpAddr>, String> {
+        let addr_str = format!("{}:0", name);
+        let result = tokio::net::lookup_host(&addr_str).await;
+        match result {
+            Ok(addrs) => Ok(addrs.map(|a| a.ip()).collect()),
+            Err(e) => Err(format!("DNS resolution failed for {}: {}", name, e)),
         }
     }
 }
@@ -444,5 +532,35 @@ mod tests {
         // This is randomized, but checking it runs without panic
         let ordered = order_srv_records(records);
         assert_eq!(ordered.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_system_lookup_source_resolves_host() {
+        let source = SystemLookupSource;
+        let ips = source.lookup_a_aaaa("localhost").await.unwrap();
+        assert!(!ips.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_system_backend_resolves_ip() {
+        let resolver = SipResolver {
+            backend: ResolverBackend::System,
+        };
+        let domain = Domain::from("127.0.0.1".to_string());
+        let res = resolver.lookup(&domain, None, None, false).await.unwrap();
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].addr.ip().to_string(), "127.0.0.1");
+        assert_eq!(res[0].transport, Transport::Udp);
+    }
+
+    #[test]
+    fn test_with_nameservers_builds() {
+        let resolver = SipResolver::with_nameservers(vec!["127.0.0.1".parse().unwrap()]);
+        assert!(matches!(resolver.backend, ResolverBackend::Hickory(_)));
+    }
+
+    #[test]
+    fn test_new_does_not_panic() {
+        let _ = SipResolver::new();
     }
 }
