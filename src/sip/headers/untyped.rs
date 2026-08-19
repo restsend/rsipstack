@@ -172,6 +172,7 @@ untyped_header!(RAck, "RAck", Header::RAck);
 untyped_header!(Privacy, "Privacy", Header::Privacy);
 untyped_header!(Path, "Path", Header::Path);
 untyped_header!(Identity, "Identity", Header::Identity);
+untyped_header!(UserToUser, "User-to-User", Header::UserToUser);
 
 impl std::convert::From<crate::sip::Uri> for ReferTo {
     fn from(uri: crate::sip::Uri) -> Self {

@@ -46,7 +46,8 @@ pub use headers::untyped::{
     PPreferredIdentity, Path, Priority, Privacy, ProxyAuthenticate, ProxyAuthorization,
     ProxyRequire, RAck, RSeq, Reason, RecordRoute, ReferTo, ReferredBy, Replaces, ReplyTo, Require,
     RetryAfter, Route, Server, SessionExpires, Subject, SubscriptionState, Supported, Timestamp,
-    To, ToTypedHeader, Unsupported, UntypedHeader, UserAgent, Via, Warning, WwwAuthenticate,
+    To, ToTypedHeader, Unsupported, UntypedHeader, UserAgent, UserToUser, Via, Warning,
+    WwwAuthenticate,
 };
 
 pub mod prelude {

@@ -64,6 +64,7 @@ pub enum Header {
     Privacy(Privacy),
     Path(Path),
     Identity(Identity),
+    UserToUser(UserToUser),
 }
 
 impl std::fmt::Display for Header {
@@ -129,6 +130,7 @@ impl std::fmt::Display for Header {
             Self::Privacy(inner) => write!(f, "{}", inner),
             Self::Path(inner) => write!(f, "{}", inner),
             Self::Identity(inner) => write!(f, "{}", inner),
+            Self::UserToUser(inner) => write!(f, "{}", inner),
         }
     }
 }
@@ -196,6 +198,7 @@ impl Header {
             Self::Privacy(_) => "Privacy",
             Self::Path(_) => "Path",
             Self::Identity(_) => "Identity",
+            Self::UserToUser(_) => "User-to-User",
         }
     }
 
@@ -261,6 +264,7 @@ impl Header {
             Self::Privacy(h) => h.value(),
             Self::Path(h) => h.value(),
             Self::Identity(h) => h.value(),
+            Self::UserToUser(h) => h.value(),
         }
     }
 }
@@ -493,6 +497,7 @@ pub fn make_header(name: &str, value: String) -> Header {
         n if n.eq_ignore_ascii_case("Privacy") => Header::Privacy(Privacy::new(value)),
         n if n.eq_ignore_ascii_case("Path") => Header::Path(Path::new(value)),
         n if n.eq_ignore_ascii_case("Identity") => Header::Identity(Identity::new(value)),
+        n if n.eq_ignore_ascii_case("User-to-User") => Header::UserToUser(UserToUser::new(value)),
         other => Header::Other(other.to_string(), value),
     }
 }

@@ -238,6 +238,18 @@ pub trait HeadersExt: HasHeaders {
     ) -> Option<&crate::sip::headers::untyped::PAssertedIdentity> {
         header_opt!(self.headers().iter(), Header::PAssertedIdentity)
     }
+    fn call_info_header(&self) -> Option<&CallInfo> {
+        header_opt!(self.headers().iter(), Header::CallInfo)
+    }
+    fn call_info_headers(&self) -> Vec<&CallInfo> {
+        all_headers!(self.headers().iter(), Header::CallInfo)
+    }
+    fn user_to_user_header(&self) -> Option<&UserToUser> {
+        header_opt!(self.headers().iter(), Header::UserToUser)
+    }
+    fn user_to_user_headers(&self) -> Vec<&UserToUser> {
+        all_headers!(self.headers().iter(), Header::UserToUser)
+    }
     fn replaces_header(&self) -> Option<&crate::sip::headers::untyped::Replaces> {
         header_opt!(self.headers().iter(), Header::Replaces)
     }
@@ -986,6 +998,52 @@ mod tests {
         });
         assert!(min_se.is_some());
         assert_eq!(min_se.unwrap().value(), "90");
+    }
+
+    #[test]
+    fn new_headers_call_info() {
+        let msg: SipMessage = concat!(
+            "INVITE sip:bob@restsend.com SIP/2.0\r\n",
+            "Via: SIP/2.0/UDP ua.restsend.com;branch=z9hG4bKtest\r\n",
+            "From: <sip:alice@restsend.com>;tag=abc\r\n",
+            "To: <sip:bob@restsend.com>\r\n",
+            "Call-ID: call-info-test@ua.restsend.com\r\n",
+            "CSeq: 1 INVITE\r\n",
+            "Call-Info: <http://www.example.com/alice/photo.jpg>;purpose=icon\r\n",
+            "Call-Info: <http://www.example.com/alice/>;purpose=info\r\n",
+            "Content-Length: 0\r\n",
+            "\r\n"
+        )
+        .try_into()
+        .unwrap();
+        let first = msg.call_info_header().unwrap();
+        assert!(first.value().contains("photo.jpg"));
+        assert!(first.value().contains("purpose=icon"));
+        let all = msg.call_info_headers();
+        assert_eq!(all.len(), 2);
+        assert!(all[1].value().contains("purpose=info"));
+    }
+
+    #[test]
+    fn new_headers_user_to_user() {
+        let msg: SipMessage = concat!(
+            "INVITE sip:bob@restsend.com SIP/2.0\r\n",
+            "Via: SIP/2.0/UDP ua.restsend.com;branch=z9hG4bKtest\r\n",
+            "From: <sip:alice@restsend.com>;tag=abc\r\n",
+            "To: <sip:bob@restsend.com>\r\n",
+            "Call-ID: uui-test@ua.restsend.com\r\n",
+            "CSeq: 1 INVITE\r\n",
+            "User-to-User: 56a390f3d2b7310023a;encoding=hex;purpose=isdn-uui;content=isdn-uui\r\n",
+            "Content-Length: 0\r\n",
+            "\r\n"
+        )
+        .try_into()
+        .unwrap();
+        let uui = msg.user_to_user_header().unwrap();
+        assert!(uui.value().starts_with("56a390f3d2b7310023a"));
+        assert!(uui.value().contains("encoding=hex"));
+        assert!(uui.value().contains("purpose=isdn-uui"));
+        assert_eq!(msg.user_to_user_headers().len(), 1);
     }
 
     #[test]
