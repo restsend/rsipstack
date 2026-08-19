@@ -112,3 +112,25 @@ async fn test_endpoint_recvrequests() {
         }
     }
 }
+
+#[tokio::test]
+async fn test_get_record_route_addr_override() {
+    let endpoint = super::create_test_endpoint(Some("127.0.0.1:15060"))
+        .await
+        .expect("create_test_endpoint");
+
+    let default_rr = endpoint.inner.get_record_route().expect("get_record_route");
+    assert_eq!(default_rr.uri.to_string(), "sip:127.0.0.1:15060;lr");
+
+    let override_addr = crate::transport::SipAddr {
+        r#type: Some(crate::sip::Transport::Udp),
+        addr: crate::sip::HostWithPort {
+            host: crate::sip::Host::IpAddr(std::net::IpAddr::V4(std::net::Ipv4Addr::new(
+                127, 0, 0, 1,
+            ))),
+            port: Some(15061.into()),
+        },
+    };
+    let override_rr = endpoint.inner.get_record_route_with_addr(override_addr);
+    assert_eq!(override_rr.uri.to_string(), "sip:127.0.0.1:15061;lr");
+}
