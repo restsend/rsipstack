@@ -119,10 +119,7 @@ async fn test_get_record_route_addr_override() {
         .await
         .expect("create_test_endpoint");
 
-    let default_rr = endpoint
-        .inner
-        .get_record_route(None)
-        .expect("get_record_route(None)");
+    let default_rr = endpoint.inner.get_record_route().expect("get_record_route");
     assert_eq!(default_rr.uri.to_string(), "sip:127.0.0.1:15060;lr");
 
     let override_addr = crate::transport::SipAddr {
@@ -134,9 +131,6 @@ async fn test_get_record_route_addr_override() {
             port: Some(15061.into()),
         },
     };
-    let override_rr = endpoint
-        .inner
-        .get_record_route(Some(override_addr))
-        .expect("get_record_route(Some)");
+    let override_rr = endpoint.inner.get_record_route_with_addr(override_addr);
     assert_eq!(override_rr.uri.to_string(), "sip:127.0.0.1:15061;lr");
 }
