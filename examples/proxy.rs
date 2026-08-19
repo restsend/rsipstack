@@ -394,7 +394,7 @@ async fn handle_invite(state: AppState, mut tx: Transaction) -> Result<()> {
         .unwrap_or_default();
     let target = state.inner.users.lock().await.get(&callee).cloned();
 
-    let record_route = tx.endpoint_inner.get_record_route(None)?;
+    let record_route = tx.endpoint_inner.get_record_route()?;
 
     let target = match target {
         Some(u) => u,

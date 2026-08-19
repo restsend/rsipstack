@@ -521,28 +521,26 @@ impl EndpointInner {
         self.transport_layer.get_addrs()
     }
 
-    /// `addr` overrides which local address is advertised, without it the endpoint's
-    /// first listener is used.
-    pub fn get_record_route(
-        &self,
-        addr: Option<SipAddr>,
-    ) -> Result<crate::sip::typed::RecordRoute> {
-        let first_addr = match addr {
-            Some(addr) => addr,
-            None => self
-                .transport_layer
-                .get_addrs()
-                .first()
-                .ok_or(Error::EndpointError("not sipaddrs".to_string()))
-                .cloned()?,
-        };
-        let mut uri: crate::sip::Uri = first_addr.into();
+    pub fn get_record_route(&self) -> Result<crate::sip::typed::RecordRoute> {
+        let first_addr = self
+            .transport_layer
+            .get_addrs()
+            .first()
+            .ok_or(Error::EndpointError("not sipaddrs".to_string()))
+            .cloned()?;
+        Ok(self.get_record_route_with_addr(first_addr))
+    }
+
+    /// Record-Route advertising `addr` instead of the endpoint's first listener, for an
+    /// endpoint with several listeners where the one a peer must use is not the first.
+    pub fn get_record_route_with_addr(&self, addr: SipAddr) -> crate::sip::typed::RecordRoute {
+        let mut uri: crate::sip::Uri = addr.into();
         uri.params.push(crate::sip::Param::Lr);
-        Ok(crate::sip::typed::RecordRoute {
+        crate::sip::typed::RecordRoute {
             display_name: None,
             uri,
             params: vec![],
-        })
+        }
     }
 
     pub fn get_via(
