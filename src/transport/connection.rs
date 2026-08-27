@@ -342,12 +342,26 @@ impl SipConnection {
         via.update_first_value(|via| {
             let mut typed_via = via.typed()?;
 
+            // RFC 3581 §4: remember whether the client requested rport before
+            // stripping parameters; if it did, the server MUST always echo
+            // back rport=<actual source port>, regardless of address match.
+            let rport_requested = typed_via
+                .params
+                .iter()
+                .any(|p| matches!(p, Param::Rport(_)));
+
             typed_via
                 .params
                 .retain(|param| !matches!(param, Param::Rport(_) | Param::Received(_)));
 
             // Only add received parameter if the source address differs from Via header
             if typed_via.uri.host_with_port == received {
+                if rport_requested {
+                    // Write back so an echoed rport=<source port> survives
+                    // (RFC 3581 §4).
+                    typed_via.params.push(Param::Rport(Some(addr.port())));
+                    return Ok(typed_via.into());
+                }
                 return Ok(via);
             }
 
@@ -361,6 +375,13 @@ impl SipConnection {
             };
 
             if !should_add_received {
+                // Reliable transport where only the port differs: skip the
+                // received parameter but still honour an explicit rport
+                // request (RFC 3581 §4).
+                if rport_requested {
+                    typed_via.params.push(Param::Rport(Some(addr.port())));
+                    return Ok(typed_via.into());
+                }
                 return Ok(via);
             }
 

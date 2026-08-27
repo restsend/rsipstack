@@ -163,6 +163,92 @@ fn test_via_response_not_modified() {
     }
 }
 
+/// RFC 3581 §4: when the client requests rport, the server MUST echo
+/// rport=<actual source port> even when the Via host matches and no
+/// received parameter is needed.
+#[test]
+fn test_via_rport_echoed_when_host_matches_tcp() {
+    let mut register_req = create_test_request("SIP/2.0/TCP");
+    register_req.headers =
+        vec![Via::new("SIP/2.0/TCP 127.0.0.1:5060;branch=z9hG4bK-test;rport").into()].into();
+    let addr: SocketAddr = "127.0.0.1:5060".parse().unwrap(); // Same as Via header
+
+    let msg = SipConnection::update_msg_received(register_req.into(), addr, Transport::Tcp)
+        .expect("update_msg_received for TCP");
+
+    match msg {
+        SipMessage::Request(req) => {
+            let typed_via = req.via_header().unwrap().typed().unwrap();
+            assert!(
+                !typed_via
+                    .params
+                    .iter()
+                    .any(|p| matches!(p, crate::sip::Param::Received(_))),
+                "no received when host matches"
+            );
+            let has_rport = typed_via
+                .params
+                .iter()
+                .any(|p| matches!(p, crate::sip::Param::Rport(Some(5060))));
+            assert!(has_rport, "requested rport must be echoed with actual port");
+        }
+        _ => panic!("Expected request message"),
+    }
+}
+
+/// RFC 3581 §4: reliable transport where only the port differs — no received
+/// parameter, but a requested rport must still be echoed.
+#[test]
+fn test_via_rport_echoed_when_only_port_differs() {
+    let mut register_req = create_test_request("SIP/2.0/TCP");
+    register_req.headers =
+        vec![Via::new("SIP/2.0/TCP 127.0.0.1:5060;branch=z9hG4bK-test;rport").into()].into();
+    let addr: SocketAddr = "127.0.0.1:65000".parse().unwrap();
+
+    let msg = SipConnection::update_msg_received(register_req.into(), addr, Transport::Tcp)
+        .expect("update_msg_received for TCP");
+
+    match msg {
+        SipMessage::Request(req) => {
+            let typed_via = req.via_header().unwrap().typed().unwrap();
+            assert!(
+                !typed_via
+                    .params
+                    .iter()
+                    .any(|p| matches!(p, crate::sip::Param::Received(_))),
+                "host matches: no received param"
+            );
+            let has_rport = typed_via
+                .params
+                .iter()
+                .any(|p| matches!(p, crate::sip::Param::Rport(Some(65_000))));
+            assert!(has_rport, "rport must carry the real source port");
+        }
+        _ => panic!("Expected request message"),
+    }
+}
+
+/// No rport requested → exact address match keeps the Via untouched.
+#[test]
+fn test_via_untouched_without_rport_request_on_exact_match() {
+    let register_req = create_test_request("SIP/2.0/TCP"); // no rport param
+    let addr: SocketAddr = "127.0.0.1:5060".parse().unwrap();
+
+    let msg = SipConnection::update_msg_received(register_req.into(), addr, Transport::Tcp)
+        .expect("update_msg_received for TCP");
+
+    match msg {
+        SipMessage::Request(req) => {
+            let raw = req.via_header().unwrap().to_string();
+            assert!(
+                !raw.contains("received=") && !raw.contains("rport"),
+                "exact match without rport request must not mutate Via, got: {raw}"
+            );
+        }
+        _ => panic!("Expected request message"),
+    }
+}
+
 fn create_test_request(via_proto: &str) -> crate::sip::message::Request {
     crate::sip::message::Request {
         method: crate::sip::method::Method::Register,

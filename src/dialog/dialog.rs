@@ -17,7 +17,7 @@ use crate::{
         key::{TransactionKey, TransactionRole},
         transaction::{Transaction, TransactionEventSender},
     },
-    transport::SipAddr,
+    transport::{SipAddr, SipConnection},
     Result,
 };
 use futures::FutureExt;
@@ -328,6 +328,13 @@ pub struct DialogInner {
     pub(super) initial_request: Mutex<Request>,
     pub(super) supports_100rel: bool,
     pub(super) remote_reliable: Mutex<Option<RemoteReliableState>>,
+    pub(super) server_connection: Mutex<Option<SipConnection>>,
+    /// Structural source address of the flow that created this server dialog,
+    /// captured at creation time from the connection itself (not parsed from
+    /// Via headers). First tier of the dial-back ladder when the affinity
+    /// connection is unavailable: immune to missing received/rport params and
+    /// valid even after the socket object died.
+    pub(super) dialback_target: Mutex<Option<SipAddr>>,
 }
 
 pub type DialogStateReceiver = UnboundedReceiver<DialogState>;
@@ -401,6 +408,7 @@ pub struct DialogSnapshot {
     pub supports_100rel: bool,
 }
 impl DialogInner {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         role: TransactionRole,
         id: DialogId,
@@ -465,7 +473,17 @@ impl DialogInner {
             remote_contact: Mutex::new(None),
             supports_100rel,
             remote_reliable: Mutex::new(None),
+            server_connection: Mutex::new(None),
+            dialback_target: Mutex::new(None),
         })
+    }
+    pub fn set_server_connection(&self, connection: Option<SipConnection>) {
+        if self.role == TransactionRole::Server {
+            *self.server_connection.lock() = connection.clone();
+            // Capture the structural source address for the dial-back ladder.
+            *self.dialback_target.lock() =
+                connection.and_then(|conn| conn.get_remote_addr().cloned());
+        }
     }
     pub fn can_cancel(&self) -> bool {
         self.state.lock().can_cancel()
@@ -575,7 +593,15 @@ impl DialogInner {
     pub(super) async fn send_prack_request(&self, request: Request) -> Result<Option<Response>> {
         let method = request.method().to_owned();
         let key = TransactionKey::from_request(&request, TransactionRole::Client)?;
-        let mut tx = Transaction::new_client(key, request, self.endpoint_inner.clone(), None);
+        // RFC 5626 flow affinity: reuse the reliable connection recorded for
+        // this server dialog instead of resolving the remote Contact.
+        let affinity_connection = self.resolve_affinity_connection();
+        let mut tx = Transaction::new_client(
+            key,
+            request,
+            self.endpoint_inner.clone(),
+            affinity_connection,
+        );
 
         if let Some(route) = tx.original.route_header() {
             if let Ok(first_route) = route.typed() {
@@ -866,16 +892,79 @@ impl DialogInner {
         }
     }
 
+    /// Resolve the connection to reuse for outgoing in-dialog requests
+    /// (RFC 5626 flow affinity / RFC 7118 §6.2).
+    ///
+    /// Returns `Some(connection)` only when all of the following hold:
+    /// * this is a server-role dialog created from an incoming request,
+    /// * the recorded connection uses a reliable transport (WS/WSS/TCP/TLS)
+    ///   — UDP dialogs keep the classic destination-based routing,
+    /// * the dialog has no route set; with loose-routing proxies in path the
+    ///   request must follow the route set, not the raw transport flow.
+    fn resolve_affinity_connection(&self) -> Option<SipConnection> {
+        if self.role != TransactionRole::Server {
+            return None;
+        }
+        if !self.route_set.lock().is_empty() {
+            return None;
+        }
+        let conn = self.server_connection.lock().clone()?;
+        if !conn.is_reliable() {
+            return None;
+        }
+        // Skip flows whose transport already terminated (e.g. browser closed
+        // the WebSocket): dial-back via the recorded address is a better
+        // last resort than retransmitting into a dead socket until Timer B.
+        if let Some(token) = conn.cancel_token() {
+            if token.is_cancelled() {
+                debug!(id = %self.id.lock(), "affinity connection cancelled; falling back");
+                return None;
+            }
+        }
+        Some(conn)
+    }
+
+    /// Test-visible wrapper around [`Self::resolve_affinity_connection`].
+    #[cfg(test)]
+    pub fn test_resolve_affinity_connection(&self) -> Option<SipConnection> {
+        self.resolve_affinity_connection()
+    }
+
+    /// Extract a routable SipAddr from the initial request's top Via header
+    /// (`received` + `rport`), usable as a last-resort dial-back target when
+    /// normal resolution fails and no affinity connection exists.
+    fn fallback_target_from_initial_via(initial_request: &Request) -> Option<SipAddr> {
+        let via = initial_request.via_header().ok()?.typed().ok()?;
+        let received = via.received()?.ok()?;
+        let port: u16 = via.rport()??;
+        Some(SipAddr {
+            r#type: Some(via.transport),
+            addr: crate::sip::HostWithPort {
+                host: crate::sip::Host::IpAddr(received),
+                port: Some(port.into()),
+            },
+        })
+    }
+
     async fn send_dialog_request(&self, request: Request) -> Result<Option<Response>> {
         let method = request.method().to_owned();
         let key = TransactionKey::from_request(&request, TransactionRole::Client)?;
-        let mut tx = Transaction::new_client(key, request, self.endpoint_inner.clone(), None);
+        // RFC 5626 flow affinity: deliver in-dialog requests to the remote
+        // UA over the same reliable connection the initial request used.
+        let affinity_connection = self.resolve_affinity_connection();
+        let mut tx = Transaction::new_client(
+            key,
+            request,
+            self.endpoint_inner.clone(),
+            affinity_connection,
+        );
 
         if let Some(route) = tx.original.route_header() {
             if let Ok(first_route) = route.typed() {
                 tx.destination = SipAddr::try_from(&first_route.uri).ok();
             }
         }
+        let need_fallback_retry;
         match tx.send().await {
             Ok(_) => {
                 debug!(
@@ -885,18 +974,69 @@ impl DialogInner {
                     key=%tx.key,
                     "request sent done",
                 );
+                need_fallback_retry = tx.connection.is_none();
             }
             Err(e) => {
-                warn!(
-                    id = self.id.lock().to_string(),
-                    destination = tx.destination.as_ref().map(|d| d.to_string()).as_deref(),
-                    req = %tx.original,
-                    "failed to send request error: {}",
-                    e
-                );
-                return Err(e);
+                // Hard transport-resolution failures must not abort server
+                // legs whose remote target cannot be routed the classic way;
+                // fall through to the dial-back retry below.
+                need_fallback_retry = self.role == TransactionRole::Server && method != Method::Ack;
+                if !need_fallback_retry {
+                    warn!(
+                        id = self.id.lock().to_string(),
+                        destination = tx.destination.as_ref().map(|d| d.to_string()).as_deref(),
+                        req = %tx.original,
+                        "failed to send request error: {}",
+                        e
+                    );
+                    return Err(e);
+                }
             }
         }
+
+        // Last resort for server dialogs: when no usable connection was found
+        // (dead WebSocket flow, restored dialog, unroutable Contact), retry
+        // against the flow's real source address. Ladder:
+        //   1. address captured from the connection at dialog creation
+        //      (immune to missing received/rport parameters),
+        //   2. initial request's Via header (`received` + `rport`),
+        //      covering snapshot-restored dialogs with no stored connection.
+        if need_fallback_retry && method != Method::Ack {
+            let fallback_addr = {
+                let stored = self.dialback_target.lock().clone();
+                match stored {
+                    Some(addr) => Some(addr),
+                    None => {
+                        let initial = self.initial_request.lock();
+                        Self::fallback_target_from_initial_via(&initial)
+                    }
+                }
+            };
+            if let Some(fallback_addr) = fallback_addr {
+                info!(
+                    id = self.id.lock().to_string(),
+                    method = %method,
+                    fallback = %fallback_addr,
+                    "no usable connection, retrying via recorded flow address"
+                );
+                tx.destination = Some(fallback_addr.clone());
+                if let Err(e) = tx.send().await {
+                    warn!(
+                        id = self.id.lock().to_string(),
+                        destination = %fallback_addr,
+                        "fallback send failed error: {}",
+                        e
+                    );
+                }
+            } else {
+                debug!(
+                    id = self.id.lock().to_string(),
+                    method = %method,
+                    "no usable connection and no dial-back target; giving up after first send"
+                );
+            }
+        }
+
         let mut auth_sent = false;
         while let Some(msg) = tx.receive().await {
             match msg {
@@ -1096,6 +1236,8 @@ impl DialogInner {
             initial_request,
             supports_100rel: snapshot.supports_100rel,
             remote_reliable: Mutex::new(None),
+            server_connection: Mutex::new(None),
+            dialback_target: Mutex::new(None),
         }))
     }
     fn build_restored_initial_request(

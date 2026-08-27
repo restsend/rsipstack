@@ -206,6 +206,7 @@ impl DialogLayer {
         }
 
         let dialog = InviteDialog::from_inner(Arc::new(dlg_inner));
+        dialog.inner.set_server_connection(tx.connection.clone());
         self.inner
             .dialogs
             .insert(id.to_string(), Dialog::Invite(dialog.clone()));
@@ -255,6 +256,7 @@ impl DialogLayer {
         )?;
 
         *dlg_inner.remote_contact.lock() = tx.original.contact_header().ok().cloned();
+        dlg_inner.set_server_connection(tx.connection.clone());
 
         let dialog = ServerSubscriptionDialog {
             inner: Arc::new(dlg_inner),
@@ -308,6 +310,7 @@ impl DialogLayer {
         )?;
 
         *dlg_inner.remote_contact.lock() = tx.original.contact_header().ok().cloned();
+        dlg_inner.set_server_connection(tx.connection.clone());
 
         let dialog = ServerPublicationDialog::new(Arc::new(dlg_inner));
         self.inner
