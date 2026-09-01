@@ -249,6 +249,10 @@ impl InviteDialog {
         self.inner.transition(DialogState::Calling(self.id()))?;
         let mut auth_sent = false;
         tx.send().await?;
+        // Record the flow the INVITE actually went out on, so later
+        // in-dialog requests (BYE / re-INVITE / INFO) reuse it instead of
+        // destination-routing off a possibly unroutable Contact.
+        self.inner.set_server_connection(tx.connection.clone());
         let mut dialog_id = self.id();
         let mut final_response = None;
         while let Some(msg) = tx.receive().await {
@@ -291,6 +295,7 @@ impl InviteDialog {
                             )
                             .await?;
                             tx.send().await?;
+                            self.inner.set_server_connection(tx.connection.clone());
                             self.inner.update_remote_tag("").ok();
                             {
                                 let mut req = self.inner.initial_request.lock();

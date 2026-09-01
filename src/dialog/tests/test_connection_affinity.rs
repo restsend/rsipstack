@@ -339,14 +339,16 @@ async fn test_server_dialog_bye_is_delivered_over_initial_connection() {
 }
 
 #[tokio::test]
-async fn test_client_dialogs_do_not_use_affinity() {
-    // A UAC resolves its own next hops; it must not adopt whatever socket was
-    // involved when the dialog responses arrived.
+async fn test_client_dialogs_use_recorded_flow_affinity() {
+    // RFC 7118 §6.2 applies symmetrically: a UAC whose initial INVITE went
+    // out over a reliable flow (e.g. a proxy dialing a WebSocket callee)
+    // must reuse that flow for in-dialog requests (BYE / re-INVITE), instead
+    // of destination-routing off a possibly unroutable Contact.
     let endpoint = create_endpoint_without_transports().await.unwrap();
 
     let initial = plain_udp_invite(
         "alice-tag",
-        "client-no-affinity",
+        "client-flow-affinity",
         "SIP/2.0/UDP alice.example.com:5060;branch=z9hG4bKclient1",
     );
     let inner = Arc::new(server_dialog(
@@ -360,8 +362,8 @@ async fn test_client_dialogs_do_not_use_affinity() {
     inner.set_server_connection(Some(flow.sip_conn));
 
     assert!(
-        inner.test_resolve_affinity_connection().is_none(),
-        "client dialogs must not use connection affinity"
+        inner.test_resolve_affinity_connection().is_some(),
+        "client dialogs must reuse the recorded reliable flow"
     );
 }
 

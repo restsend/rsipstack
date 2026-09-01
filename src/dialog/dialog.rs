@@ -478,12 +478,14 @@ impl DialogInner {
         })
     }
     pub fn set_server_connection(&self, connection: Option<SipConnection>) {
-        if self.role == TransactionRole::Server {
-            *self.server_connection.lock() = connection.clone();
-            // Capture the structural source address for the dial-back ladder.
-            *self.dialback_target.lock() =
-                connection.and_then(|conn| conn.get_remote_addr().cloned());
-        }
+        // Recorded for both roles: server dialogs get it at creation time,
+        // client dialogs after the initial INVITE is sent (see
+        // `ClientInviteDialog::process_invite`). Drives RFC 5626/7118 flow
+        // affinity and the dial-back ladder for both legs.
+        *self.server_connection.lock() = connection.clone();
+        // Capture the structural source address for the dial-back ladder.
+        *self.dialback_target.lock() =
+            connection.and_then(|conn| conn.get_remote_addr().cloned());
     }
     pub fn can_cancel(&self) -> bool {
         self.state.lock().can_cancel()
@@ -895,16 +897,16 @@ impl DialogInner {
     /// Resolve the connection to reuse for outgoing in-dialog requests
     /// (RFC 5626 flow affinity / RFC 7118 §6.2).
     ///
-    /// Returns `Some(connection)` only when all of the following hold:
-    /// * this is a server-role dialog created from an incoming request,
+    /// Returns `Some(connection)` when all of the following hold:
     /// * the recorded connection uses a reliable transport (WS/WSS/TCP/TLS)
     ///   — UDP dialogs keep the classic destination-based routing,
     /// * the dialog has no route set; with loose-routing proxies in path the
     ///   request must follow the route set, not the raw transport flow.
+    ///
+    /// Applies to both dialog roles: a UAS dialog rides the flow the initial
+    /// request arrived on; a UAC dialog rides the flow its initial INVITE
+    /// was sent on (e.g. a proxy dialing a WebSocket callee).
     fn resolve_affinity_connection(&self) -> Option<SipConnection> {
-        if self.role != TransactionRole::Server {
-            return None;
-        }
         if !self.route_set.lock().is_empty() {
             return None;
         }
