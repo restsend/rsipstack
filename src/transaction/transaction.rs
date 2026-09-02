@@ -284,6 +284,24 @@ impl Transaction {
             self.destination.replace(resolved_addr.clone());
         }
 
+        // RFC 5626 flow affinity: when the request is bound to an existing
+        // reliable connection (e.g. a WebSocket/WSS flow reused for in-dialog
+        // requests), no transport lookup happens and `destination` would stay
+        // None. Inspectors (sipflow src/dst recording) and senders need the
+        // real peer address, so derive it from the flow itself instead of
+        // falling back to the unresolvable Request-URI (RFC 7118 `.invalid`
+        // contacts) or a wildcard listener default.
+        if self.destination.is_none() {
+            if let Some(connection) = self.connection.as_ref() {
+                if connection.is_reliable() {
+                    if let Some(remote_addr) = connection.get_remote_addr() {
+                        debug!(key = %self.key, destination = %remote_addr, "destination from affinity connection");
+                        self.destination.replace(remote_addr.clone());
+                    }
+                }
+            }
+        }
+
         let content_length_header =
             Header::ContentLength(ContentLength::from(self.original.body().len() as u32));
         self.original
