@@ -373,7 +373,35 @@ impl Registration {
         }
         .with_tag(make_tag());
 
-        let via = self.endpoint.get_via(None, None)?;
+        // Resolve (and, for TCP/TLS/WS/WSS, lazily dial+cache) the connection
+        // this REGISTER will actually go out on *before* building the Via
+        // header, and build Via from that connection's real local address
+        // instead of always falling back to the endpoint's first-bound
+        // transport (get_via(None, None) below). Without this, a request
+        // targeting `;transport=tcp` still gets a Via that claims the
+        // endpoint's default UDP transport — physically sent over TCP, but
+        // self-describing as UDP inside the SIP headers. A spec-compliant
+        // server can, and in the wild does (FreeSWITCH's sofia-sip), treat
+        // that mismatch as reason enough to silently drop the request: no
+        // response, no error, nothing distinguishable in the server's own
+        // logs from the request never having arrived — the exact symptom
+        // this fixes.
+        //
+        // `lookup` already correctly falls through to the existing bound
+        // UDP listener for a target with no explicit `;transport=` param
+        // (see `TransportLayerInner::lookup`'s `first_udp` fallback), so
+        // this is safe to do unconditionally rather than only for TCP/TLS.
+        let via = match SipAddr::try_from(&server) {
+            Ok(target_addr) => {
+                match self.endpoint.transport_layer.lookup(&target_addr, None).await {
+                    Ok((connection, _resolved)) => {
+                        self.endpoint.get_via(Some(connection.get_addr().clone()), None)?
+                    }
+                    Err(_) => self.endpoint.get_via(None, None)?,
+                }
+            }
+            Err(_) => self.endpoint.get_via(None, None)?,
+        };
 
         // Contact address selection priority:
         // 1. Explicitly set self.contact (if caller set it)
