@@ -178,7 +178,7 @@ impl UdpConnection {
                 .cseq_header()
                 .map(|c| c.value().to_string())
                 .unwrap_or_default();
-            debug!(len, src=%addr, dest=%self.get_addr(), cseq = %cseq, raw_message = %msg.start_line(), "udp received");
+            debug!(len, src=%addr, dest=%self.get_addr(), cseq = %cseq, raw_message = %raw_message, "udp received");
 
             let from = SipAddr {
                 r#type: Some(crate::sip::transport::Transport::Udp),
@@ -215,7 +215,7 @@ impl UdpConnection {
             .cseq_header()
             .map(|c| c.value().to_string())
             .unwrap_or_default();
-        debug!(len=buf.len(), dest=%destination, src=%self.get_addr(), cseq = %cseq, raw_message=%msg.start_line(), "udp send");
+        debug!(len=buf.len(), dest=%destination, src=%self.get_addr(), cseq = %cseq, raw_message = %String::from_utf8_lossy(&buf), "udp send");
 
         self.inner
             .conn

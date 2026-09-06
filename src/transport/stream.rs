@@ -1,3 +1,4 @@
+use crate::sip::prelude::HeadersExt;
 use crate::sip::SipMessage;
 use crate::{
     transport::{
@@ -169,6 +170,17 @@ where
     }
 
     pub async fn send_message(&self, msg: SipMessage) -> Result<()> {
+        let cseq = msg
+            .cseq_header()
+            .map(|c| c.value().to_string())
+            .unwrap_or_default();
+        debug!(
+            src = %self.local_addr,
+            dest = %self.remote_addr,
+            cseq = %cseq,
+            raw_message = %msg,
+            "stream send"
+        );
         send_to_stream(&self.write_half, msg).await
     }
 
