@@ -178,7 +178,7 @@ where
             src = %self.local_addr,
             dest = %self.remote_addr,
             cseq = %cseq,
-            raw_message = %msg,
+            raw_message = ?msg.to_string(),
             "stream send"
         );
         send_to_stream(&self.write_half, msg).await
@@ -220,7 +220,7 @@ where
                     while let Some(msg) = codec.decode(&mut buffer)? {
                         match msg {
                             SipCodecType::Message(sip_msg) => {
-                                debug!(src = %remote_addr, raw_message = %sip_msg, "received message");
+                                debug!(src = %remote_addr, raw_message = ?sip_msg.to_string(), "received message");
                                 let remote_socket_addr = remote_addr.get_socketaddr()?;
                                 let sip_msg = SipConnection::update_msg_received(
                                     sip_msg,

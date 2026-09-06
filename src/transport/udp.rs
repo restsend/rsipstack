@@ -150,7 +150,7 @@ impl UdpConnection {
                     debug!(
                         src = %addr,
                         error = %e,
-                        raw_message = %raw_message,
+                        raw_message = ?raw_message,
                         "error parsing SIP message"
                     );
                     continue;
@@ -167,7 +167,7 @@ impl UdpConnection {
                     debug!(
                         src = %addr,
                         error = ?e,
-                        raw_message = %raw_message,
+                        raw_message = ?raw_message,
                         "error updating SIP via"
                     );
                     continue;
@@ -178,7 +178,7 @@ impl UdpConnection {
                 .cseq_header()
                 .map(|c| c.value().to_string())
                 .unwrap_or_default();
-            debug!(len, src=%addr, dest=%self.get_addr(), cseq = %cseq, raw_message = %raw_message, "udp received");
+            debug!(len, src=%addr, dest=%self.get_addr(), cseq = %cseq, raw_message = ?raw_message, "udp received");
 
             let from = SipAddr {
                 r#type: Some(crate::sip::transport::Transport::Udp),
@@ -215,7 +215,7 @@ impl UdpConnection {
             .cseq_header()
             .map(|c| c.value().to_string())
             .unwrap_or_default();
-        debug!(len=buf.len(), dest=%destination, src=%self.get_addr(), cseq = %cseq, raw_message = %String::from_utf8_lossy(&buf), "udp send");
+        debug!(len=buf.len(), dest=%destination, src=%self.get_addr(), cseq = %cseq, raw_message = ?String::from_utf8_lossy(&buf), "udp send");
 
         self.inner
             .conn
