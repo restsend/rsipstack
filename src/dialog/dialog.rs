@@ -6,10 +6,10 @@ use super::{
     DialogId,
 };
 use crate::sip::{
+    headers::typed::record_route::split_rr_values,
     prelude::{HeadersExt, ToTypedHeader},
     typed::{CSeq, Contact},
-    HasHeaders, Header, Method, Param, Request, Response, Route, SipMessage, StatusCode,
-    StatusCodeKind,
+    Header, Method, Param, Request, Response, Route, SipMessage, StatusCode, StatusCodeKind,
 };
 use crate::{
     transaction::{
@@ -442,13 +442,15 @@ impl DialogInner {
             }
         }
 
-        let mut route_set = vec![];
-        for h in initial_request.headers.iter() {
-            if let Header::RecordRoute(rr) = h {
-                route_set.push(Route::from(rr.value()));
-            }
+        let mut route_set: Vec<Route> = Vec::new();
+        if let TransactionRole::Server = role {
+            route_set = initial_request
+                .record_route_headers()
+                .into_iter()
+                .flat_map(|rr| split_rr_values(rr.value()))
+                .map(Route::from)
+                .collect();
         }
-        route_set.reverse();
 
         let supports_100rel = initial_request.header_contains_token("Supported", "100rel")
             || initial_request.header_contains_token("Require", "100rel");
@@ -704,12 +706,10 @@ impl DialogInner {
         }
 
         let mut new_route_set: Vec<Route> = resp
-            .headers()
-            .iter()
-            .filter_map(|header| match header {
-                Header::RecordRoute(rr) => Some(Route::from(rr.value())),
-                _ => None,
-            })
+            .record_route_headers()
+            .into_iter()
+            .flat_map(|rr| split_rr_values(rr.value()))
+            .map(Route::from)
             .collect();
 
         new_route_set.reverse();

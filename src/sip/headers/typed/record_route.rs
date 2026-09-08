@@ -8,7 +8,7 @@ pub struct RecordRoute {
     pub params: Vec<Param>,
 }
 
-fn split_rr_values(s: &str) -> Vec<String> {
+pub(crate) fn split_rr_values(s: &str) -> Vec<String> {
     let mut values = Vec::new();
     let mut current = String::new();
     let mut angle_depth = 0usize;
