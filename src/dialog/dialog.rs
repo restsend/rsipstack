@@ -486,8 +486,7 @@ impl DialogInner {
         // affinity and the dial-back ladder for both legs.
         *self.server_connection.lock() = connection.clone();
         // Capture the structural source address for the dial-back ladder.
-        *self.dialback_target.lock() =
-            connection.and_then(|conn| conn.get_remote_addr().cloned());
+        *self.dialback_target.lock() = connection.and_then(|conn| conn.get_remote_addr().cloned());
     }
     pub fn can_cancel(&self) -> bool {
         self.state.lock().can_cancel()
