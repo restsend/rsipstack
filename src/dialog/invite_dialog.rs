@@ -562,6 +562,15 @@ impl InviteDialog {
             "handle request"
         );
 
+        // RFC 7989 §8: a mid-dialog request may carry a new peer UUID;
+        // responses to it must mirror the new value. CANCEL is exempt —
+        // its Session-ID is always identical to the original INVITE's and
+        // MUST NOT update the stored peer UUID.
+        if tx.original.method != Method::Cancel {
+            let peer_uuid = tx.original.session_id_header().and_then(|s| s.local_uuid());
+            self.inner.observe_peer_session_uuid(peer_uuid);
+        }
+
         let cseq = tx.original.cseq_header()?.seq()?;
         let remote_seq = self.inner.remote_seq.load(Ordering::Relaxed);
         if remote_seq > 0 && cseq < remote_seq {

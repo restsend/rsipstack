@@ -169,6 +169,32 @@ pub trait HeadersExt: HasHeaders {
     fn contact_headers(&self) -> Vec<&Contact> {
         all_headers!(self.headers().iter(), Header::Contact)
     }
+    /// RFC 7989 Session-ID header, when present.
+    fn session_id_header(&self) -> Option<&crate::sip::headers::SessionId> {
+        self.headers().iter().find_map(|h| match h {
+            Header::SessionId(s) => Some(s),
+            _ => None,
+        })
+    }
+    /// All History-Info header lines (RFC 7044 allows multiple lines, each
+    /// possibly holding comma-joined hi-entries).
+    fn history_info_headers(&self) -> Vec<&crate::sip::headers::HistoryInfo> {
+        self.headers()
+            .iter()
+            .filter_map(|h| match h {
+                Header::HistoryInfo(hi) => Some(hi),
+                _ => None,
+            })
+            .collect()
+    }
+    /// Flattened typed hi-entries across every History-Info header line.
+    fn history_info_entries(&self) -> Result<Vec<crate::sip::typed::HistoryInfoEntry>, Error> {
+        let mut entries = Vec::new();
+        for hi in self.history_info_headers() {
+            entries.extend(hi.clone().into_typed()?.entries);
+        }
+        Ok(entries)
+    }
     fn typed_contact_headers(&self) -> Result<Vec<crate::sip::typed::Contact>, Error> {
         let mut contacts = Vec::new();
         for contact in self.contact_headers() {

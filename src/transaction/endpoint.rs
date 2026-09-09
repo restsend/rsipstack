@@ -3,7 +3,7 @@ use super::{
     make_via_branch,
     timer::Timer,
     transaction::{Transaction, TransactionEvent, TransactionEventSender},
-    SipConnection, TransactionReceiver, TransactionSender, TransactionTimer,
+    CallIdFormat, SipConnection, TransactionReceiver, TransactionSender, TransactionTimer,
 };
 use crate::sip::{prelude::HeadersExt, SipMessage};
 use crate::{
@@ -43,6 +43,12 @@ pub struct EndpointOption {
     pub t1x64: Duration,
     pub timerc: Duration,
     pub callid_suffix: Option<String>,
+    pub callid_format: CallIdFormat,
+    /// RFC 7044: advertise `histinfo` support on outgoing initial requests so
+    /// remote proxies/UAs include History-Info in responses. Session-ID
+    /// (RFC 7989) needs no switch: dialogs participate only when the
+    /// application supplies a UUID or the peer sends a Session-ID header.
+    pub history_info_enabled: bool,
 }
 
 impl Default for EndpointOption {
@@ -53,6 +59,8 @@ impl Default for EndpointOption {
             t1x64: Duration::from_millis(64 * 500),
             timerc: Duration::from_secs(180),
             callid_suffix: None,
+            callid_format: CallIdFormat::default(),
+            history_info_enabled: false,
         }
     }
 }

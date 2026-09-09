@@ -173,6 +173,115 @@ untyped_header!(Privacy, "Privacy", Header::Privacy);
 untyped_header!(Path, "Path", Header::Path);
 untyped_header!(Identity, "Identity", Header::Identity);
 untyped_header!(UserToUser, "User-to-User", Header::UserToUser);
+untyped_header!(SessionId, "Session-ID", Header::SessionId);
+untyped_header!(HistoryInfo, "History-Info", Header::HistoryInfo);
+
+impl SessionId {
+    /// Nil UUID per RFC 7989 §5 (32 zeros).
+    pub const NIL: &'static str = "00000000000000000000000000000000";
+
+    /// Normalize a UUID string to the RFC 7989 wire format: 32 lowercase hex
+    /// chars without dashes. Accepts dashed RFC 4122 and `urn:uuid:` input.
+    /// Rejects the nil UUID and anything that is not 32 hex chars.
+    pub fn normalize(raw: &str) -> Result<String, Error> {
+        let v: String = raw
+            .trim()
+            .trim_start_matches("urn:uuid:")
+            .replace('-', "")
+            .to_ascii_lowercase();
+        if !Self::is_valid(&v) || v == Self::NIL {
+            return Err(Error::ParseError(format!(
+                "invalid Session-ID uuid: {:?}",
+                raw
+            )));
+        }
+        Ok(v)
+    }
+
+    /// Shape check: exactly 32 ASCII hex chars.
+    pub fn is_valid(v: &str) -> bool {
+        v.len() == 32 && v.bytes().all(|b| b.is_ascii_hexdigit())
+    }
+
+    fn param_uuid(part: &str, key: &str) -> Option<String> {
+        let (k, v) = part.split_once('=')?;
+        if !k.trim().eq_ignore_ascii_case(key) {
+            return None;
+        }
+        let v: String = v.trim().replace('-', "").to_ascii_lowercase();
+        Self::is_valid(&v).then_some(v)
+    }
+
+    fn normalize_or_nil(raw: &str) -> String {
+        let v: String = raw
+            .trim()
+            .trim_start_matches("urn:uuid:")
+            .replace('-', "")
+            .to_ascii_lowercase();
+        if Self::is_valid(&v) {
+            v
+        } else {
+            Self::NIL.to_string()
+        }
+    }
+
+    /// Build `local;remote=NIL` — the form required on initial requests
+    /// (RFC 7989 §5: the remote parameter MUST be present and carries the
+    /// nil UUID until the peer's UUID is known).
+    pub fn from_local(local: &str) -> Result<Self, Error> {
+        let local = Self::normalize(local)?;
+        Ok(Self(format!("{};remote={}", local, Self::NIL)))
+    }
+
+    /// Build `local;remote=remote`. The remote value may be the nil UUID.
+    pub fn from_pair(local: &str, remote: &str) -> Result<Self, Error> {
+        let local = Self::normalize(local)?;
+        let remote = Self::normalize_or_nil(remote);
+        Ok(Self(format!("{};remote={}", local, remote)))
+    }
+
+    /// The transmitter's UUID (RFC 7989 "local-uuid"), normalized.
+    /// `None` when nil or malformed.
+    pub fn local_uuid(&self) -> Option<String> {
+        let raw = self.0.split(';').next().unwrap_or("").trim();
+        let v: String = raw.replace('-', "").to_ascii_lowercase();
+        if Self::is_valid(&v) && v != Self::NIL {
+            Some(v)
+        } else {
+            None
+        }
+    }
+
+    /// The peer's UUID from the `remote=` parameter, normalized. `None` when
+    /// absent, nil or malformed. Tolerates the RFC 7329 legacy form
+    /// `uuid;uuid` (a bare second UUID without a `remote=` tag).
+    pub fn remote_uuid(&self) -> Option<String> {
+        let mut legacy: Option<String> = None;
+        for part in self.0.split(';').skip(1) {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+            if let Some(v) = Self::param_uuid(part, "remote") {
+                return (v != Self::NIL).then_some(v);
+            }
+            if !part.contains('=') {
+                let bare: String = part.replace('-', "").to_ascii_lowercase();
+                if Self::is_valid(&bare) {
+                    legacy = Some(bare);
+                }
+            }
+        }
+        legacy.filter(|v| v != Self::NIL)
+    }
+
+    /// RFC 7989 §6/§7: a non-nil local-uuid that is not 32 octets long marks
+    /// the header as coming from a misbehaving implementation; callers MUST
+    /// discard it.
+    pub fn is_valid_header(&self) -> bool {
+        self.local_uuid().is_some()
+    }
+}
 
 impl std::convert::From<crate::sip::Uri> for ReferTo {
     fn from(uri: crate::sip::Uri) -> Self {
@@ -677,5 +786,101 @@ impl std::convert::From<typed::Route> for Route {
 impl std::convert::From<typed::RecordRoute> for RecordRoute {
     fn from(r: typed::RecordRoute) -> Self {
         Self(r.to_string())
+    }
+}
+
+impl<'a> ToTypedHeader<'a> for HistoryInfo {
+    type Typed = typed::HistoryInfo;
+}
+impl std::convert::TryInto<typed::HistoryInfo> for HistoryInfo {
+    type Error = Error;
+    fn try_into(self) -> Result<typed::HistoryInfo, Error> {
+        typed::HistoryInfo::parse(&self.0)
+    }
+}
+impl std::convert::From<typed::HistoryInfo> for HistoryInfo {
+    fn from(h: typed::HistoryInfo) -> Self {
+        Self(h.to_string())
+    }
+}
+
+#[cfg(test)]
+mod session_id_tests {
+    use super::*;
+
+    const A: &str = "ab30317f1a784dc48ff824d0d3715d86";
+    const B: &str = "47755a9de7794ba387653f2099600ef2";
+
+    #[test]
+    fn from_local_appends_nil_remote() {
+        let sid = SessionId::from_local(A).unwrap();
+        assert_eq!(
+            sid.value(),
+            "ab30317f1a784dc48ff824d0d3715d86;remote=00000000000000000000000000000000"
+        );
+        assert_eq!(sid.local_uuid().as_deref(), Some(A));
+        assert_eq!(sid.remote_uuid(), None);
+    }
+
+    #[test]
+    fn from_pair_roundtrip() {
+        let sid = SessionId::from_pair(A, B).unwrap();
+        assert_eq!(sid.local_uuid().as_deref(), Some(A));
+        assert_eq!(sid.remote_uuid().as_deref(), Some(B));
+    }
+
+    #[test]
+    fn from_pair_accepts_nil_remote() {
+        let sid = SessionId::from_pair(A, SessionId::NIL).unwrap();
+        assert_eq!(sid.local_uuid().as_deref(), Some(A));
+        assert_eq!(sid.remote_uuid(), None);
+    }
+
+    #[test]
+    fn normalize_strips_dashes_and_case() {
+        assert_eq!(
+            SessionId::normalize("AB30317F-1A78-4DC4-8FF8-24D0D3715D86").unwrap(),
+            A
+        );
+        assert_eq!(
+            SessionId::normalize("urn:uuid:ab30317f-1a78-4dc4-8ff8-24d0d3715d86").unwrap(),
+            A
+        );
+        assert!(SessionId::normalize("short").is_err());
+        assert!(SessionId::normalize(SessionId::NIL).is_err());
+        assert!(SessionId::normalize("xyz30317f1a784dc48ff824d0d3715d86").is_err());
+    }
+
+    #[test]
+    fn rfc7329_legacy_uuid_uuid_parses() {
+        // Pre-standard form: bare second uuid without remote= tag.
+        let sid = SessionId::new(format!("{};{}", A, B));
+        assert_eq!(sid.local_uuid().as_deref(), Some(A));
+        assert_eq!(sid.remote_uuid().as_deref(), Some(B));
+    }
+
+    #[test]
+    fn invalid_local_discards_header() {
+        let sid = SessionId::new("nope;remote=whatever");
+        assert!(!sid.is_valid_header());
+        assert_eq!(sid.local_uuid(), None);
+    }
+
+    #[test]
+    fn nil_local_is_not_a_valid_local() {
+        let sid = SessionId::new(format!("{};remote={}", SessionId::NIL, A));
+        assert_eq!(sid.local_uuid(), None);
+    }
+
+    #[test]
+    fn make_header_parses_session_id() {
+        let h = super::super::make_header("Session-ID", format!("{A};remote={B}"));
+        match h {
+            Header::SessionId(s) => {
+                assert_eq!(s.local_uuid().as_deref(), Some(A));
+                assert_eq!(s.remote_uuid().as_deref(), Some(B));
+            }
+            other => panic!("unexpected header: {}", other),
+        }
     }
 }

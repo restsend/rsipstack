@@ -708,6 +708,10 @@ impl ClientInviteDialog {
                 SipMessage::Response(resp) => {
                     let status = resp.status_code.clone();
 
+                    // RFC 7989 §8: learn the peer's (possibly new) UUID.
+                    let peer_uuid = resp.session_id_header().and_then(|s| s.local_uuid());
+                    self.inner.observe_peer_session_uuid(peer_uuid);
+
                     if status == StatusCode::Trying {
                         self.inner.transition(DialogState::Trying(self.id()))?;
                         continue;

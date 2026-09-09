@@ -160,7 +160,10 @@ impl Registration {
     /// # }
     /// ```
     pub fn new(endpoint: EndpointInnerRef, credential: Option<Credential>) -> Self {
-        let call_id = make_call_id(endpoint.option.callid_suffix.as_deref());
+        let call_id = make_call_id(
+            endpoint.option.callid_suffix.as_deref(),
+            endpoint.option.callid_format,
+        );
         Self {
             last_seq: 0,
             endpoint,

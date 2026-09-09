@@ -101,7 +101,12 @@ impl EndpointInner {
         seq: u32,
         call_id: Option<CallId>,
     ) -> Request {
-        let call_id = call_id.unwrap_or_else(|| make_call_id(self.option.callid_suffix.as_deref()));
+        let call_id = call_id.unwrap_or_else(|| {
+            make_call_id(
+                self.option.callid_suffix.as_deref(),
+                self.option.callid_format,
+            )
+        });
         let headers = vec![
             Header::Via(via.into()),
             Header::CallId(call_id),
@@ -338,8 +343,34 @@ impl EndpointInner {
                     | Header::To(_)
                     | Header::CSeq(_)
                     | Header::Route(_)
+                    | Header::SessionId(_)
             )
         });
+        // RFC 7989 §6/§10.1: the ACK is sent by the INVITE originator, so its
+        // local-uuid is the INVITE's, while the peer's UUID comes from the
+        // response being acknowledged. Without a Session-ID on the INVITE the
+        // endpoint does not participate and the response header is untouched.
+        let invite_local = invite.session_id_header().and_then(|s| s.local_uuid());
+        let resp_peer = resp.session_id_header().and_then(|s| s.local_uuid());
+        match (invite_local, resp_peer) {
+            (Some(local), Some(peer)) => {
+                for h in headers.iter_mut() {
+                    if let Header::SessionId(sid) = h {
+                        if let Ok(updated) =
+                            crate::sip::headers::SessionId::from_pair(&local, &peer)
+                        {
+                            *sid = updated;
+                        }
+                    }
+                }
+            }
+            (Some(local), None) if resp.session_id_header().is_none() => {
+                if let Ok(sid) = crate::sip::headers::SessionId::from_local(&local) {
+                    headers.push(Header::SessionId(sid));
+                }
+            }
+            _ => {}
+        }
         headers.push(Header::MaxForwards(70.into()));
         headers.iter_mut().for_each(|h| {
             if let Header::CSeq(cseq) = h {
