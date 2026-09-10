@@ -230,6 +230,20 @@ impl Registration {
         &self.service_route
     }
 
+    /// Build the preloaded `Route` set for out-of-dialog requests from the
+    /// learned Service-Route set (RFC 3608 §5.2).
+    ///
+    /// The returned routes are in the order the registrar sent them and can be
+    /// assigned to [`InviteOption::route_set`] (or otherwise pushed as `Route`
+    /// headers) so an initial request such as an INVITE traverses the
+    /// registrar's required path. Returns an empty vector when the last
+    /// registration carried no Service-Route.
+    ///
+    /// [`InviteOption::route_set`]: crate::dialog::invitation::InviteOption::route_set
+    pub fn preloaded_route_set(&self) -> Vec<crate::sip::typed::Route> {
+        self.service_route.iter().cloned().map(Into::into).collect()
+    }
+
     /// Get the registration expiration time
     ///
     /// Returns the expiration time in seconds for the current registration.
