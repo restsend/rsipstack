@@ -145,6 +145,13 @@ pub struct InviteOption {
     /// generated. Reuse the same value on transferred calls (REFER/Replaces)
     /// to keep the session identifiable across dialogs.
     pub session_id: Option<String>,
+    /// RFC 3608: preloaded route set for this out-of-dialog request. Each entry
+    /// is emitted as a `Route` header, in order, ahead of the caller-supplied
+    /// headers. Typically obtained from
+    /// [`Registration::preloaded_route_set`](crate::dialog::registration::Registration::preloaded_route_set)
+    /// so the request follows the path an IMS S-CSCF advertised at
+    /// registration. Empty by default, leaving existing behaviour unchanged.
+    pub route_set: Vec<crate::sip::typed::Route>,
 }
 
 pub struct DialogGuard {
@@ -363,6 +370,15 @@ impl DialogLayer {
             last_seq,
             call_id,
         );
+
+        // RFC 3608: preload the Service-Route set learned at registration as
+        // Route headers, in order, so this out-of-dialog request traverses the
+        // proxies the registrar (e.g. an IMS S-CSCF) requires. Plain push, not
+        // unique_push, because a route set legitimately has several Route
+        // headers.
+        for route in &opt.route_set {
+            request.headers.push(route.clone().into());
+        }
 
         let contact = if let Some(ref addr) = transport_addr {
             let mut uri = opt.contact.clone();

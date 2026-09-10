@@ -597,3 +597,78 @@ async fn test_make_invite_request_with_tls_transport_uses_sips_scheme() -> crate
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_make_invite_request_preloads_service_route() -> crate::Result<()> {
+    let token = CancellationToken::new();
+    let tl = TransportLayer::new(token.child_token());
+
+    // A UDP address so get_via has something to work with.
+    let udp_conn = UdpConnection::create_connection("127.0.0.1:0".parse()?, None, None).await?;
+    tl.add_transport(crate::transport::SipConnection::Udp(udp_conn));
+
+    let endpoint = EndpointBuilder::new()
+        .with_user_agent("rsipstack-test")
+        .with_transport_layer(tl)
+        .build();
+    let dialog_layer = DialogLayer::new(endpoint.inner.clone());
+
+    // Two-hop route set as an IMS S-CSCF would advertise via Service-Route.
+    let route_set = vec![
+        crate::sip::typed::Route::parse("<sip:scscf.home.net;lr>")?,
+        crate::sip::typed::Route::parse("<sip:pcscf.visited.net;lr>")?,
+    ];
+
+    let opt = crate::dialog::invitation::InviteOption {
+        caller: crate::sip::Uri::try_from("sip:alice@example.com")?,
+        callee: crate::sip::Uri::try_from("sip:bob@example.com")?,
+        contact: crate::sip::Uri::try_from("sip:alice@192.168.1.10:5060")?,
+        route_set,
+        ..Default::default()
+    };
+
+    let request = dialog_layer.make_invite_request(&opt)?;
+
+    // Both hops must be preloaded as Route headers, in the advertised order.
+    let routes = request.typed_route_headers()?;
+    assert_eq!(
+        routes.len(),
+        2,
+        "both Service-Route hops should be preloaded"
+    );
+    assert_eq!(routes[0].uri.to_string(), "sip:scscf.home.net;lr");
+    assert_eq!(routes[1].uri.to_string(), "sip:pcscf.visited.net;lr");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_make_invite_request_without_route_set_has_no_route() -> crate::Result<()> {
+    let token = CancellationToken::new();
+    let tl = TransportLayer::new(token.child_token());
+    let udp_conn = UdpConnection::create_connection("127.0.0.1:0".parse()?, None, None).await?;
+    tl.add_transport(crate::transport::SipConnection::Udp(udp_conn));
+
+    let endpoint = EndpointBuilder::new()
+        .with_user_agent("rsipstack-test")
+        .with_transport_layer(tl)
+        .build();
+    let dialog_layer = DialogLayer::new(endpoint.inner.clone());
+
+    let opt = crate::dialog::invitation::InviteOption {
+        caller: crate::sip::Uri::try_from("sip:alice@example.com")?,
+        callee: crate::sip::Uri::try_from("sip:bob@example.com")?,
+        contact: crate::sip::Uri::try_from("sip:alice@192.168.1.10:5060")?,
+        ..Default::default()
+    };
+
+    let request = dialog_layer.make_invite_request(&opt)?;
+
+    // Default (empty) route set must not add any Route header.
+    assert!(
+        request.route_headers().is_empty(),
+        "no Route header expected when route_set is empty"
+    );
+
+    Ok(())
+}

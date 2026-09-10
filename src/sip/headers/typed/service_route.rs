@@ -115,6 +115,19 @@ impl std::convert::From<ServiceRoute> for Header {
     }
 }
 
+impl std::convert::From<ServiceRoute> for super::Route {
+    /// Convert a learned `Service-Route` entry into the `Route` header a user
+    /// agent preloads on subsequent requests (RFC 3608 §5.2). The name-addr is
+    /// carried over verbatim; only the header field name differs on the wire.
+    fn from(r: ServiceRoute) -> super::Route {
+        super::Route {
+            display_name: r.display_name,
+            uri: r.uri,
+            params: r.params,
+        }
+    }
+}
+
 impl<'a> super::TypedHeader<'a> for ServiceRoute {}
 
 #[cfg(test)]
@@ -156,5 +169,15 @@ mod tests {
         // the name-addr, so re-parsing yields the same typed value.
         let reparsed = ServiceRoute::parse(header.value()).unwrap();
         assert_eq!(sr, reparsed);
+    }
+
+    #[test]
+    fn service_route_into_route_preserves_name_addr() {
+        let sr = ServiceRoute::parse("<sip:scscf.home.net;lr>").unwrap();
+        let route: crate::sip::typed::Route = sr.clone().into();
+        assert_eq!(route.uri, sr.uri);
+        assert_eq!(route.display_name, sr.display_name);
+        assert_eq!(route.params, sr.params);
+        assert!(route.has_lr());
     }
 }
