@@ -121,6 +121,12 @@ pub struct Registration {
     /// domain in SIP headers. Used for NAT traversal with load-balanced
     /// proxy clusters where DNS may resolve to different IPs.
     pub outbound_proxy: Option<std::net::SocketAddr>,
+    /// Service-Route set (RFC 3608) learned from the last successful
+    /// registration `200 OK`. These entries are the proxies the registrar
+    /// (e.g. an IMS S-CSCF) wants traversed on subsequent requests; a UA
+    /// preloads them as `Route` headers on later out-of-dialog requests.
+    /// Populated on each `200 OK`; empty when the response carried none.
+    pub service_route: Vec<crate::sip::typed::ServiceRoute>,
 }
 
 impl Registration {
@@ -173,6 +179,7 @@ impl Registration {
             public_address: None,
             call_id,
             outbound_proxy: None,
+            service_route: Vec::new(),
         }
     }
 
@@ -207,6 +214,20 @@ impl Registration {
     /// ```
     pub fn discovered_public_address(&self) -> Option<crate::sip::HostWithPort> {
         self.public_address.clone()
+    }
+
+    /// Get the Service-Route set (RFC 3608) from the last successful
+    /// registration.
+    ///
+    /// Returns the ordered list of routes the registrar asked the user agent
+    /// to traverse on subsequent requests. In IMS this is the originating
+    /// route set advertised by the S-CSCF. The slice is empty when the last
+    /// `200 OK` carried no `Service-Route` header.
+    ///
+    /// This accessor only exposes the learned set; applying it to outgoing
+    /// requests (preloading `Route` headers) is left to the caller.
+    pub fn service_route(&self) -> &[crate::sip::typed::ServiceRoute] {
+        &self.service_route
     }
 
     /// Get the registration expiration time
@@ -551,9 +572,17 @@ impl Registration {
                             );
                             self.public_address = received;
                         }
+
+                        // RFC 3608: adopt the Service-Route set advertised by
+                        // the registrar as the preloaded route set for later
+                        // out-of-dialog requests. Malformed values are ignored
+                        // rather than failing the registration.
+                        self.service_route = resp.typed_service_route_headers().unwrap_or_default();
+
                         debug!(
                             status = %resp.status_code,
                             contact = ?self.contact.as_ref().map(|c| c.uri.to_string()),
+                            service_route = self.service_route.len(),
                             "registration do_request done"
                         );
                         return Ok(resp);

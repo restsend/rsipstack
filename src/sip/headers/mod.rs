@@ -40,6 +40,7 @@ pub enum Header {
     Require(Require),
     RetryAfter(RetryAfter),
     Route(Route),
+    ServiceRoute(ServiceRoute),
     Server(Server),
     Subject(Subject),
     SubscriptionState(SubscriptionState),
@@ -108,6 +109,7 @@ impl std::fmt::Display for Header {
             Self::Require(inner) => write!(f, "{}", inner),
             Self::RetryAfter(inner) => write!(f, "{}", inner),
             Self::Route(inner) => write!(f, "{}", inner),
+            Self::ServiceRoute(inner) => write!(f, "{}", inner),
             Self::Server(inner) => write!(f, "{}", inner),
             Self::Subject(inner) => write!(f, "{}", inner),
             Self::SubscriptionState(inner) => write!(f, "{}", inner),
@@ -178,6 +180,7 @@ impl Header {
             Self::Require(_) => "Require",
             Self::RetryAfter(_) => "Retry-After",
             Self::Route(_) => "Route",
+            Self::ServiceRoute(_) => "Service-Route",
             Self::Server(_) => "Server",
             Self::Subject(_) => "Subject",
             Self::SubscriptionState(_) => "Subscription-State",
@@ -246,6 +249,7 @@ impl Header {
             Self::Require(h) => h.value(),
             Self::RetryAfter(h) => h.value(),
             Self::Route(h) => h.value(),
+            Self::ServiceRoute(h) => h.value(),
             Self::Server(h) => h.value(),
             Self::Subject(h) => h.value(),
             Self::SubscriptionState(h) => h.value(),
@@ -459,6 +463,9 @@ pub fn make_header(name: &str, value: String) -> Header {
         n if n.eq_ignore_ascii_case("Require") => Header::Require(Require::new(value)),
         n if n.eq_ignore_ascii_case("Retry-After") => Header::RetryAfter(RetryAfter::new(value)),
         n if n.eq_ignore_ascii_case("Route") => Header::Route(Route::new(value)),
+        n if n.eq_ignore_ascii_case("Service-Route") => {
+            Header::ServiceRoute(ServiceRoute::new(value))
+        }
         n if n.eq_ignore_ascii_case("Server") => Header::Server(Server::new(value)),
         n if n.eq_ignore_ascii_case("Subject") || n.eq_ignore_ascii_case("s") => {
             Header::Subject(Subject::new(value))
