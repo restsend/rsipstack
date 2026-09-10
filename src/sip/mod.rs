@@ -31,8 +31,8 @@ pub mod param {
 pub mod typed {
     pub use super::headers::typed::{
         Allow, Authorization, CSeq, Contact, From, HistoryInfo, HistoryInfoEntry, Identity,
-        ProxyAuthenticate, ProxyAuthorization, RecordRoute, Route, To, Tokenize, TypedHeader, Via,
-        WwwAuthenticate,
+        ProxyAuthenticate, ProxyAuthorization, RecordRoute, Route, ServiceRoute, To, Tokenize,
+        TypedHeader, Via, WwwAuthenticate,
     };
     pub mod tokenizers {
         pub use crate::sip::headers::typed::tokenizers::{AuthTokenizer, CseqTokenizer};

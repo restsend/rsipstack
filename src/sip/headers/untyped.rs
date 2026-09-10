@@ -171,6 +171,7 @@ untyped_header!(RSeq, "RSeq", Header::RSeq);
 untyped_header!(RAck, "RAck", Header::RAck);
 untyped_header!(Privacy, "Privacy", Header::Privacy);
 untyped_header!(Path, "Path", Header::Path);
+untyped_header!(ServiceRoute, "Service-Route", Header::ServiceRoute);
 untyped_header!(Identity, "Identity", Header::Identity);
 untyped_header!(UserToUser, "User-to-User", Header::UserToUser);
 untyped_header!(SessionId, "Session-ID", Header::SessionId);

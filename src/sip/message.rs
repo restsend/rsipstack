@@ -232,6 +232,21 @@ pub trait HeadersExt: HasHeaders {
         }
         Ok(routes)
     }
+    fn service_route_headers(&self) -> Vec<&ServiceRoute> {
+        all_headers!(self.headers().iter(), Header::ServiceRoute)
+    }
+    fn service_route_header(&self) -> Option<&ServiceRoute> {
+        header_opt!(self.headers().iter(), Header::ServiceRoute)
+    }
+    fn typed_service_route_headers(&self) -> Result<Vec<crate::sip::typed::ServiceRoute>, Error> {
+        let mut routes = Vec::new();
+        for r in self.service_route_headers() {
+            routes.extend(crate::sip::typed::ServiceRoute::parse_header_list(
+                r.value(),
+            )?);
+        }
+        Ok(routes)
+    }
     fn user_agent_header(&self) -> Option<&UserAgent> {
         header_opt!(self.headers().iter(), Header::UserAgent)
     }
@@ -1172,6 +1187,38 @@ mod tests {
         let paths = msg.path_headers();
         assert_eq!(paths.len(), 1);
         assert!(paths[0].value().contains("edge.restsend.com"));
+    }
+
+    #[test]
+    fn new_headers_service_route_header() {
+        // REGISTER 200 OK carrying an IMS-style Service-Route set. RFC 3608
+        // allows the entries to arrive either as one comma-separated header or
+        // as several header lines; both must fold into the same route set.
+        let msg: SipMessage = concat!(
+            "SIP/2.0 200 OK\r\n",
+            "Via: SIP/2.0/TCP edge.home.net;branch=z9hG4bKtest\r\n",
+            "From: <sip:alice@home.net>;tag=abc\r\n",
+            "To: <sip:alice@home.net>;tag=xyz\r\n",
+            "Call-ID: sr-test@edge.home.net\r\n",
+            "CSeq: 1 REGISTER\r\n",
+            "Service-Route: <sip:scscf.home.net;lr>\r\n",
+            "Service-Route: <sip:pcscf.visited.net;lr>\r\n",
+            "Contact: <sip:alice@192.0.2.5:5060>;expires=600\r\n",
+            "Content-Length: 0\r\n",
+            "\r\n"
+        )
+        .try_into()
+        .unwrap();
+
+        let raw = msg.service_route_headers();
+        assert_eq!(raw.len(), 2);
+
+        let routes = msg.typed_service_route_headers().unwrap();
+        assert_eq!(routes.len(), 2);
+        assert_eq!(routes[0].uri.to_string(), "sip:scscf.home.net;lr");
+        assert_eq!(routes[1].uri.to_string(), "sip:pcscf.visited.net;lr");
+        assert!(routes[0].has_lr());
+        assert!(routes[1].has_lr());
     }
 
     #[test]
