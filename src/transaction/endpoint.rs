@@ -109,7 +109,7 @@ pub struct EndpointInner {
     #[allow(dead_code)]
     timer_interval: Duration,
     pub(super) message_inspector: Option<Box<dyn MessageInspector>>,
-    pub(crate) locator: Option<Box<dyn TargetLocator>>,
+    pub(super) locator: Option<Box<dyn TargetLocator>>,
     pub(super) transport_inspector: Option<Box<dyn TransportEventInspector>>,
     pub option: EndpointOption,
 }
