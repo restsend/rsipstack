@@ -65,6 +65,8 @@ pub enum Header {
     Path(Path),
     Identity(Identity),
     UserToUser(UserToUser),
+    SessionId(SessionId),
+    HistoryInfo(HistoryInfo),
 }
 
 impl std::fmt::Display for Header {
@@ -131,6 +133,8 @@ impl std::fmt::Display for Header {
             Self::Path(inner) => write!(f, "{}", inner),
             Self::Identity(inner) => write!(f, "{}", inner),
             Self::UserToUser(inner) => write!(f, "{}", inner),
+            Self::SessionId(inner) => write!(f, "{}", inner),
+            Self::HistoryInfo(inner) => write!(f, "{}", inner),
         }
     }
 }
@@ -199,6 +203,8 @@ impl Header {
             Self::Path(_) => "Path",
             Self::Identity(_) => "Identity",
             Self::UserToUser(_) => "User-to-User",
+            Self::SessionId(_) => "Session-ID",
+            Self::HistoryInfo(_) => "History-Info",
         }
     }
 
@@ -265,6 +271,8 @@ impl Header {
             Self::Path(h) => h.value(),
             Self::Identity(h) => h.value(),
             Self::UserToUser(h) => h.value(),
+            Self::SessionId(h) => h.value(),
+            Self::HistoryInfo(h) => h.value(),
         }
     }
 }
@@ -498,6 +506,8 @@ pub fn make_header(name: &str, value: String) -> Header {
         n if n.eq_ignore_ascii_case("Path") => Header::Path(Path::new(value)),
         n if n.eq_ignore_ascii_case("Identity") => Header::Identity(Identity::new(value)),
         n if n.eq_ignore_ascii_case("User-to-User") => Header::UserToUser(UserToUser::new(value)),
+        n if n.eq_ignore_ascii_case("Session-ID") => Header::SessionId(SessionId::new(value)),
+        n if n.eq_ignore_ascii_case("History-Info") => Header::HistoryInfo(HistoryInfo::new(value)),
         other => Header::Other(other.to_string(), value),
     }
 }

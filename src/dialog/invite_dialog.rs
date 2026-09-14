@@ -249,6 +249,10 @@ impl InviteDialog {
         self.inner.transition(DialogState::Calling(self.id()))?;
         let mut auth_sent = false;
         tx.send().await?;
+        // Record the flow the INVITE actually went out on, so later
+        // in-dialog requests (BYE / re-INVITE / INFO) reuse it instead of
+        // destination-routing off a possibly unroutable Contact.
+        self.inner.set_server_connection(tx.connection.clone());
         let mut dialog_id = self.id();
         let mut final_response = None;
         while let Some(msg) = tx.receive().await {
@@ -291,6 +295,7 @@ impl InviteDialog {
                             )
                             .await?;
                             tx.send().await?;
+                            self.inner.set_server_connection(tx.connection.clone());
                             self.inner.update_remote_tag("").ok();
                             {
                                 let mut req = self.inner.initial_request.lock();
@@ -556,6 +561,15 @@ impl InviteDialog {
             state = %self.inner.state.lock(),
             "handle request"
         );
+
+        // RFC 7989 §8: a mid-dialog request may carry a new peer UUID;
+        // responses to it must mirror the new value. CANCEL is exempt —
+        // its Session-ID is always identical to the original INVITE's and
+        // MUST NOT update the stored peer UUID.
+        if tx.original.method != Method::Cancel {
+            let peer_uuid = tx.original.session_id_header().and_then(|s| s.local_uuid());
+            self.inner.observe_peer_session_uuid(peer_uuid);
+        }
 
         let cseq = tx.original.cseq_header()?.seq()?;
         let remote_seq = self.inner.remote_seq.load(Ordering::Relaxed);

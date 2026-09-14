@@ -30,8 +30,9 @@ pub mod param {
 
 pub mod typed {
     pub use super::headers::typed::{
-        Allow, Authorization, CSeq, Contact, From, Identity, ProxyAuthenticate, ProxyAuthorization,
-        RecordRoute, Route, To, Tokenize, TypedHeader, Via, WwwAuthenticate,
+        Allow, Authorization, CSeq, Contact, From, HistoryInfo, HistoryInfoEntry, Identity,
+        ProxyAuthenticate, ProxyAuthorization, RecordRoute, Route, To, Tokenize, TypedHeader, Via,
+        WwwAuthenticate,
     };
     pub mod tokenizers {
         pub use crate::sip::headers::typed::tokenizers::{AuthTokenizer, CseqTokenizer};
@@ -41,12 +42,12 @@ pub mod typed {
 pub use headers::untyped::{
     Accept, AcceptEncoding, AcceptLanguage, AlertInfo, Allow, AuthenticationInfo, Authorization,
     CSeq, CallId, CallInfo, Contact, ContentDisposition, ContentEncoding, ContentLanguage,
-    ContentLength, ContentType, Date, ErrorInfo, Event, Expires, From, Identity, InReplyTo,
-    MaxForwards, MimeVersion, MinExpires, MinSE, Organization, PAssertedIdentity,
+    ContentLength, ContentType, Date, ErrorInfo, Event, Expires, From, HistoryInfo, Identity,
+    InReplyTo, MaxForwards, MimeVersion, MinExpires, MinSE, Organization, PAssertedIdentity,
     PPreferredIdentity, Path, Priority, Privacy, ProxyAuthenticate, ProxyAuthorization,
     ProxyRequire, RAck, RSeq, Reason, RecordRoute, ReferTo, ReferredBy, Replaces, ReplyTo, Require,
-    RetryAfter, Route, Server, SessionExpires, Subject, SubscriptionState, Supported, Timestamp,
-    To, ToTypedHeader, Unsupported, UntypedHeader, UserAgent, UserToUser, Via, Warning,
+    RetryAfter, Route, Server, SessionExpires, SessionId, Subject, SubscriptionState, Supported,
+    Timestamp, To, ToTypedHeader, Unsupported, UntypedHeader, UserAgent, UserToUser, Via, Warning,
     WwwAuthenticate,
 };
 

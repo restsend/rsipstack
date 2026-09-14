@@ -140,6 +140,11 @@ pub struct InviteOption {
     pub headers: Option<Vec<crate::sip::Header>>,
     pub support_prack: bool,
     pub call_id: Option<String>,
+    /// RFC 7989: local Session-ID UUID for this call (32 hex chars; dashed
+    /// RFC 4122 input is normalized). When `None` no Session-ID header is
+    /// generated. Reuse the same value on transferred calls (REFER/Replaces)
+    /// to keep the session identifiable across dialogs.
+    pub session_id: Option<String>,
 }
 
 pub struct DialogGuard {
@@ -402,6 +407,35 @@ impl DialogLayer {
             request
                 .headers
                 .unique_push(crate::sip::Header::Supported("100rel".into()));
+        }
+
+        // RFC 7044 §6.1: advertise histinfo so peers include History-Info in
+        // responses. Plain push — multiple Supported header lines are legal.
+        // The request's own headers and the caller-supplied ones (appended
+        // below) are both checked to avoid duplicates.
+        if self.endpoint.option.history_info_enabled {
+            let already = request
+                .headers
+                .iter()
+                .chain(opt.headers.iter().flatten())
+                .any(|h| {
+                    matches!(h, crate::sip::Header::Supported(s)
+                        if s.value().split(',').any(|t| t.trim().eq_ignore_ascii_case("histinfo")))
+                });
+            if !already {
+                request
+                    .headers
+                    .push(crate::sip::Header::Supported("histinfo".into()));
+            }
+        }
+
+        // RFC 7989: only include Session-ID when the application opted in;
+        // initial requests carry `<local>;remote=<nil>`.
+        if let Some(raw) = opt.session_id.as_deref() {
+            let uuid = crate::sip::headers::SessionId::normalize(raw)?;
+            request
+                .headers
+                .unique_push(crate::sip::headers::SessionId::from_local(&uuid)?.into());
         }
         // can't override default headers
         if let Some(headers) = opt.headers.as_ref() {

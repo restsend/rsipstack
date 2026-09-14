@@ -17,6 +17,18 @@ pub const TO_TAG_LEN: usize = 8;
 pub const BRANCH_LEN: usize = 12;
 pub const CNONCE_LEN: usize = 8;
 pub const CALL_ID_LEN: usize = 22;
+pub const DEFAULT_CALLID_SUFFIX: &str = "restsend.com";
+
+/// Format used when generating a new Call-ID (dialog identifier).
+///
+/// * `UuidWithSuffix` - `lower(uuid)@suffix`, e.g. `0b9e6c1e-1b40-4e8f-9c21-2f5a8d3e7b61@restsend.com` (default)
+/// * `Uuid` - plain lower-case UUID v4, e.g. `0b9e6c1e-1b40-4e8f-9c21-2f5a8d3e7b61`
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CallIdFormat {
+    #[default]
+    UuidWithSuffix,
+    Uuid,
+}
 pub struct IncomingRequest {
     pub request: crate::sip::Request,
     pub connection: SipConnection,
@@ -291,13 +303,41 @@ pub fn make_via_branch() -> crate::sip::Param {
     crate::sip::Param::Branch(format!("z9hG4bK{}", random_text(BRANCH_LEN)).into())
 }
 
-pub fn make_call_id(domain: Option<&str>) -> crate::sip::headers::CallId {
+pub fn make_call_id(suffix: Option<&str>, format: CallIdFormat) -> crate::sip::headers::CallId {
+    match format {
+        CallIdFormat::UuidWithSuffix => format!(
+            "{}@{}",
+            make_uuid_v4(),
+            suffix.unwrap_or(DEFAULT_CALLID_SUFFIX)
+        )
+        .into(),
+        CallIdFormat::Uuid => make_uuid_v4().into(),
+    }
+}
+
+pub fn make_uuid_v4() -> String {
+    let mut b = [0u8; 16];
+    fill_random_bytes(&mut b);
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
     format!(
-        "{}@{}",
-        random_text(CALL_ID_LEN),
-        domain.unwrap_or("restsend.com")
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13],
+        b[14], b[15]
     )
-    .into()
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn fill_random_bytes(buf: &mut [u8]) {
+    use rand::Rng;
+    rand::rng().fill_bytes(buf);
+}
+
+#[cfg(target_family = "wasm")]
+fn fill_random_bytes(buf: &mut [u8]) {
+    for byte in buf.iter_mut() {
+        *byte = (js_sys::Math::random() * 256.0) as u8;
+    }
 }
 
 pub fn make_tag() -> crate::sip::param::Tag {

@@ -6,15 +6,16 @@ use super::{
     DialogId,
 };
 use crate::sip::{
+    headers::typed::record_route::split_rr_values,
     prelude::{HeadersExt, ToTypedHeader},
     typed::{CSeq, Contact},
-    HasHeaders, Header, Method, Param, Request, Response, Route, SipMessage, StatusCode,
-    StatusCodeKind,
+    Header, Method, Param, Request, Response, Route, SipMessage, StatusCode, StatusCodeKind,
 };
 use crate::{
     transaction::{
         endpoint::EndpointInnerRef,
         key::{TransactionKey, TransactionRole},
+        make_uuid_v4,
         transaction::{Transaction, TransactionEventSender},
     },
     transport::{SipAddr, SipConnection},
@@ -324,6 +325,9 @@ pub struct DialogInner {
     pub(super) endpoint_inner: EndpointInnerRef,
     pub(super) state_sender: DialogStateSender,
     pub(super) tu_sender: TransactionEventSender,
+    /// RFC 7989 Session-ID state; `None` when the dialog does not participate
+    /// (no UUID supplied by the application and none received from the peer).
+    pub(super) session_id: Mutex<Option<SessionIdState>>,
     // initial request updated when INVITE auth failed with new INVITE
     pub(super) initial_request: Mutex<Request>,
     pub(super) supports_100rel: bool,
@@ -387,6 +391,19 @@ pub enum DialogSnapshotState {
     Confirmed,
     Terminated,
 }
+
+/// RFC 7989 session-identifier state for a dialog.
+///
+/// `local` is this endpoint's UUID (stable for the dialog lifetime);
+/// `remote` is the peer's UUID, learned from received messages (§8).
+/// A dialog only participates in Session-ID when this is `Some` — i.e. the
+/// application supplied a UUID (UAC) or the peer sent a Session-ID header
+/// (UAS). No UUID is ever generated speculatively.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionIdState {
+    pub local: String,
+    pub remote: Option<String>,
+}
 #[derive(Clone, Debug)]
 pub struct DialogSnapshot {
     pub state: DialogSnapshotState,
@@ -406,6 +423,8 @@ pub struct DialogSnapshot {
 
     pub route_set: Vec<Route>,
     pub supports_100rel: bool,
+    /// RFC 7989 Session-ID state, preserved across snapshot restore.
+    pub session_id: Option<SessionIdState>,
 }
 impl DialogInner {
     #[allow(clippy::too_many_arguments)]
@@ -442,16 +461,20 @@ impl DialogInner {
             }
         }
 
-        let mut route_set = vec![];
-        for h in initial_request.headers.iter() {
-            if let Header::RecordRoute(rr) = h {
-                route_set.push(Route::from(rr.value()));
-            }
+        let mut route_set: Vec<Route> = Vec::new();
+        if let TransactionRole::Server = role {
+            route_set = initial_request
+                .record_route_headers()
+                .into_iter()
+                .flat_map(|rr| split_rr_values(rr.value()))
+                .map(Route::from)
+                .collect();
         }
-        route_set.reverse();
 
         let supports_100rel = initial_request.header_contains_token("Supported", "100rel")
             || initial_request.header_contains_token("Require", "100rel");
+
+        let session_id = Self::extract_session_id(&initial_request, role);
 
         Ok(Self {
             role,
@@ -469,6 +492,7 @@ impl DialogInner {
             tu_sender,
             state: Mutex::new(DialogState::Calling(id)),
             initial_request: Mutex::new(initial_request),
+            session_id: Mutex::new(session_id),
             local_contact,
             remote_contact: Mutex::new(None),
             supports_100rel,
@@ -477,13 +501,71 @@ impl DialogInner {
             dialback_target: Mutex::new(None),
         })
     }
-    pub fn set_server_connection(&self, connection: Option<SipConnection>) {
-        if self.role == TransactionRole::Server {
-            *self.server_connection.lock() = connection.clone();
-            // Capture the structural source address for the dial-back ladder.
-            *self.dialback_target.lock() =
-                connection.and_then(|conn| conn.get_remote_addr().cloned());
+    /// Extract RFC 7989 Session-ID state from the initial request.
+    ///
+    /// * Client role: the header's local-uuid is ours (the application had to
+    ///   supply it — the stack never generates one for outgoing requests);
+    ///   its remote= value (usually nil) is kept as the initial peer hint.
+    /// * Server role: the header's local-uuid belongs to the peer; a local
+    ///   UUID is generated so responses can mirror correctly (§6).
+    ///
+    /// Malformed headers (non-nil local-uuid that is not 32 hex chars) are
+    /// discarded per RFC 7989 §6 and the dialog does not participate.
+    fn extract_session_id(
+        initial_request: &Request,
+        role: TransactionRole,
+    ) -> Option<SessionIdState> {
+        let sid = initial_request.session_id_header()?;
+        if !sid.is_valid_header() {
+            return None;
         }
+        let peer = sid.local_uuid()?;
+        match role {
+            TransactionRole::Client => Some(SessionIdState {
+                local: peer,
+                remote: sid.remote_uuid(),
+            }),
+            TransactionRole::Server => Some(SessionIdState {
+                local: make_dialog_session_uuid(),
+                remote: Some(peer),
+            }),
+        }
+    }
+
+    /// RFC 7989 §8: learn/refresh the peer's UUID from a received message.
+    /// `None` (missing Session-ID) leaves the stored value untouched — the
+    /// caller decides CANCEL exemptions per §8. Nil or malformed values are
+    /// rejected here as well: the nil UUID is never a valid peer identity.
+    pub fn observe_peer_session_uuid(&self, peer: Option<String>) {
+        let Some(uuid) = peer else {
+            return;
+        };
+        if !crate::sip::headers::SessionId::is_valid(&uuid)
+            || uuid == crate::sip::headers::SessionId::NIL
+        {
+            return;
+        }
+        let mut state = self.session_id.lock();
+        if let Some(sid) = state.as_mut() {
+            if sid.local != uuid {
+                sid.remote = Some(uuid);
+            }
+        }
+    }
+
+    /// Current session-identifier state, if this dialog participates.
+    pub fn session_id_state(&self) -> Option<SessionIdState> {
+        self.session_id.lock().clone()
+    }
+
+    pub fn set_server_connection(&self, connection: Option<SipConnection>) {
+        // Recorded for both roles: server dialogs get it at creation time,
+        // client dialogs after the initial INVITE is sent (see
+        // `ClientInviteDialog::process_invite`). Drives RFC 5626/7118 flow
+        // affinity and the dial-back ladder for both legs.
+        *self.server_connection.lock() = connection.clone();
+        // Capture the structural source address for the dial-back ladder.
+        *self.dialback_target.lock() = connection.and_then(|conn| conn.get_remote_addr().cloned());
     }
     pub fn can_cancel(&self) -> bool {
         self.state.lock().can_cancel()
@@ -702,12 +784,10 @@ impl DialogInner {
         }
 
         let mut new_route_set: Vec<Route> = resp
-            .headers()
-            .iter()
-            .filter_map(|header| match header {
-                Header::RecordRoute(rr) => Some(Route::from(rr.value())),
-                _ => None,
-            })
+            .record_route_headers()
+            .into_iter()
+            .flat_map(|rr| split_rr_values(rr.value()))
+            .map(Route::from)
             .collect();
 
         new_route_set.reverse();
@@ -768,6 +848,22 @@ impl DialogInner {
 
         out.push(Header::MaxForwards(70.into()));
 
+        // RFC 7989: participating dialogs carry `Session-ID: <local>;remote=<peer>`
+        // on every in-dialog request. Skipped when the caller supplies their own.
+        {
+            let state = self.session_id.lock();
+            if let Some(sid) = state.as_ref() {
+                let caller_supplied = headers
+                    .as_ref()
+                    .is_some_and(|hs| hs.iter().any(|h| matches!(h, Header::SessionId(_))));
+                if !caller_supplied {
+                    if let Some(h) = build_session_id_header(&sid.local, sid.remote.as_deref()) {
+                        out.push(h);
+                    }
+                }
+            }
+        }
+
         out.push(Header::ContentLength(
             body.as_ref().map_or(0u32, |b| b.len() as u32).into(),
         ));
@@ -811,6 +907,16 @@ impl DialogInner {
         body: Option<Vec<u8>>,
     ) -> crate::sip::Response {
         let mut resp_headers = crate::sip::Headers::default();
+
+        // RFC 7989 §6: the response mirrors `<local=ours>;remote=<peer>`,
+        // where the peer UUID is the local-uuid of the *request* (it may have
+        // just changed on a mid-dialog request — §8). History-Info entries
+        // are mirrored per RFC 7044 §9.4 only when the request carried any.
+        let request_peer_uuid = request.session_id_header().and_then(|s| s.local_uuid());
+        let request_has_history = !request.history_info_headers().is_empty();
+        let user_supplied_history = headers
+            .as_ref()
+            .is_some_and(|hs| hs.iter().any(|h| matches!(h, Header::HistoryInfo(_))));
 
         for header in request.headers.iter() {
             match header {
@@ -856,6 +962,25 @@ impl DialogInner {
             resp_headers.push(Contact::from(c.clone()).into())
         }
 
+        if status != StatusCode::Trying {
+            {
+                let state = self.session_id.lock();
+                if let Some(sid) = state.as_ref() {
+                    let remote = request_peer_uuid.clone().or_else(|| sid.remote.clone());
+                    if let Some(h) = build_session_id_header(&sid.local, remote.as_deref()) {
+                        resp_headers.push(h);
+                    }
+                }
+            }
+            if request_has_history && !user_supplied_history {
+                for h in request.headers.iter() {
+                    if let Header::HistoryInfo(hi) = h {
+                        resp_headers.push(Header::HistoryInfo(hi.clone()));
+                    }
+                }
+            }
+        }
+
         if let Some(headers) = headers {
             for header in headers {
                 match &header {
@@ -867,6 +992,10 @@ impl DialogInner {
                                 crate::sip::Header::Other(n, _) if n.to_ascii_lowercase() == lname
                             )
                         });
+                        resp_headers.push(header);
+                    }
+                    // History-Info is multi-instance; never dedup entries.
+                    crate::sip::Header::HistoryInfo(_) => {
                         resp_headers.push(header);
                     }
                     _ => resp_headers.unique_push(header),
@@ -895,16 +1024,16 @@ impl DialogInner {
     /// Resolve the connection to reuse for outgoing in-dialog requests
     /// (RFC 5626 flow affinity / RFC 7118 §6.2).
     ///
-    /// Returns `Some(connection)` only when all of the following hold:
-    /// * this is a server-role dialog created from an incoming request,
+    /// Returns `Some(connection)` when all of the following hold:
     /// * the recorded connection uses a reliable transport (WS/WSS/TCP/TLS)
     ///   — UDP dialogs keep the classic destination-based routing,
     /// * the dialog has no route set; with loose-routing proxies in path the
     ///   request must follow the route set, not the raw transport flow.
+    ///
+    /// Applies to both dialog roles: a UAS dialog rides the flow the initial
+    /// request arrived on; a UAC dialog rides the flow its initial INVITE
+    /// was sent on (e.g. a proxy dialing a WebSocket callee).
     fn resolve_affinity_connection(&self) -> Option<SipConnection> {
-        if self.role != TransactionRole::Server {
-            return None;
-        }
         if !self.route_set.lock().is_empty() {
             return None;
         }
@@ -1041,6 +1170,10 @@ impl DialogInner {
         while let Some(msg) = tx.receive().await {
             match msg {
                 SipMessage::Response(resp) => {
+                    // RFC 7989 §8: accept the peer's (possibly new) UUID from
+                    // any received response; missing/nil values change nothing.
+                    let peer_uuid = resp.session_id_header().and_then(|s| s.local_uuid());
+                    self.observe_peer_session_uuid(peer_uuid);
                     let status = resp.status_code.clone();
                     if status == StatusCode::Trying {
                         continue;
@@ -1150,6 +1283,7 @@ impl DialogInner {
 
             route_set: self.route_set.lock().clone(),
             supports_100rel: self.supports_100rel,
+            session_id: self.session_id.lock().clone(),
         }
     }
 
@@ -1204,6 +1338,7 @@ impl DialogInner {
             snapshot.local_cseq,
             snapshot.local_contact.as_ref(),
             endpoint_inner.user_agent.as_str(),
+            snapshot.session_id.as_ref(),
         ));
 
         Ok(Some(Self {
@@ -1234,6 +1369,7 @@ impl DialogInner {
             tu_sender,
 
             initial_request,
+            session_id: Mutex::new(snapshot.session_id),
             supports_100rel: snapshot.supports_100rel,
             remote_reliable: Mutex::new(None),
             server_connection: Mutex::new(None),
@@ -1249,6 +1385,7 @@ impl DialogInner {
         local_seq: u32,
         local_contact: Option<&crate::sip::Uri>,
         user_agent: &str,
+        session_id: Option<&SessionIdState>,
     ) -> Request {
         use crate::sip::Version;
 
@@ -1279,6 +1416,25 @@ impl DialogInner {
 
         if let Some(uri) = local_contact {
             headers.push(Contact::from(uri.clone()).into());
+        }
+
+        if let Some(sid) = session_id {
+            let header = match role {
+                // Client: the synthetic initial request is our outgoing INVITE.
+                TransactionRole::Client => {
+                    build_session_id_header(&sid.local, sid.remote.as_deref())
+                }
+                // Server: it mirrors the incoming INVITE (peer's uuid first).
+                TransactionRole::Server => build_session_id_header(
+                    sid.remote
+                        .as_deref()
+                        .unwrap_or(crate::sip::headers::SessionId::NIL),
+                    Some(&sid.local),
+                ),
+            };
+            if let Some(h) = header {
+                headers.push(h);
+            }
         }
 
         // Content-Length = 0
@@ -1587,4 +1743,22 @@ fn is_system_header(h: &crate::sip::Header) -> bool {
             | ContentLength(_)
             | Route(_)
     )
+}
+
+/// Generate a Session-ID UUID in the RFC 7989 wire format: 32 lowercase hex
+/// chars (no dashes), derived from a version-4 UUID.
+pub(crate) fn make_dialog_session_uuid() -> String {
+    make_uuid_v4().replace('-', "")
+}
+
+/// Build a `Session-ID: <local>[;remote=<remote|nil>]` header.
+/// Per RFC 7989 §5 the remote parameter MUST be present (nil UUID when the
+/// peer's UUID is unknown), except when interworking with RFC 7329 peers.
+pub(crate) fn build_session_id_header(local: &str, remote: Option<&str>) -> Option<Header> {
+    let header = match remote {
+        Some(remote) => crate::sip::headers::SessionId::from_pair(local, remote),
+        None => crate::sip::headers::SessionId::from_local(local),
+    }
+    .ok()?;
+    Some(Header::SessionId(header))
 }

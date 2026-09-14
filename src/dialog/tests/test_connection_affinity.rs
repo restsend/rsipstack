@@ -121,6 +121,14 @@ fn server_dialog(
 /// explicitly wired connection (or the explicit fallback dial-back).
 async fn create_endpoint_without_transports(
 ) -> crate::Result<crate::transaction::endpoint::Endpoint> {
+    create_endpoint_with_inspector(None).await
+}
+
+/// Same isolated endpoint, optionally wired with a message inspector so tests
+/// can assert what sipflow-style recorders observe on `before_send`.
+async fn create_endpoint_with_inspector(
+    inspector: Option<Box<dyn crate::transaction::endpoint::MessageInspector>>,
+) -> crate::Result<crate::transaction::endpoint::Endpoint> {
     let token = CancellationToken::new();
     let tl = TransportLayer::new(token.child_token());
 
@@ -150,10 +158,14 @@ async fn create_endpoint_without_transports(
     .await;
     tl.inner.add_listener(udp_conn.into());
 
-    Ok(EndpointBuilder::new()
+    let mut builder = EndpointBuilder::new();
+    builder
         .with_user_agent("rsipstack-affinity-test")
-        .with_transport_layer(tl)
-        .build())
+        .with_transport_layer(tl);
+    if let Some(inspector) = inspector {
+        builder.with_inspector(inspector);
+    }
+    Ok(builder.build())
 }
 
 fn wss_flow_addr(port: u16) -> SipAddr {
@@ -339,14 +351,16 @@ async fn test_server_dialog_bye_is_delivered_over_initial_connection() {
 }
 
 #[tokio::test]
-async fn test_client_dialogs_do_not_use_affinity() {
-    // A UAC resolves its own next hops; it must not adopt whatever socket was
-    // involved when the dialog responses arrived.
+async fn test_client_dialogs_use_recorded_flow_affinity() {
+    // RFC 7118 §6.2 applies symmetrically: a UAC whose initial INVITE went
+    // out over a reliable flow (e.g. a proxy dialing a WebSocket callee)
+    // must reuse that flow for in-dialog requests (BYE / re-INVITE), instead
+    // of destination-routing off a possibly unroutable Contact.
     let endpoint = create_endpoint_without_transports().await.unwrap();
 
     let initial = plain_udp_invite(
         "alice-tag",
-        "client-no-affinity",
+        "client-flow-affinity",
         "SIP/2.0/UDP alice.example.com:5060;branch=z9hG4bKclient1",
     );
     let inner = Arc::new(server_dialog(
@@ -360,8 +374,8 @@ async fn test_client_dialogs_do_not_use_affinity() {
     inner.set_server_connection(Some(flow.sip_conn));
 
     assert!(
-        inner.test_resolve_affinity_connection().is_none(),
-        "client dialogs must not use connection affinity"
+        inner.test_resolve_affinity_connection().is_some(),
+        "client dialogs must reuse the recorded reliable flow"
     );
 }
 
@@ -596,4 +610,104 @@ async fn test_bye_survives_cancelled_flow_without_received_via_param() {
         }
         other => panic!("expected outgoing BYE request, got {other:?}"),
     }
+}
+
+/// Records every `before_send` destination so tests can assert what
+/// sipflow-style recorders observe. Production symptom being guarded here
+/// (rustpbx call records): when a callee-initiated BYE cascaded to a
+/// WebSocket caller, the recorded `dst_addr` was `None`-derived (empty) or a
+/// wildcard default (`0.0.0.0:5060`) instead of the real flow address.
+#[derive(Default, Clone)]
+struct SentDests(Arc<std::sync::Mutex<Vec<(bool, Option<SipAddr>)>>>);
+
+struct RecordingInspector(SentDests);
+
+impl crate::transaction::endpoint::MessageInspector for RecordingInspector {
+    fn before_send(&self, msg: SipMessage, dest: Option<&SipAddr>) -> SipMessage {
+        self.0
+             .0
+            .lock()
+            .unwrap()
+            .push((msg.is_request(), dest.cloned()));
+        msg
+    }
+    fn after_received(&self, msg: SipMessage, _from: Option<&SipAddr>) -> SipMessage {
+        msg
+    }
+}
+
+#[tokio::test]
+async fn test_bye_before_send_reports_flow_destination() {
+    // A sipflow-style inspector must see the REAL flow address as the
+    // destination of an affinity-sent BYE — not `None`, which would force the
+    // recorder to fall back to the unresolvable `.invalid` Request-URI.
+    let dests = SentDests::default();
+    let endpoint =
+        create_endpoint_with_inspector(Some(Box::new(RecordingInspector(dests.clone()))))
+            .await
+            .unwrap();
+    let endpoint_inner = endpoint.inner.clone();
+    let dialog_layer = DialogLayer::new(endpoint_inner.clone());
+    tokio::spawn(async move {
+        let _ = endpoint_inner.serve().await;
+    });
+
+    let mut flow = create_wss_flow(&endpoint.inner, wss_flow_addr(38_017)).await;
+
+    let invite = create_wss_invite_request(
+        "insp1234ko",
+        "",
+        "inspector-dest-callid",
+        "z9hG4bKinspdest1",
+    );
+    let key = TransactionKey::from_request(&invite, TransactionRole::Server).unwrap();
+    let tx = Transaction::new_server(
+        key,
+        invite.clone(),
+        endpoint.inner.clone(),
+        Some(flow.sip_conn.clone()),
+    );
+
+    let (state_tx, _state_rx) = unbounded_channel();
+    let dialog = dialog_layer
+        .get_or_create_server_invite(
+            &tx,
+            state_tx,
+            None,
+            Some(crate::sip::Uri::try_from("sip:pbx@pbx.example.com:5060").unwrap()),
+        )
+        .expect("dialog created");
+
+    let id = dialog.id();
+    dialog
+        .inner
+        .transition(DialogState::Confirmed(id.clone(), Response::default()))
+        .expect("confirm dialog");
+
+    let bye_dialog = dialog.clone();
+    tokio::spawn(async move {
+        let _ = bye_dialog.bye_with_headers(None).await;
+    });
+
+    let event = tokio::time::timeout(Duration::from_secs(3), flow.wire_rx.recv())
+        .await
+        .expect("BYE must be forwarded over the initial connection")
+        .expect("connection sender alive");
+    assert!(matches!(
+        event,
+        TransportEvent::Incoming(SipMessage::Request(ref req), _, _) if req.method == Method::Bye
+    ));
+
+    let sent = dests.0.lock().unwrap().clone();
+    let bye_dest = sent
+        .iter()
+        .rev()
+        .find(|(is_request, _)| *is_request)
+        .map(|(_, dest)| dest.clone())
+        .flatten();
+    assert_eq!(
+        bye_dest,
+        Some(flow.addr),
+        "before_send must carry the affinity flow's real remote address"
+    );
 }

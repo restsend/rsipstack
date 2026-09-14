@@ -30,9 +30,20 @@ pub(super) async fn create_test_endpoint(addr: Option<&str>) -> Result<Endpoint>
 }
 #[cfg(test)]
 mod tests {
+    use super::{Endpoint, EndpointBuilder};
     use crate::{
-        sip::typed::Contact,
-        transaction::{make_via_branch, random_text},
+        dialog::registration::Registration,
+        sip::{
+            prelude::HeadersExt,
+            typed::{Contact, From, To},
+            {Method, Param, Transport},
+        },
+        transaction::{
+            endpoint::EndpointOption,
+            {make_call_id, make_tag, make_uuid_v4, make_via_branch, random_text, CallIdFormat},
+        },
+        transport::SipAddr,
+        Result,
     };
     #[test]
     fn test_random_text() {
@@ -41,6 +52,141 @@ mod tests {
         let branch = make_via_branch();
         let branch = branch.to_string();
         assert_eq!(branch.len(), 27); // ;branch=z9hG4bK
+    }
+
+    fn assert_uuid_v4(s: &str) {
+        assert_eq!(s.len(), 36);
+        let chars: Vec<char> = s.chars().collect();
+        for (i, c) in chars.iter().enumerate() {
+            match i {
+                8 | 13 | 18 | 23 => assert_eq!(*c, '-'),
+                14 => assert_eq!(*c, '4'),
+                19 => assert!(matches!(c, '8' | '9' | 'a' | 'b')),
+                _ => assert!(c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            }
+        }
+    }
+
+    #[test]
+    fn test_make_uuid_v4() {
+        assert_uuid_v4(&make_uuid_v4());
+        assert_ne!(make_uuid_v4(), make_uuid_v4());
+    }
+
+    #[test]
+    fn test_make_call_id() {
+        let call_id = make_call_id(None, CallIdFormat::UuidWithSuffix).0;
+        let (uuid, suffix) = call_id.split_once('@').unwrap();
+        assert_uuid_v4(uuid);
+        assert_eq!(suffix, "restsend.com");
+
+        let call_id = make_call_id(Some("example.com"), CallIdFormat::UuidWithSuffix).0;
+        let (uuid, suffix) = call_id.split_once('@').unwrap();
+        assert_uuid_v4(uuid);
+        assert_eq!(suffix, "example.com");
+
+        let call_id = make_call_id(Some("example.com"), CallIdFormat::Uuid).0;
+        assert_uuid_v4(&call_id);
+        assert!(!call_id.contains('@'));
+
+        let call_id = make_call_id(None, CallIdFormat::Uuid).0;
+        assert_uuid_v4(&call_id);
+    }
+
+    #[test]
+    fn test_callid_format_default() {
+        assert_eq!(CallIdFormat::default(), CallIdFormat::UuidWithSuffix);
+        assert_eq!(
+            EndpointOption::default().callid_format,
+            CallIdFormat::UuidWithSuffix
+        );
+    }
+
+    fn build_endpoint(option: EndpointOption) -> Endpoint {
+        EndpointBuilder::new()
+            .with_user_agent("rsipstack-test")
+            .with_option(option)
+            .build()
+    }
+
+    fn udp_sip_addr() -> crate::Result<SipAddr> {
+        Ok(SipAddr {
+            r#type: Some(Transport::Udp),
+            addr: "127.0.0.1:5060".try_into()?,
+        })
+    }
+
+    #[test]
+    fn test_make_request_callid_format() -> Result<()> {
+        let endpoint = build_endpoint(EndpointOption::default());
+        let via = endpoint.inner.get_via(Some(udp_sip_addr()?), None)?;
+        let req = endpoint.inner.make_request(
+            Method::Register,
+            "sip:example.com".try_into()?,
+            via,
+            From {
+                display_name: None,
+                uri: "sip:alice@example.com".try_into()?,
+                params: vec![Param::Tag(make_tag())],
+            },
+            To {
+                display_name: None,
+                uri: "sip:bob@example.com".try_into()?,
+                params: vec![],
+            },
+            1,
+            None,
+        );
+        let call_id = req.call_id_header()?.value().to_string();
+        let (uuid, suffix) = call_id.split_once('@').unwrap();
+        assert_uuid_v4(uuid);
+        assert_eq!(suffix, "restsend.com");
+
+        let endpoint = build_endpoint(EndpointOption {
+            callid_suffix: Some("example.com".into()),
+            callid_format: CallIdFormat::Uuid,
+            ..Default::default()
+        });
+        let via = endpoint.inner.get_via(Some(udp_sip_addr()?), None)?;
+        let req = endpoint.inner.make_request(
+            Method::Register,
+            "sip:example.com".try_into()?,
+            via,
+            From {
+                display_name: None,
+                uri: "sip:alice@example.com".try_into()?,
+                params: vec![Param::Tag(make_tag())],
+            },
+            To {
+                display_name: None,
+                uri: "sip:bob@example.com".try_into()?,
+                params: vec![],
+            },
+            1,
+            None,
+        );
+        let call_id = req.call_id_header()?.value().to_string();
+        assert_uuid_v4(&call_id);
+        assert!(!call_id.contains('@'));
+        Ok(())
+    }
+
+    #[test]
+    fn test_registration_callid_format() -> Result<()> {
+        let endpoint = build_endpoint(EndpointOption::default());
+        let reg = Registration::new(endpoint.inner.clone(), None);
+        let (uuid, suffix) = reg.call_id.0.split_once('@').unwrap();
+        assert_uuid_v4(uuid);
+        assert_eq!(suffix, "restsend.com");
+
+        let endpoint = build_endpoint(EndpointOption {
+            callid_format: CallIdFormat::Uuid,
+            ..Default::default()
+        });
+        let reg = Registration::new(endpoint.inner.clone(), None);
+        assert_uuid_v4(&reg.call_id.0);
+        assert!(!reg.call_id.0.contains('@'));
+        Ok(())
     }
 
     #[test]
