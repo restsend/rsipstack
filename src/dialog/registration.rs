@@ -373,35 +373,41 @@ impl Registration {
         }
         .with_tag(make_tag());
 
-        // Resolve (and, for TCP/TLS/WS/WSS, lazily dial+cache) the connection
-        // this REGISTER will actually go out on *before* building the Via
-        // header, and build Via from that connection's real local address
-        // instead of always falling back to the endpoint's first-bound
-        // transport (get_via(None, None) below). Without this, a request
-        // targeting `;transport=tcp` still gets a Via that claims the
-        // endpoint's default UDP transport — physically sent over TCP, but
-        // self-describing as UDP inside the SIP headers. A spec-compliant
-        // server can, and in the wild does (FreeSWITCH's sofia-sip), treat
-        // that mismatch as reason enough to silently drop the request: no
-        // response, no error, nothing distinguishable in the server's own
-        // logs from the request never having arrived — the exact symptom
-        // this fixes.
-        //
-        // `lookup` already correctly falls through to the existing bound
-        // UDP listener for a target with no explicit `;transport=` param
-        // (see `TransportLayerInner::lookup`'s `first_udp` fallback), so
-        // this is safe to do unconditionally rather than only for TCP/TLS.
-        let via = match SipAddr::try_from(&server) {
-            Ok(target_addr) => {
-                match self.endpoint.transport_layer.lookup(&target_addr, None).await {
-                    Ok((connection, _resolved)) => {
-                        self.endpoint.get_via(Some(connection.get_addr().clone()), None)?
-                    }
-                    Err(_) => self.endpoint.get_via(None, None)?,
-                }
+        // Choose the same destination as the transaction before building Via.
+        // A registration proxy overrides the registrar without changing the URI.
+        let proxy_destination = self.outbound_proxy.map(|proxy| {
+            let mut dest = SipAddr::from(proxy);
+            if let Some(Param::Transport(t)) = server
+                .params
+                .iter()
+                .find(|p| matches!(p, Param::Transport(_)))
+            {
+                dest.r#type = Some(*t);
             }
-            Err(_) => self.endpoint.get_via(None, None)?,
+            dest
+        });
+        let target = match &proxy_destination {
+            Some(dest) => Ok(dest.clone()),
+            None => match self.endpoint.locator.as_ref() {
+                Some(locator) => locator.locate(&server).await,
+                None => SipAddr::try_from(&server),
+            },
         };
+        let resolved = match target {
+            Ok(target) => self
+                .endpoint
+                .transport_layer
+                .lookup(&target, None)
+                .await
+                .ok(),
+            Err(_) => None,
+        };
+        let via = self.endpoint.get_via(
+            resolved
+                .as_ref()
+                .map(|(connection, _)| connection.get_addr().clone()),
+            None,
+        )?;
 
         // Contact address selection priority:
         // 1. Explicitly set self.contact (if caller set it)
@@ -460,25 +466,14 @@ impl Registration {
         }
 
         let key = TransactionKey::from_request(&request, TransactionRole::Client)?;
-        let mut tx = Transaction::new_client(key, request, self.endpoint.clone(), None);
-
-        // Override transport destination if outbound proxy is configured.
-        // This keeps the domain in SIP headers (Request-URI, From, To) while
-        // sending all packets to the pinned proxy IP for NAT consistency.
-        if let Some(proxy) = &self.outbound_proxy {
-            let mut dest = SipAddr::from(*proxy);
-            // Inherit transport type from the request URI (e.g., TCP)
-            if let Some(Param::Transport(t)) = tx
-                .original
-                .uri()
-                .params
-                .iter()
-                .find(|p| matches!(p, Param::Transport(_)))
-            {
-                dest.r#type = Some(*t);
-            }
-            tx.destination = Some(dest);
-        }
+        // Reuse the connection that supplied Via, including for authentication retries.
+        // On lookup failure, retain the existing transaction retry/timeout behavior.
+        let (connection, destination) = match resolved {
+            Some((connection, destination)) => (Some(connection), Some(destination)),
+            None => (None, proxy_destination),
+        };
+        let mut tx = Transaction::new_client(key, request, self.endpoint.clone(), connection);
+        tx.destination = destination;
 
         tx.send().await?;
         let mut auth_sent = false;
