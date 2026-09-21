@@ -431,10 +431,15 @@ impl Registration {
         // this is safe to do unconditionally rather than only for TCP/TLS.
         let via = match SipAddr::try_from(&server) {
             Ok(target_addr) => {
-                match self.endpoint.transport_layer.lookup(&target_addr, None).await {
-                    Ok((connection, _resolved)) => {
-                        self.endpoint.get_via(Some(connection.get_addr().clone()), None)?
-                    }
+                match self
+                    .endpoint
+                    .transport_layer
+                    .lookup(&target_addr, None)
+                    .await
+                {
+                    Ok((connection, _resolved)) => self
+                        .endpoint
+                        .get_via(Some(connection.get_addr().clone()), None)?,
                     Err(_) => self.endpoint.get_via(None, None)?,
                 }
             }
