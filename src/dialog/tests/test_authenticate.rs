@@ -103,6 +103,7 @@ async fn test_authenticate_via_header_branch_update() -> crate::Result<()> {
         username: "alice".to_string(),
         password: "secret123".to_string(),
         realm: None,
+        auth_username: None,
     };
 
     // Call handle_client_authenticate
@@ -154,6 +155,173 @@ async fn test_authenticate_via_header_branch_update() -> crate::Result<()> {
         "Via header should have rport parameter after authentication"
     );
 
+    Ok(())
+}
+
+fn create_407_response() -> Response {
+    Response {
+        status_code: StatusCode::ProxyAuthenticationRequired,
+        version: crate::sip::Version::V2,
+        headers: vec![
+            Via::new("SIP/2.0/UDP alice.example.com:5060;branch=z9hG4bKnashds").into(),
+            CSeq::new("1 REGISTER").into(),
+            From::new("Alice <sip:alice@example.com>;tag=1928301774").into(),
+            To::new("Bob <sip:bob@example.com>").into(),
+            CallId::new("a84b4c76e66710@pc33.atlanta.com").into(),
+            ProxyAuthenticate::new(
+                r#"Digest realm="proxy.example.com", nonce="f84f1cec41e6cbe5aea9c8e88d359", algorithm=MD5, qop="auth""#,
+            )
+            .into(),
+        ]
+        .into(),
+        body: vec![],
+    }
+}
+
+#[test]
+fn test_credential_digest_username_defaults_to_username() {
+    let cred = Credential {
+        username: "alice".to_string(),
+        password: "secret123".to_string(),
+        realm: None,
+        auth_username: None,
+    };
+    assert_eq!(cred.digest_username(), "alice");
+
+    // An empty auth username is treated as "not set".
+    let cred = Credential {
+        auth_username: Some(String::new()),
+        ..cred
+    };
+    assert_eq!(cred.digest_username(), "alice");
+
+    let cred = Credential {
+        auth_username: Some("auth-id".to_string()),
+        ..cred
+    };
+    assert_eq!(cred.digest_username(), "auth-id");
+}
+
+/// Extract the (raw value, typed) Authorization or Proxy-Authorization
+/// header the client added in response to a challenge.
+fn authorization_of(req: &Request) -> (String, crate::sip::typed::Authorization) {
+    let raw = req
+        .headers
+        .iter()
+        .find_map(|h| match h {
+            Header::Authorization(a) => Some(a.value().to_string()),
+            Header::ProxyAuthorization(a) => Some(a.value().to_string()),
+            _ => None,
+        })
+        .expect("request should carry an Authorization/Proxy-Authorization header");
+    let typed = crate::sip::typed::Authorization::parse(&raw).expect("parseable digest header");
+    (raw, typed)
+}
+
+/// A PBX "Authentication ID" (3CX, Asterisk `auth` objects, …) is distinct
+/// from the extension: the AOR user stays `username`, but the digest must
+/// be computed with — and the header must carry — `auth_username`.
+#[tokio::test]
+async fn test_handle_client_authenticate_uses_auth_username() -> crate::Result<()> {
+    use crate::dialog::authenticate::verify_digest;
+    use crate::sip::Method;
+
+    let endpoint = create_test_endpoint().await?;
+    let original_req = create_request_with_branch("z9hG4bKnashds");
+    let key = TransactionKey::from_request(&original_req, TransactionRole::Client)?;
+    let tx = Transaction::new_client(key, original_req, endpoint.inner.clone(), None);
+
+    let cred = Credential {
+        username: "01".to_string(),
+        password: "secret123".to_string(),
+        realm: None,
+        auth_username: Some("ksFgqXyZ".to_string()),
+    };
+    let new_tx = handle_client_authenticate(2, &tx, create_401_response(), &cred).await?;
+
+    let (raw, auth) = authorization_of(&new_tx.original);
+    assert_eq!(
+        auth.username, "ksFgqXyZ",
+        "header must carry the auth username"
+    );
+    assert!(
+        verify_digest(&auth, "secret123", &Method::Register, &raw),
+        "digest must be computed with the auth username"
+    );
+
+    // The AOR user must not leak into the digest: the same challenge answered
+    // as `username` produces a different response.
+    let auth_as_aor_user = crate::sip::typed::Authorization {
+        username: "01".to_string(),
+        ..auth.clone()
+    };
+    assert!(
+        !verify_digest(&auth_as_aor_user, "secret123", &Method::Register, &raw),
+        "the digest must differ from one computed with the AOR user"
+    );
+
+    // From/To (the AOR) are untouched by authentication.
+    let from = new_tx.original.from_header()?.typed()?;
+    assert_eq!(
+        from.uri.auth.as_ref().map(|a| a.user.as_str()),
+        Some("alice")
+    );
+    Ok(())
+}
+
+/// Same for a 407 from a proxy: the Proxy-Authorization header carries the
+/// auth username.
+#[tokio::test]
+async fn test_handle_client_proxy_authenticate_uses_auth_username() -> crate::Result<()> {
+    use crate::dialog::authenticate::verify_digest;
+    use crate::sip::Method;
+
+    let endpoint = create_test_endpoint().await?;
+    let original_req = create_request_with_branch("z9hG4bKnashds");
+    let key = TransactionKey::from_request(&original_req, TransactionRole::Client)?;
+    let tx = Transaction::new_client(key, original_req, endpoint.inner.clone(), None);
+
+    let cred = Credential {
+        username: "01".to_string(),
+        password: "secret123".to_string(),
+        realm: None,
+        auth_username: Some("ksFgqXyZ".to_string()),
+    };
+    let new_tx = handle_client_authenticate(2, &tx, create_407_response(), &cred).await?;
+
+    assert!(
+        new_tx
+            .original
+            .headers
+            .iter()
+            .any(|h| matches!(h, Header::ProxyAuthorization(_))),
+        "a 407 must be answered with Proxy-Authorization"
+    );
+    let (raw, auth) = authorization_of(&new_tx.original);
+    assert_eq!(auth.username, "ksFgqXyZ");
+    assert_eq!(auth.realm, "proxy.example.com");
+    assert!(verify_digest(&auth, "secret123", &Method::Register, &raw));
+    Ok(())
+}
+
+/// Without `auth_username` the behavior is unchanged: the digest username
+/// is the AOR user.
+#[tokio::test]
+async fn test_handle_client_authenticate_without_auth_username() -> crate::Result<()> {
+    let endpoint = create_test_endpoint().await?;
+    let original_req = create_request_with_branch("z9hG4bKnashds");
+    let key = TransactionKey::from_request(&original_req, TransactionRole::Client)?;
+    let tx = Transaction::new_client(key, original_req, endpoint.inner.clone(), None);
+
+    let cred = Credential {
+        username: "alice".to_string(),
+        password: "secret123".to_string(),
+        realm: None,
+        auth_username: None,
+    };
+    let new_tx = handle_client_authenticate(2, &tx, create_401_response(), &cred).await?;
+    let (_, auth) = authorization_of(&new_tx.original);
+    assert_eq!(auth.username, "alice");
     Ok(())
 }
 
