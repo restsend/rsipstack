@@ -14,7 +14,7 @@ use tokio::{
     sync::Mutex,
 };
 use tokio_util::codec::{Decoder, Encoder};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 pub(super) const MAX_SIP_MESSAGE_SIZE: usize = 65535;
 const CL_FULL_NAME: &[u8] = b"content-length";
@@ -174,7 +174,7 @@ where
             .cseq_header()
             .map(|c| c.value().to_string())
             .unwrap_or_default();
-        debug!(
+        info!(
             src = %self.local_addr,
             dest = %self.remote_addr,
             cseq = %cseq,
@@ -220,7 +220,7 @@ where
                     while let Some(msg) = codec.decode(&mut buffer)? {
                         match msg {
                             SipCodecType::Message(sip_msg) => {
-                                debug!(src = %remote_addr, raw_message = ?sip_msg.to_string(), "received message");
+                                info!(src = %remote_addr, raw_message = ?sip_msg.to_string(), "received message");
                                 let remote_socket_addr = remote_addr.get_socketaddr()?;
                                 let sip_msg = SipConnection::update_msg_received(
                                     sip_msg,

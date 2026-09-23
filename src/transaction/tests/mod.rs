@@ -55,13 +55,13 @@ mod tests {
     }
 
     fn assert_uuid_v4(s: &str) {
-        assert_eq!(s.len(), 36);
+        // Dashes-free 32-char hex form (see make_uuid_v4).
+        assert_eq!(s.len(), 32);
         let chars: Vec<char> = s.chars().collect();
         for (i, c) in chars.iter().enumerate() {
             match i {
-                8 | 13 | 18 | 23 => assert_eq!(*c, '-'),
-                14 => assert_eq!(*c, '4'),
-                19 => assert!(matches!(c, '8' | '9' | 'a' | 'b')),
+                12 => assert_eq!(*c, '4'),
+                16 => assert!(matches!(c, '8' | '9' | 'a' | 'b')),
                 _ => assert!(c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
             }
         }

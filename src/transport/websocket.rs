@@ -23,7 +23,7 @@ use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 // Define a type alias for the WebSocket sink to make the code more readable
 type WsSink = futures_util::stream::SplitSink<
@@ -167,7 +167,7 @@ impl WebSocketListenerConnection {
                     let sip_connection = SipConnection::WebSocket(connection.clone());
                     let connection_addr = connection.get_addr().clone();
                     transport_layer_inner_ref.add_connection(sip_connection.clone());
-                    debug!(?connection_addr, "new websocket connection");
+                    info!(?connection_addr, "new websocket connection");
                 });
             }
         });
@@ -295,7 +295,7 @@ impl StreamConnection for WebSocketConnection {
     async fn send_message(&self, msg: SipMessage) -> Result<()> {
         let data = msg.to_string();
         let mut sink = self.inner.ws_sink.lock().await;
-        debug!(dest = %self.inner.remote_addr, raw_message = ?data, "websocket send");
+        info!(dest = %self.inner.remote_addr, raw_message = ?data, "websocket send");
         sink.send(Message::Text(data.into())).await?;
         Ok(())
     }
@@ -320,7 +320,7 @@ impl StreamConnection for WebSocketConnection {
         while let Some(msg) = ws_read.next().await {
             match msg {
                 Ok(Message::Text(text)) => {
-                    debug!(src = %remote_addr, raw_message = ?text.as_str(), "websocket message received");
+                    info!(src = %remote_addr, raw_message = ?text.as_str(), "websocket message received");
                     match SipMessage::try_from(text.as_str()) {
                         Ok(sip_msg) => {
                             let remote_socket_addr = remote_addr.get_socketaddr()?;
@@ -376,7 +376,7 @@ impl StreamConnection for WebSocketConnection {
                     }
                 }
                 Ok(Message::Close(_)) => {
-                    debug!(src = %remote_addr, "WebSocket connection closed by peer");
+                    info!(src = %remote_addr, "WebSocket connection closed by peer");
                     break;
                 }
                 Err(e) => {
@@ -387,7 +387,7 @@ impl StreamConnection for WebSocketConnection {
             }
         }
 
-        debug!(src = %remote_addr, "WebSocket serve_loop exiting");
+        info!(src = %remote_addr, "WebSocket serve_loop exiting");
         Ok(())
     }
 
