@@ -749,7 +749,21 @@ impl ServerInviteDialog {
         let (handle, rx) = TransactionHandle::new();
         self.inner
             .transition(DialogState::Info(self.id(), tx.original.clone(), handle))?;
-        self.inner.process_transaction_handle(tx, rx).await
+        let result = self.inner.process_transaction_handle(tx, rx).await;
+        let confirmed = self.return_to_confirmed(tx);
+        result.and(confirmed)
+    }
+
+    /// Return the dialog to the confirmed state once a mid-dialog request
+    /// (REFER/NOTIFY/INFO/MESSAGE/UPDATE) has been answered. The dialog
+    /// state stays on the request-specific variant while the request is in
+    /// flight, and `is_confirmed()` — which gates every later in-dialog
+    /// request and response — would otherwise never become true again.
+    fn return_to_confirmed(&self, tx: &Transaction) -> Result<()> {
+        self.inner.transition(DialogState::Confirmed(
+            self.id(),
+            tx.last_response.clone().unwrap_or_default(),
+        ))
     }
 
     async fn handle_prack(&mut self, tx: &mut Transaction) -> Result<()> {
@@ -793,7 +807,9 @@ impl ServerInviteDialog {
         self.inner
             .transition(DialogState::Updated(self.id(), tx.original.clone(), handle))?;
 
-        self.inner.process_transaction_handle(tx, rx).await
+        let result = self.inner.process_transaction_handle(tx, rx).await;
+        let confirmed = self.return_to_confirmed(tx);
+        result.and(confirmed)
     }
 
     async fn handle_refer(&mut self, tx: &mut Transaction) -> Result<()> {
@@ -802,7 +818,9 @@ impl ServerInviteDialog {
         self.inner
             .transition(DialogState::Refer(self.id(), tx.original.clone(), handle))?;
 
-        self.inner.process_transaction_handle(tx, rx).await
+        let result = self.inner.process_transaction_handle(tx, rx).await;
+        let confirmed = self.return_to_confirmed(tx);
+        result.and(confirmed)
     }
 
     async fn handle_message(&mut self, tx: &mut Transaction) -> Result<()> {
@@ -811,7 +829,9 @@ impl ServerInviteDialog {
         self.inner
             .transition(DialogState::Message(self.id(), tx.original.clone(), handle))?;
 
-        self.inner.process_transaction_handle(tx, rx).await
+        let result = self.inner.process_transaction_handle(tx, rx).await;
+        let confirmed = self.return_to_confirmed(tx);
+        result.and(confirmed)
     }
 
     async fn handle_notify(&mut self, tx: &mut Transaction) -> Result<()> {
@@ -820,7 +840,9 @@ impl ServerInviteDialog {
         self.inner
             .transition(DialogState::Notify(self.id(), tx.original.clone(), handle))?;
 
-        self.inner.process_transaction_handle(tx, rx).await
+        let result = self.inner.process_transaction_handle(tx, rx).await;
+        let confirmed = self.return_to_confirmed(tx);
+        result.and(confirmed)
     }
 
     async fn handle_reinvite(&mut self, tx: &mut Transaction) -> Result<()> {

@@ -9,7 +9,6 @@ use crate::sip::{
     headers::typed::record_route::split_rr_values,
     prelude::{HeadersExt, ToTypedHeader},
     typed::{CSeq, Contact},
-    uri::ParamsExt,
     Header, Method, Param, Request, Response, Route, SipMessage, StatusCode, StatusCodeKind,
 };
 use crate::{
