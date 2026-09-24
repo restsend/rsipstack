@@ -1546,18 +1546,17 @@ impl DialogInner {
         }
     }
     pub(super) fn transition(&self, state: DialogState) -> Result<()> {
-        // Try to send state update, but don't fail if channel is closed
-        // Late state updates after termination (e.g. CANCEL's 200 arriving
-        // after the INVITE's 487) are no longer broadcast and do not change
-        // the lifecycle state — observers already saw Terminated.
-        let terminated_now = matches!(&*self.state.lock(), DialogState::Terminated(..));
-        if terminated_now && !matches!(state, DialogState::Terminated(..)) {
-            debug!(target = ?state, "dialog already terminated, ignoring late transition");
+        // Decide under the state lock and notify only transitions that are
+        // applied, while still holding it, so notifications follow the order
+        // in which the state changed.
+        let mut old_state = self.state.lock();
+        // Late updates after termination (e.g. CANCEL's 200 arriving after
+        // the INVITE's 487, or a second Terminated from a racing teardown)
+        // are neither applied nor broadcast: observers already saw Terminated.
+        if let DialogState::Terminated(id, _) = &*old_state {
+            debug!(id = %id, target = %state, "dialog already terminated, ignoring late transition");
             return Ok(());
         }
-
-        self.state_sender.send(state.clone()).ok();
-
         // In-dialog request events do not change the established lifecycle state.
         match state {
             DialogState::Updated(_, _, _)
@@ -1565,28 +1564,20 @@ impl DialogInner {
             | DialogState::Info(_, _, _)
             | DialogState::Options(_, _, _)
             | DialogState::Refer(_, _, _) => {
+                // Try to send state update, but don't fail if channel is closed
+                self.state_sender.send(state).ok();
                 return Ok(());
             }
             _ => {}
         }
-        let mut old_state = self.state.lock();
-        match (&*old_state, &state) {
-            (DialogState::Terminated(id, _), _) => {
-                warn!(
-                    id = %id,
-                    target = %state,
-                    "dialog already terminated, ignoring transition"
-                );
-                return Ok(());
-            }
-            (DialogState::Confirmed(_, _), DialogState::WaitAck(_, _)) => {
-                warn!(target = %state, "dialog already confirmed, ignoring transition");
-                return Ok(());
-            }
-            _ => {}
+        if let (DialogState::Confirmed(_, _), DialogState::WaitAck(_, _)) = (&*old_state, &state) {
+            warn!(target = %state, "dialog already confirmed, ignoring transition");
+            return Ok(());
         }
         debug!(from = %old_state, to = %state, "transitioning state");
-        *old_state = state;
+        *old_state = state.clone();
+        // Try to send state update, but don't fail if channel is closed
+        self.state_sender.send(state).ok();
         Ok(())
     }
 
