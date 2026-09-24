@@ -49,6 +49,13 @@ pub struct EndpointOption {
     /// (RFC 7989) needs no switch: dialogs participate only when the
     /// application supplies a UUID or the peer sends a Session-ID header.
     pub history_info_enabled: bool,
+    /// Whether a client INVITE transaction ACKs a 2xx final itself (default `true`).
+    /// With `false` a 2xx moves the transaction straight to
+    /// Terminated: no automatic ACK, no stored ACK.
+    /// RFC 3261 section 17.1.1.2: the 2xx ACK is the TU's, end-to-end;
+    /// proxies (section 16) must not ACK a 2xx and must see retransmitted 2xx.
+    /// `true` keeps the UA behavior the dialog layer relies on.
+    pub auto_ack_2xx: bool,
 }
 
 impl Default for EndpointOption {
@@ -61,6 +68,7 @@ impl Default for EndpointOption {
             callid_suffix: None,
             callid_format: CallIdFormat::default(),
             history_info_enabled: false,
+            auto_ack_2xx: true,
         }
     }
 }

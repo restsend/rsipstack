@@ -746,7 +746,16 @@ impl Transaction {
             }
             _ => {
                 if self.transaction_type == TransactionType::ClientInvite {
-                    TransactionState::Completed
+                    if resp.status_code.kind() == StatusCodeKind::Successful
+                        && !self.endpoint_inner.option.auto_ack_2xx
+                    {
+                        // auto_ack_2xx = false (proxy mode): a 2xx terminates
+                        // the client INVITE transaction at once; the ACK is
+                        // the TU's job (RFC 3261 section 17.1.1.2).
+                        TransactionState::Terminated
+                    } else {
+                        TransactionState::Completed
+                    }
                 } else {
                     TransactionState::Terminated
                 }
@@ -1105,8 +1114,17 @@ impl Transaction {
                     ) && self.last_ack.is_none()
                     {
                         if let Some(ref resp) = self.last_response {
-                            if let Ok(ack) = self.endpoint_inner.make_ack(&self.original, resp) {
-                                self.last_ack.replace(ack);
+                            // auto_ack_2xx = false (proxy mode): store no ACK
+                            // for a 2xx, so retransmitted 2xx fall through
+                            // to the TU instead of being absorbed or re-ACKed
+                            // here (RFC 3261 section 17.1.1.2).
+                            let auto_ack = self.endpoint_inner.option.auto_ack_2xx
+                                || resp.status_code.kind() != StatusCodeKind::Successful;
+                            if auto_ack {
+                                if let Ok(ack) = self.endpoint_inner.make_ack(&self.original, resp)
+                                {
+                                    self.last_ack.replace(ack);
+                                }
                             }
                         }
                     }
