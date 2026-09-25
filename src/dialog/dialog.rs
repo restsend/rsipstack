@@ -895,8 +895,45 @@ impl DialogInner {
         headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
     ) -> Result<crate::sip::Request> {
+        let addr = addr.or_else(|| self.via_addr_for_send_transport());
         let via = self.endpoint_inner.get_via(addr, branch)?;
         self.make_request_with_vias(method, cseq, vec![via], headers, body)
+    }
+
+    /// The listener address whose transport matches the one an in-dialog
+    /// request will be sent over: the reliable flow reused by affinity, else
+    /// the outbound proxy, else the transport of the first route, else of the
+    /// remote target. The Via must name the transport the request is sent on
+    /// (RFC 3261 §18.1.1); `make_invite_request` does the same for the
+    /// initial INVITE. `None` keeps the endpoint's default (first) listener,
+    /// also when a target locator decides the transport at send time.
+    fn via_addr_for_send_transport(&self) -> Option<crate::transport::SipAddr> {
+        use crate::sip::uri::ParamsExt;
+
+        let transport = match self.resolve_affinity_connection() {
+            Some(connection) => connection.get_addr().r#type,
+            None if self.endpoint_inner.locator.is_some() => None,
+            None => match self.endpoint_inner.transport_layer.outbound.as_ref() {
+                Some(outbound) => outbound.r#type,
+                None => {
+                    let route = self.route_set.lock().first().cloned();
+                    match route {
+                        Some(route) => route
+                            .typed()
+                            .ok()
+                            .and_then(|route| route.uri.transport().cloned()),
+                        None => self.remote_uri.lock().transport().cloned(),
+                    }
+                }
+            },
+        }
+        .filter(|t| *t != crate::sip::Transport::Udp)?;
+
+        self.endpoint_inner
+            .transport_layer
+            .get_addrs()
+            .into_iter()
+            .find(|a| a.r#type == Some(transport))
     }
 
     pub(super) fn make_response(
@@ -1149,6 +1186,34 @@ impl DialogInner {
                     "no usable connection, retrying via recorded flow address"
                 );
                 tx.destination = Some(fallback_addr.clone());
+                // The dial-back can leave on another transport than the one
+                // the Via was built for; keep the Via matching it.
+                let transport = fallback_addr.r#type.unwrap_or_default();
+                let listener = self
+                    .endpoint_inner
+                    .transport_layer
+                    .get_addrs()
+                    .into_iter()
+                    .find(|a| a.r#type.unwrap_or_default() == transport);
+                let branch = tx
+                    .original
+                    .top_via_header()
+                    .and_then(|via| via.typed())
+                    .ok()
+                    .filter(|via| via.transport != transport)
+                    .and_then(|via| {
+                        via.params
+                            .into_iter()
+                            .find(|p| matches!(p, Param::Branch(_)))
+                    });
+                if let (Some(listener), Some(branch)) = (listener, branch) {
+                    if let (Ok(new_via), Ok(via)) = (
+                        self.endpoint_inner.get_via(Some(listener), Some(branch)),
+                        tx.original.via_header_mut(),
+                    ) {
+                        via.update_first_value(|_| Ok(new_via.into())).ok();
+                    }
+                }
                 if let Err(e) = tx.send().await {
                     warn!(
                         id = self.id.lock().to_string(),
