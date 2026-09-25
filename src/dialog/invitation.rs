@@ -222,12 +222,16 @@ impl<'a> Drop for DialogGuardForUnconfirmed<'a> {
 
                 debug!(%self.id, "unconfirmed dialog dropped, cancelling it");
                 let _handle = crate::platform::spawn(async move {
+                    let started = crate::platform::Instant::now();
+                    let final_window = invite_tx.endpoint_inner.option.t1x64;
                     let mut timeout =
                         core::pin::pin!(crate::platform::sleep(core::time::Duration::from_secs(2)));
                     invite_tx.stop_retransmissions();
 
                     let mut cancel_done = false;
-                    let mut cancel = core::pin::pin!(client_dialog.cancel());
+                    let mut final_response = None;
+                    // Boxed so it can be dropped before the wait below.
+                    let mut cancel = Box::pin(client_dialog.cancel());
 
                     use crate::platform::select::Which3;
                     loop {
@@ -266,6 +270,7 @@ impl<'a> Drop for DialogGuardForUnconfirmed<'a> {
                                         status = %resp.status_code,
                                         "received final response"
                                     );
+                                    final_response = Some(resp);
                                     break;
                                 }
                                 Some(_) => {}
@@ -274,14 +279,37 @@ impl<'a> Drop for DialogGuardForUnconfirmed<'a> {
                         }
                     }
 
-                    // `cancel` (pinned above) ends its borrow here; closing the
-                    // command channel terminates the dialog loop.
-                    drop(invite_tx);
+                    drop(cancel);
                     let _ = client_dialog.inner.transition(DialogState::Terminated(
                         client_dialog.id(),
                         TerminatedReason::UacCancel,
                     ));
                     debug!(id = %client_dialog.id(), "dialog terminated");
+
+                    // The callee may still answer after the CANCEL: keep the
+                    // INVITE transaction until its final response (up to
+                    // 64*T1) so a 2xx is ACKed, then end that session with a
+                    // BYE (RFC 3261 §9.1, §15).
+                    if final_response.is_none() {
+                        let elapsed = crate::platform::Instant::now()
+                            .checked_duration_since(started)
+                            .unwrap_or_default();
+                        final_response = wait_final_response(
+                            &mut invite_tx,
+                            final_window.saturating_sub(elapsed),
+                        )
+                        .await;
+                    }
+                    // Closing the command channel terminates the dialog loop.
+                    drop(invite_tx);
+                    if let Some(resp) = final_response {
+                        if resp.status_code.kind() == StatusCodeKind::Successful {
+                            info!(id = %client_dialog.id(), "2xx after CANCEL, sending BYE");
+                            if let Err(e) = client_dialog.bye_2xx_after_cancel(&resp).await {
+                                warn!(id = %client_dialog.id(), error = %e, "BYE after CANCEL failed");
+                            }
+                        }
+                    }
                 });
             }
             DialogState::Confirmed(_, _) => {
@@ -294,6 +322,24 @@ impl<'a> Drop for DialogGuardForUnconfirmed<'a> {
             _ => {}
         }
     }
+}
+
+/// Wait up to `limit` for the INVITE transaction's final response.
+async fn wait_final_response(
+    invite_tx: &mut Transaction,
+    limit: core::time::Duration,
+) -> Option<Response> {
+    let wait = async {
+        while let Some(msg) = invite_tx.receive().await {
+            if let SipMessage::Response(resp) = msg {
+                if resp.status_code.kind() != StatusCodeKind::Provisional {
+                    return Some(resp);
+                }
+            }
+        }
+        None
+    };
+    crate::platform::timeout(limit, wait).await.ok().flatten()
 }
 
 pub type InviteAsyncResult = Result<(DialogId, Option<Response>)>;
