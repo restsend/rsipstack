@@ -1245,6 +1245,35 @@ impl DialogInner {
         self.send_dialog_request(request).boxed().await
     }
 
+    /// RFC 3261 §13.3.1.4: the server transaction of an INVITE or re-INVITE
+    /// retransmitted our 2xx (`answered_2xx`) for 64*T1 and ended without an
+    /// ACK. The dialog is terminated with [`TerminatedReason::Timeout`] and the
+    /// session is ended with a BYE.
+    pub(super) async fn end_session_without_ack(&self, tx: &Transaction, answered_2xx: bool) {
+        if !answered_2xx
+            || tx.state != crate::transaction::TransactionState::Terminated
+            || self.is_terminated()
+        {
+            return;
+        }
+        let id = self.id.lock().clone();
+        warn!(%id, "no ACK for the 2xx within 64*T1, ending the session");
+        let bye = self.make_request(Method::Bye, None, None, None, None, None);
+        self.transition(DialogState::Terminated(
+            id.clone(),
+            TerminatedReason::Timeout,
+        ))
+        .ok();
+        match bye {
+            Ok(bye) => {
+                if let Err(e) = self.do_request(bye).await {
+                    warn!(%id, error = %e, "BYE after missing ACK failed");
+                }
+            }
+            Err(e) => warn!(%id, error = %e, "failed to build BYE after missing ACK"),
+        }
+    }
+
     pub fn snapshot(&self) -> DialogSnapshot {
         let id = self.id.lock().clone();
 
