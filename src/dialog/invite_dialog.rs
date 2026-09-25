@@ -803,6 +803,10 @@ impl InviteDialog {
             .transition(DialogState::Updated(self.id(), tx.original.clone(), handle))?;
 
         self.inner.process_transaction_handle(tx, rx).await?;
+        let answered_2xx = tx
+            .last_response
+            .as_ref()
+            .is_some_and(|resp| resp.status_code.kind() == StatusCodeKind::Successful);
 
         while let Some(msg) = tx.receive().await {
             if let SipMessage::Request(req) = msg {
@@ -816,6 +820,7 @@ impl InviteDialog {
                 }
             }
         }
+        self.inner.end_session_without_ack(tx, answered_2xx).await;
         Ok(())
     }
 
@@ -860,6 +865,8 @@ impl InviteDialog {
                     SipMessage::Response(_) => {}
                 }
             }
+            let answered_2xx = self.inner.waiting_ack();
+            self.inner.end_session_without_ack(tx, answered_2xx).await;
             Ok::<(), crate::Error>(())
         };
         match handle_loop.await {

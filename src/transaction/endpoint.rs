@@ -39,6 +39,9 @@ pub trait TransportEventInspector: Send + Sync {
 
 pub struct EndpointOption {
     pub t1: Duration,
+    /// RFC 3261 T2: the longest interval between retransmissions of a
+    /// response to an INVITE (default 4s).
+    pub t2: Duration,
     pub t4: Duration,
     pub t1x64: Duration,
     pub timerc: Duration,
@@ -55,6 +58,7 @@ impl Default for EndpointOption {
     fn default() -> Self {
         EndpointOption {
             t1: Duration::from_millis(500),
+            t2: Duration::from_secs(4),
             t4: Duration::from_secs(5),
             t1x64: Duration::from_millis(64 * 500),
             timerc: Duration::from_secs(180),
