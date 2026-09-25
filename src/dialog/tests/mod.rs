@@ -8,4 +8,5 @@ mod test_proxy_headers;
 mod test_refer;
 mod test_server_dialog;
 mod test_session_id;
+mod test_state_after_terminated;
 mod test_sub_pub;

@@ -508,3 +508,273 @@ async fn test_dialog_id_creation() -> crate::Result<()> {
 
     Ok(())
 }
+
+/// Name of a state variant, for asserting on notification sequences.
+fn state_name(state: &DialogState) -> &'static str {
+    match state {
+        DialogState::Calling(_) => "Calling",
+        DialogState::Trying(_) => "Trying",
+        DialogState::Early(_, _) => "Early",
+        DialogState::WaitAck(_, _) => "WaitAck",
+        DialogState::Confirmed(_, _) => "Confirmed",
+        DialogState::Updated(_, _, _) => "Updated",
+        DialogState::Publish(_, _, _) => "Publish",
+        DialogState::Notify(_, _, _) => "Notify",
+        DialogState::Info(_, _, _) => "Info",
+        DialogState::Options(_, _, _) => "Options",
+        DialogState::Refer(_, _, _) => "Refer",
+        DialogState::Message(_, _, _) => "Message",
+        DialogState::Terminated(_, _) => "Terminated",
+    }
+}
+
+/// Drain every notification currently queued on a state receiver.
+fn drain_states(
+    receiver: &mut tokio::sync::mpsc::UnboundedReceiver<DialogState>,
+) -> Vec<&'static str> {
+    let mut names = Vec::new();
+    while let Ok(state) = receiver.try_recv() {
+        names.push(state_name(&state));
+    }
+    names
+}
+
+#[tokio::test]
+async fn test_dialog_lifecycle_notifies_each_state_once() -> crate::Result<()> {
+    let endpoint = create_test_endpoint().await?;
+    let (state_sender, mut state_receiver) = unbounded_channel();
+    let dialog_id = DialogId {
+        call_id: "test-call-id-lifecycle".to_string(),
+        local_tag: "alice-tag-456".to_string(),
+        remote_tag: "bob-tag-789".to_string(),
+    };
+    let invite_req = create_invite_request("alice-tag-456", "", "test-call-id-lifecycle");
+    let (tu_sender, _tu_receiver) = unbounded_channel();
+    let dialog_inner = DialogInner::new(
+        TransactionRole::Client,
+        dialog_id.clone(),
+        invite_req,
+        endpoint.inner.clone(),
+        state_sender,
+        None,
+        Some(crate::sip::Uri::try_from(
+            "sip:alice@alice.example.com:5060",
+        )?),
+        tu_sender,
+    )?;
+
+    dialog_inner.transition(DialogState::Calling(dialog_id.clone()))?;
+    dialog_inner.transition(DialogState::Trying(dialog_id.clone()))?;
+    let ringing = create_response(
+        StatusCode::Ringing,
+        "alice-tag-456",
+        "bob-tag-789",
+        "test-call-id-lifecycle",
+    );
+    dialog_inner.transition(DialogState::Early(dialog_id.clone(), ringing))?;
+    let ok = create_response(
+        StatusCode::OK,
+        "alice-tag-456",
+        "bob-tag-789",
+        "test-call-id-lifecycle",
+    );
+    dialog_inner.transition(DialogState::Confirmed(dialog_id.clone(), ok))?;
+    dialog_inner.transition(DialogState::Terminated(
+        dialog_id.clone(),
+        TerminatedReason::UacBye,
+    ))?;
+
+    assert_eq!(
+        drain_states(&mut state_receiver),
+        vec!["Calling", "Trying", "Early", "Confirmed", "Terminated"]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_no_state_notification_after_terminated() -> crate::Result<()> {
+    let endpoint = create_test_endpoint().await?;
+    let (state_sender, mut state_receiver) = unbounded_channel();
+    let dialog_id = DialogId {
+        call_id: "test-call-id-double-term".to_string(),
+        local_tag: "alice-tag-456".to_string(),
+        remote_tag: "bob-tag-789".to_string(),
+    };
+    let invite_req =
+        create_invite_request("alice-tag-456", "bob-tag-789", "test-call-id-double-term");
+    let (tu_sender, _tu_receiver) = unbounded_channel();
+    let dialog_inner = DialogInner::new(
+        TransactionRole::Client,
+        dialog_id.clone(),
+        invite_req,
+        endpoint.inner.clone(),
+        state_sender,
+        None,
+        Some(crate::sip::Uri::try_from(
+            "sip:alice@alice.example.com:5060",
+        )?),
+        tu_sender,
+    )?;
+
+    dialog_inner.transition(DialogState::Confirmed(
+        dialog_id.clone(),
+        Response::default(),
+    ))?;
+    // Two teardown paths racing: our BYE completes, and the peer's BYE is
+    // handled as well.
+    dialog_inner.transition(DialogState::Terminated(
+        dialog_id.clone(),
+        TerminatedReason::UacBye,
+    ))?;
+    dialog_inner.transition(DialogState::Terminated(
+        dialog_id.clone(),
+        TerminatedReason::UasBye,
+    ))?;
+    // A late state change after termination must not be applied or notified.
+    dialog_inner.transition(DialogState::Confirmed(
+        dialog_id.clone(),
+        Response::default(),
+    ))?;
+
+    assert_eq!(
+        drain_states(&mut state_receiver),
+        vec!["Confirmed", "Terminated"],
+        "subscribers must see exactly one Terminated and nothing after it"
+    );
+    assert!(matches!(
+        &*dialog_inner.state.lock(),
+        DialogState::Terminated(_, TerminatedReason::UacBye)
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_ignored_waitack_after_confirmed_is_not_notified() -> crate::Result<()> {
+    let endpoint = create_test_endpoint().await?;
+    let (state_sender, mut state_receiver) = unbounded_channel();
+    let dialog_id = DialogId {
+        call_id: "test-call-id-waitack".to_string(),
+        local_tag: "bob-tag-789".to_string(),
+        remote_tag: "alice-tag-456".to_string(),
+    };
+    let invite_req = create_invite_request("alice-tag-456", "", "test-call-id-waitack");
+    let (tu_sender, _tu_receiver) = unbounded_channel();
+    let dialog_inner = DialogInner::new(
+        TransactionRole::Server,
+        dialog_id.clone(),
+        invite_req,
+        endpoint.inner.clone(),
+        state_sender,
+        None,
+        None,
+        tu_sender,
+    )?;
+
+    dialog_inner.transition(DialogState::Confirmed(
+        dialog_id.clone(),
+        Response::default(),
+    ))?;
+    // e.g. a second accept() after the ACK already confirmed the dialog.
+    dialog_inner.transition(DialogState::WaitAck(dialog_id.clone(), Response::default()))?;
+
+    assert_eq!(drain_states(&mut state_receiver), vec!["Confirmed"]);
+    assert!(dialog_inner.is_confirmed());
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_info_answered_after_bye_does_not_notify_confirmed() -> crate::Result<()> {
+    use crate::dialog::server_dialog::ServerInviteDialog;
+    use crate::transaction::{key::TransactionKey, transaction::Transaction};
+    use std::sync::Arc;
+
+    let endpoint = create_test_endpoint().await?;
+    let (state_sender, mut state_receiver) = unbounded_channel();
+    let dialog_id = DialogId {
+        call_id: "test-call-id-info-after-bye".to_string(),
+        local_tag: "bob-tag-789".to_string(),
+        remote_tag: "alice-tag-456".to_string(),
+    };
+    let invite_req = create_invite_request("alice-tag-456", "", "test-call-id-info-after-bye");
+    let (tu_sender, _tu_receiver) = unbounded_channel();
+    let dialog_inner = DialogInner::new(
+        TransactionRole::Server,
+        dialog_id.clone(),
+        invite_req,
+        endpoint.inner.clone(),
+        state_sender,
+        None,
+        None,
+        tu_sender,
+    )?;
+    dialog_inner.transition(DialogState::Confirmed(
+        dialog_id.clone(),
+        Response::default(),
+    ))?;
+    let dialog = ServerInviteDialog {
+        inner: Arc::new(dialog_inner),
+    };
+
+    let in_dialog_request = |method: crate::sip::Method, cseq: &str, branch: &str| Request {
+        method,
+        uri: crate::sip::Uri::try_from("sip:bob@127.0.0.1:5060").unwrap(),
+        headers: vec![
+            Via::new(format!("SIP/2.0/UDP 127.0.0.1:5060;branch={}", branch)).into(),
+            CSeq::new(cseq).into(),
+            From::new("Alice <sip:alice@example.com>;tag=alice-tag-456").into(),
+            To::new("Bob <sip:bob@example.com>;tag=bob-tag-789").into(),
+            CallId::new("test-call-id-info-after-bye").into(),
+            MaxForwards::new("70").into(),
+        ]
+        .into(),
+        version: crate::sip::Version::V2,
+        body: vec![],
+    };
+    let server_tx = |req: Request| -> crate::Result<Transaction> {
+        let key = TransactionKey::from_request(&req, TransactionRole::Server)?;
+        Ok(Transaction::new_server(
+            key,
+            req,
+            endpoint.inner.clone(),
+            None,
+        ))
+    };
+
+    // An INFO arrives while confirmed; the application holds its handle.
+    let mut info_tx = server_tx(in_dialog_request(
+        crate::sip::Method::Info,
+        "2 INFO",
+        "z9hG4bK-info",
+    ))?;
+    let mut info_dialog = dialog.clone();
+    let info_task = tokio::spawn(async move { info_dialog.handle(&mut info_tx).await });
+
+    assert_eq!(drain_states(&mut state_receiver), vec!["Confirmed"]);
+    let handle = match state_receiver.recv().await {
+        Some(DialogState::Info(_, _, handle)) => handle,
+        other => panic!("expected Info, got {:?}", other.as_ref().map(state_name)),
+    };
+
+    // Before the INFO is answered, the peer hangs up.
+    let mut bye_tx = server_tx(in_dialog_request(
+        crate::sip::Method::Bye,
+        "3 BYE",
+        "z9hG4bK-bye",
+    ))?;
+    dialog.clone().handle(&mut bye_tx).await.ok();
+
+    // The application answers the INFO after the dialog has terminated.
+    handle.reply(StatusCode::OK).await.ok();
+    info_task.await.expect("info task panicked").ok();
+
+    assert_eq!(
+        drain_states(&mut state_receiver),
+        vec!["Terminated"],
+        "no Confirmed may be notified after Terminated"
+    );
+    assert!(matches!(
+        &*dialog.inner.state.lock(),
+        DialogState::Terminated(_, TerminatedReason::UacBye)
+    ));
+    Ok(())
+}

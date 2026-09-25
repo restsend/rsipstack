@@ -1449,18 +1449,20 @@ impl DialogInner {
         }
     }
     pub(super) fn transition(&self, state: DialogState) -> Result<()> {
-        // Try to send state update, but don't fail if channel is closed
-        self.state_sender.send(state.clone()).ok();
-
         match state {
             DialogState::Updated(_, _, _)
             | DialogState::Notify(_, _, _)
             | DialogState::Info(_, _, _)
             | DialogState::Options(_, _, _) => {
+                // Try to send state update, but don't fail if channel is closed
+                self.state_sender.send(state).ok();
                 return Ok(());
             }
             _ => {}
         }
+        // Notify only transitions that are actually applied, and do it while
+        // holding the state lock so notifications follow the order in which
+        // the state changed.
         let mut old_state = self.state.lock();
         match (&*old_state, &state) {
             (DialogState::Terminated(id, _), _) => {
@@ -1478,7 +1480,9 @@ impl DialogInner {
             _ => {}
         }
         debug!(from = %old_state, to = %state, "transitioning state");
-        *old_state = state;
+        *old_state = state.clone();
+        // Try to send state update, but don't fail if channel is closed
+        self.state_sender.send(state).ok();
         Ok(())
     }
 
