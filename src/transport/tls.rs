@@ -464,6 +464,14 @@ enum TlsConnectionInner {
 }
 
 impl TlsConnection {
+    pub(crate) fn ptr_eq(&self, other: &TlsConnection) -> bool {
+        match (&self.inner, &other.inner) {
+            (TlsConnectionInner::Client(a), TlsConnectionInner::Client(b)) => Arc::ptr_eq(a, b),
+            (TlsConnectionInner::Server(a), TlsConnectionInner::Server(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+
     // Connect to a remote TLS server
     pub async fn connect(
         remote_addr: &SipAddr,
