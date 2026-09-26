@@ -872,8 +872,8 @@ impl Transaction {
                                 .await?;
                         }
                     }
-                    // restart Timer G with an upper limit
-                    let duration = (duration * 2).min(self.endpoint_inner.option.t1x64);
+                    // restart Timer G, doubling up to T2 (RFC 3261 §13.3.1.4, §17.2.1)
+                    let duration = (duration * 2).min(self.endpoint_inner.option.t2);
                     let timer_g = self
                         .endpoint_inner
                         .timers
@@ -990,12 +990,9 @@ impl Transaction {
                             .waiting_ack
                             .insert(dialog_id, self.key.clone());
                     }
-                    // start Timer K, wait for ACK
-                    let timer_k = self.endpoint_inner.timers.timeout(
-                        self.endpoint_inner.option.t4,
-                        TransactionTimer::TimerK(self.key.clone()),
-                    );
-                    self.timer_k.replace(timer_k);
+                    // Wait for the ACK until Timer D (64*T1): Timer H for a
+                    // non-2xx (RFC 3261 §17.2.1), the 2xx retransmission limit
+                    // for a 2xx (§13.3.1.4). Timer G keeps retransmitting.
                 }
                 // start Timer D
                 let timer_d = self.endpoint_inner.timers.timeout(
