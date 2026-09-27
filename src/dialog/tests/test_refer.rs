@@ -52,3 +52,43 @@ async fn test_client_dialog_refer_accepts_name_addr_values() -> crate::Result<()
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_refer_event_keeps_established_dialog_usable() -> crate::Result<()> {
+    use crate::dialog::dialog::{DialogState, TransactionHandle};
+    use crate::sip::{Method, Response, StatusCode};
+
+    let endpoint = create_test_endpoint().await?;
+    for role in [TransactionRole::Client, TransactionRole::Server] {
+        let (state_sender, mut states) = unbounded_channel();
+        let id = DialogId {
+            call_id: "refer-established".into(),
+            local_tag: "local".into(),
+            remote_tag: "remote".into(),
+        };
+        let invite = create_invite_request("local", "remote", "refer-established");
+        let (tu_sender, _tu_receiver) = unbounded_channel();
+        let inner = DialogInner::new(
+            role, id.clone(), invite.clone(), endpoint.inner.clone(), state_sender,
+            None, Some(Uri::try_from("sip:alice@example.com:5060")?), tu_sender,
+        )?;
+        inner.transition(DialogState::Confirmed(id.clone(), Response::default()))?;
+        states.recv().await.unwrap();
+        let mut refer = invite;
+        refer.method = Method::Refer;
+        let (handle, mut responses) = TransactionHandle::new();
+        inner.transition(DialogState::Refer(id.clone(), refer, handle))?;
+        let Some(DialogState::Refer(received_id, _, transaction)) = states.recv().await else {
+            panic!("REFER must reach the application");
+        };
+        assert_eq!(received_id, id);
+        assert!(inner.is_confirmed(), "REFER must not disable in-dialog requests");
+        transaction.reply(StatusCode::Accepted).await?;
+        // The transaction task has not consumed the response yet. NOTIFY's
+        // established-dialog guard must already pass at this point.
+        assert!(inner.is_confirmed());
+        assert!(responses.try_recv().is_ok());
+        assert!(states.try_recv().is_err(), "REFER must not emit a second confirmation");
+    }
+    Ok(())
+}

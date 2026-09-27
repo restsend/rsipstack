@@ -754,11 +754,9 @@ impl ServerInviteDialog {
         result.and(confirmed)
     }
 
-    /// Return the dialog to the confirmed state once a mid-dialog request
-    /// (REFER/NOTIFY/INFO/MESSAGE/UPDATE) has been answered. The dialog
-    /// state stays on the request-specific variant while the request is in
-    /// flight, and `is_confirmed()` — which gates every later in-dialog
-    /// request and response — would otherwise never become true again.
+    /// Restore confirmation after the mid-dialog handlers that use this helper.
+    /// REFER is delivered as an event without leaving Confirmed and does not
+    /// need another confirmation event after its response.
     fn return_to_confirmed(&self, tx: &Transaction) -> Result<()> {
         self.inner.transition(DialogState::Confirmed(
             self.id(),
@@ -818,9 +816,7 @@ impl ServerInviteDialog {
         self.inner
             .transition(DialogState::Refer(self.id(), tx.original.clone(), handle))?;
 
-        let result = self.inner.process_transaction_handle(tx, rx).await;
-        let confirmed = self.return_to_confirmed(tx);
-        result.and(confirmed)
+        self.inner.process_transaction_handle(tx, rx).await
     }
 
     async fn handle_message(&mut self, tx: &mut Transaction) -> Result<()> {

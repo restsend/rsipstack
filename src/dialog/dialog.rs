@@ -1452,11 +1452,13 @@ impl DialogInner {
         // Try to send state update, but don't fail if channel is closed
         self.state_sender.send(state.clone()).ok();
 
+        // In-dialog request events do not change the established lifecycle state.
         match state {
             DialogState::Updated(_, _, _)
             | DialogState::Notify(_, _, _)
             | DialogState::Info(_, _, _)
-            | DialogState::Options(_, _, _) => {
+            | DialogState::Options(_, _, _)
+            | DialogState::Refer(_, _, _) => {
                 return Ok(());
             }
             _ => {}
