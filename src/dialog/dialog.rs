@@ -1183,7 +1183,17 @@ impl DialogInner {
                         if method == Method::Invite {
                             self.handle_provisional_response(&resp).await?;
                         }
-                        self.transition(DialogState::Early(self.id.lock().clone(), resp))?;
+                        // RFC 3261 §12: a dialog moves from early to confirmed
+                        // and never back. A 1xx to a mid-dialog request (re-INVITE,
+                        // UPDATE, ...) must not regress an established dialog to
+                        // Early, or BYE is refused and hangup() tries to CANCEL.
+                        // The provisional is still notified so the caller sees it.
+                        let state = DialogState::Early(self.id.lock().clone(), resp);
+                        if self.can_cancel() {
+                            self.transition(state)?;
+                        } else {
+                            self.state_sender.send(state).ok();
+                        }
                         continue;
                     }
 
