@@ -373,3 +373,85 @@ Content-Length: 0\r\n\r\n";
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_invite_2xx_upstream_via_delivery_and_ack() -> Result<()> {
+    use crate::transaction::transaction::TransactionEvent;
+    use crate::transaction::{TransactionState, TransactionTimer};
+    use crate::transport::{channel::ChannelConnection, SipAddr, SipConnection};
+
+    // Include comma-separated Via, quoted commas, and inconclusive values.
+    for (via, extra_header, proxy) in [
+        ("SIP/2.0/UDP proxy.example.com;branch=z9hG4bK1", true, true),
+        ("SIP/2.0/UDP proxy.example.com;branch=z9hG4bK1, SIP/2.0/UDP caller.example.com;branch=z9hG4bKupstream", false, true),
+        ("SIP/2.0/UDP ua.example.com;branch=z9hG4bK1;note=\"one, two\"", false, false),
+        ("SIP/2.0/UDP ua.example.com;branch=z9hG4bK1, ", false, false),
+    ] {
+        for status in [crate::sip::StatusCode::OK, crate::sip::StatusCode::BusyHere] {
+            let endpoint = super::create_test_endpoint(None).await?;
+            let addr = SipAddr::from("127.0.0.1:5090".parse::<std::net::SocketAddr>()?);
+            let (_incoming_tx, incoming_rx) = unbounded_channel();
+            let (outgoing_tx, mut outgoing_rx) = unbounded_channel();
+            let conn = SipConnection::Channel(ChannelConnection::create_connection(
+                incoming_rx, outgoing_tx, addr.clone(), None,
+            ).await?);
+            let mut request = make_invite_request("sip:bob@127.0.0.1:5090")?;
+            request.via_header_mut()?.replace(via);
+            if extra_header {
+                request.headers.push(Via::new("SIP/2.0/UDP caller.example.com;branch=z9hG4bKupstream").into());
+            }
+            let key = TransactionKey::from_request(&request, TransactionRole::Client)?;
+            let mut tx = Transaction::new_client(key.clone(), request.clone(), endpoint.inner.clone(), Some(conn.clone()));
+            tx.send().await?;
+            outgoing_rx.recv().await.expect("outgoing INVITE");
+            let mut response = endpoint.inner.make_response(&request, status.clone(), None);
+            response.to_header_mut()?.mut_tag(crate::transaction::make_tag())?;
+            response.headers.push(Contact::new("<sip:bob@127.0.0.1:5090>").into());
+            let suppress_ack = proxy && status == crate::sip::StatusCode::OK;
+            let mut deadline = None;
+            for iteration in 0..3 {
+                if iteration == 2 {
+                    // A forked response with the same status/body must also be delivered.
+                    response.to_header_mut()?.mut_tag(crate::transaction::make_tag())?;
+                }
+                endpoint.inner.on_received_message(response.clone().into(), conn.clone(), &addr).await?;
+                if iteration == 0 || suppress_ack {
+                    let delivered = tokio::time::timeout(Duration::from_secs(1), tx.receive()).await
+                        .expect("response must reach application").expect("response");
+                    assert_eq!(delivered, SipMessage::Response(response.clone()));
+                }
+                if suppress_ack {
+                    assert_eq!(tx.state, TransactionState::Completed);
+                    assert!(tx.last_ack.is_none());
+                    assert!(outgoing_rx.try_recv().is_err(), "proxy must not send ACK");
+                    if iteration == 0 {
+                        deadline = tx.timer_d;
+                        assert!(deadline.is_some());
+                    }
+                    assert_eq!(tx.timer_d, deadline, "duplicates must not extend lifetime");
+                } else {
+                    assert_eq!(tx.state, TransactionState::Terminated);
+                    let TransportEvent::Incoming(SipMessage::Request(ack), _, _) =
+                        outgoing_rx.try_recv().expect("UA 2xx and proxy non-2xx require ACK") else {
+                            panic!("expected ACK");
+                        };
+                    assert_eq!(ack.method, crate::sip::Method::Ack);
+                }
+            }
+            if suppress_ack {
+                tx.tu_sender.send(TransactionEvent::Timer(TransactionTimer::TimerD(key.clone()))).unwrap();
+                assert!(tokio::time::timeout(Duration::from_secs(1), tx.receive()).await.unwrap().is_none());
+                assert_eq!(tx.state, TransactionState::Terminated);
+                assert!(!endpoint.inner.transactions.contains_key(&key));
+                assert!(!endpoint.inner.finished_transactions.contains_key(&key));
+
+                // A stale cached ACK must not ACK a late proxy 2xx either.
+                let ack = endpoint.inner.make_ack(&request, &response)?;
+                endpoint.inner.finished_transactions.insert(key.clone(), Some(ack.into()));
+                endpoint.inner.on_received_message(response.clone().into(), conn.clone(), &addr).await?;
+                assert!(outgoing_rx.try_recv().is_err(), "cached ACK must not acknowledge proxy 2xx");
+            }
+        }
+    }
+    Ok(())
+}

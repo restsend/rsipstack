@@ -399,7 +399,13 @@ impl EndpointInner {
                 let last_message = self
                     .finished_transactions
                     .get(&key)
-                    .and_then(|v| v.value().clone());
+                    .and_then(|v| v.value().clone())
+                    .filter(|_| {
+                        // Never replay a cached ACK for a successful response
+                        // that still has an upstream recipient.
+                        !(resp.status_code.kind() == crate::sip::StatusCodeKind::Successful
+                            && resp.has_multiple_vias())
+                    });
 
                 if let Some(mut last_message) = last_message {
                     if let SipMessage::Request(ref mut last_req) = last_message {

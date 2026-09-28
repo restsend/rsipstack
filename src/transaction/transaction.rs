@@ -595,6 +595,12 @@ impl Transaction {
         self.transition(TransactionState::Terminated).map(|_| ())
     }
 
+    /// Receive the next message for the transaction.
+    ///
+    /// INVITE 2xx responses containing another Via hop are delivered without
+    /// an automatic ACK, including retransmissions. Forwarding applications
+    /// should retain the transaction and keep receiving until this returns None;
+    /// the cleanup deadline is measured from the first such final response.
     pub async fn receive(&mut self) -> Option<SipMessage> {
         while let Some(event) = self.tu_receiver.recv().await {
             match event {
@@ -735,6 +741,20 @@ impl Transaction {
         match self.transaction_type {
             TransactionType::ServerInvite | TransactionType::ServerNonInvite => return None,
             _ => {}
+        }
+        if self.transaction_type == TransactionType::ClientInvite
+            && resp.status_code.kind() == StatusCodeKind::Successful
+            && resp.has_multiple_vias()
+        {
+            // A response with an upstream Via belongs to a forwarding transaction.
+            // Its TU must receive every 2xx, including retransmissions and forks,
+            // and the originating UA owns the ACK. Keep the first Timer D deadline.
+            if self.state != TransactionState::Completed {
+                self.can_transition(&TransactionState::Completed).ok()?;
+                self.transition(TransactionState::Completed).ok()?;
+            }
+            self.last_response.replace(resp.clone());
+            return Some(SipMessage::Response(resp));
         }
         let new_state = match resp.status_code.kind() {
             StatusCodeKind::Provisional => {

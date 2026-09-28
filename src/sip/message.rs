@@ -103,6 +103,30 @@ pub trait HeadersExt: HasHeaders {
     fn top_via_header(&self) -> Result<Via, Error> {
         self.via_header()?.first_value()
     }
+    /// Whether Via contains another hop, including comma-separated entries.
+    /// Inconclusive values do not make an otherwise usable message invalid.
+    fn has_multiple_vias(&self) -> bool {
+        let mut seen = false;
+        for header in self.headers().iter() {
+            if let Header::Via(via) = header {
+                if seen {
+                    return true;
+                }
+                seen = true;
+                // Only split to find another entry in this same header.
+                if let Ok(first) = via.first_value() {
+                    let rest = via.value().trim()[first.value().len()..].trim();
+                    if rest
+                        .strip_prefix(',')
+                        .is_some_and(|rest| !rest.trim().is_empty())
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
     fn via_header_mut(&mut self) -> Result<&mut Via, Error> {
         header_get_mut!(
             self.headers_mut().iter_mut(),
