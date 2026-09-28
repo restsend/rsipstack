@@ -188,6 +188,7 @@ let credential = Credential {
     username: "alice".to_string(),
     password: "secret".to_string(),
     realm: None,
+    auth_username: None,
 };
 
 let mut registration = Registration::new(endpoint.inner.clone(), Some(credential.clone()));
