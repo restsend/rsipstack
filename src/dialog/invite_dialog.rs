@@ -330,18 +330,7 @@ impl InviteDialog {
                             self.inner.update_route_set_from_response(&resp);
                         }
                         StatusCode::OK => {
-                            self.inner.update_route_set_from_response(&resp);
-                            let contact = resp.contact_header()?;
-                            self.inner.remote_contact.lock().replace(contact.clone());
-
-                            let contact_uri = resp
-                                .typed_contact_headers()?
-                                .first()
-                                .map(|c| c.uri.clone())
-                                .ok_or_else(|| {
-                                    crate::Error::Error("missing Contact header".to_string())
-                                })?;
-                            *self.inner.remote_uri.lock() = contact_uri;
+                            self.update_remote_target_from_2xx(&resp)?;
                             self.inner
                                 .transition(DialogState::Confirmed(dialog_id.clone(), resp))?;
                         }
@@ -357,6 +346,38 @@ impl InviteDialog {
             }
         }
         Ok((dialog_id, final_response))
+    }
+
+    /// Take the route set, Contact and remote target from a 2xx to the INVITE.
+    fn update_remote_target_from_2xx(&self, resp: &Response) -> Result<()> {
+        self.inner.update_route_set_from_response(resp);
+        let contact = resp.contact_header()?;
+        self.inner.remote_contact.lock().replace(contact.clone());
+
+        let contact_uri = resp
+            .typed_contact_headers()?
+            .first()
+            .map(|c| c.uri.clone())
+            .ok_or_else(|| crate::Error::Error("missing Contact header".to_string()))?;
+        *self.inner.remote_uri.lock() = contact_uri;
+        Ok(())
+    }
+
+    /// End the session a 2xx established after we cancelled the INVITE.
+    ///
+    /// A CANCEL that crosses a 2xx has no effect on the INVITE (RFC 3261
+    /// §9.1, §15), so the UAC has to send a BYE once the 2xx is ACKed. The
+    /// dialog was already abandoned, so no `Confirmed` state is reported.
+    pub(super) async fn bye_2xx_after_cancel(&self, resp: &Response) -> Result<()> {
+        if let Some(tag) = resp.to_header()?.tag()? {
+            self.inner.update_remote_tag(tag.value())?;
+        }
+        self.update_remote_target_from_2xx(resp)?;
+        let request = self
+            .inner
+            .make_request(Method::Bye, None, None, None, None, None)?;
+        self.inner.do_request(request).await?;
+        Ok(())
     }
 
     // ── Shared request semantics ──────────────────────────────────────────
