@@ -181,6 +181,35 @@ impl SipConnection {
         !matches!(self, SipConnection::Udp(_))
     }
 
+    /// Whether this is a connection-oriented stream (TCP, TLS or WebSocket).
+    pub(crate) fn is_stream(&self) -> bool {
+        match self {
+            SipConnection::Tcp(_) => true,
+            #[cfg(feature = "rustls")]
+            SipConnection::Tls(_) => true,
+            #[cfg(feature = "websocket")]
+            SipConnection::WebSocket(_) => true,
+            _ => false,
+        }
+    }
+
+    /// Whether `self` and `other` are handles to the same stream (TCP, TLS or
+    /// WebSocket) connection. Always false for other connection types.
+    pub(crate) fn is_same_stream(&self, other: &SipConnection) -> bool {
+        match (self, other) {
+            (SipConnection::Tcp(a), SipConnection::Tcp(b)) => {
+                std::sync::Arc::ptr_eq(&a.inner, &b.inner)
+            }
+            #[cfg(feature = "rustls")]
+            (SipConnection::Tls(a), SipConnection::Tls(b)) => a.ptr_eq(b),
+            #[cfg(feature = "websocket")]
+            (SipConnection::WebSocket(a), SipConnection::WebSocket(b)) => {
+                std::sync::Arc::ptr_eq(&a.inner, &b.inner)
+            }
+            _ => false,
+        }
+    }
+
     pub fn cancel_token(&self) -> Option<CancellationToken> {
         match self {
             SipConnection::Channel(transport) => transport.cancel_token(),

@@ -169,6 +169,14 @@ impl TransportLayer {
         self.inner.del_connection(addr)
     }
 
+    /// Retire a stream connection that can no longer carry messages: the next
+    /// lookup for its peer opens a new one (a newer connection cached for the
+    /// same peer is left alone), and its cancel token is cancelled so flow
+    /// affinity stops choosing it.
+    pub(crate) fn retire_connection(&self, connection: &SipConnection) {
+        retire_connection(&self.inner.connections, connection)
+    }
+
     pub async fn lookup(
         &self,
         target: &SipAddr,
@@ -421,6 +429,7 @@ impl TransportLayerInner {
             .map(|addr| addr.to_string())
             .unwrap_or_else(|| "-".to_string());
         info!(addr=%transport.get_addr(), remote=%remote_addr, "serve_connection: starting serve_loop");
+        let connections = self.connections.clone();
         tokio::spawn(async move {
             match sender_clone.send(TransportEvent::New(transport.clone())) {
                 Ok(()) => {
@@ -442,11 +451,32 @@ impl TransportLayerInner {
                 }
             }
             info!(addr=%transport.get_addr(), remote=%remote_addr, "transport serve_loop exited");
+            // The connection is gone: lookup must not hand it out again.
+            retire_connection(&connections, &transport);
             transport.close().await.ok();
             sender_clone.send(TransportEvent::Closed(transport)).ok();
         });
     }
 }
+fn retire_connection(connections: &DashMap<SipAddr, SipConnection>, connection: &SipConnection) {
+    if !connection.is_stream() {
+        return;
+    }
+    // The token is the connection's own: cancelling it marks the flow as
+    // terminated for flow affinity (see `resolve_affinity_connection`).
+    if let Some(token) = connection.cancel_token() {
+        token.cancel();
+    }
+    if let Some(remote_addr) = connection.get_remote_addr() {
+        if connections
+            .remove_if(remote_addr, |_, cached| cached.is_same_stream(connection))
+            .is_some()
+        {
+            debug!(%remote_addr, "retire connection");
+        }
+    }
+}
+
 impl Drop for TransportLayer {
     fn drop(&mut self) {
         self.inner.cancel_token.cancel();
