@@ -332,6 +332,9 @@ pub struct DialogInner {
     pub(super) initial_request: Mutex<Request>,
     pub(super) supports_100rel: bool,
     pub(super) remote_reliable: Mutex<Option<RemoteReliableState>>,
+    /// The last ACK received for an INVITE or re-INVITE this dialog answered
+    /// (UAS role). Carries the answer when the 2xx carried the offer.
+    pub(super) remote_ack: Mutex<Option<Request>>,
     pub(super) server_connection: Mutex<Option<SipConnection>>,
     /// Structural source address of the flow that created this server dialog,
     /// captured at creation time from the connection itself (not parsed from
@@ -497,6 +500,7 @@ impl DialogInner {
             remote_contact: Mutex::new(None),
             supports_100rel,
             remote_reliable: Mutex::new(None),
+            remote_ack: Mutex::new(None),
             server_connection: Mutex::new(None),
             dialback_target: Mutex::new(None),
         })
@@ -1372,6 +1376,7 @@ impl DialogInner {
             session_id: Mutex::new(snapshot.session_id),
             supports_100rel: snapshot.supports_100rel,
             remote_reliable: Mutex::new(None),
+            remote_ack: Mutex::new(None),
             server_connection: Mutex::new(None),
             dialback_target: Mutex::new(None),
         }))

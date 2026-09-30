@@ -59,6 +59,22 @@ impl InviteDialog {
         &self.inner.cancel_token
     }
 
+    /// The most recent ACK received for an INVITE or re-INVITE this dialog
+    /// answered (the whole request, headers and body), or `None` if none has
+    /// been received since the dialog was created or restored.
+    ///
+    /// When the INVITE or re-INVITE carried no offer, the offer goes in the
+    /// 2xx and the answer comes back in the ACK body (RFC 3261 §13.2.1,
+    /// §14.2). The ACK is recorded when the INVITE transaction delivers it,
+    /// before the `Confirmed` state it causes is notified. Each such ACK
+    /// replaces the previous one; a new re-INVITE does not clear it, so until
+    /// its ACK arrives this still returns the previous one. `Confirmed` is
+    /// also notified after other mid-dialog requests: match the ACK's CSeq
+    /// number against the INVITE it should acknowledge.
+    pub fn last_remote_ack(&self) -> Option<Request> {
+        self.inner.remote_ack.lock().clone()
+    }
+
     /// The initial INVITE request that created this dialog.
     pub fn initial_request(&self) -> Request {
         self.inner.initial_request.lock().clone()
@@ -801,6 +817,7 @@ impl InviteDialog {
             if let SipMessage::Request(req) = msg {
                 if req.method == Method::Ack {
                     debug!(id = %self.id(), "received ack for re-invite {}", req.uri);
+                    self.inner.remote_ack.lock().replace(req);
                     self.inner.transition(DialogState::Confirmed(
                         self.id(),
                         tx.last_response.clone().unwrap_or_default(),
@@ -833,6 +850,7 @@ impl InviteDialog {
                                 break;
                             }
                             debug!(id = %self.id(), "received ack {}", req.uri);
+                            self.inner.remote_ack.lock().replace(req);
                             self.inner.transition(DialogState::Confirmed(
                                 self.id(),
                                 tx.last_response.clone().unwrap_or_default(),

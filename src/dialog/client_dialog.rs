@@ -673,6 +673,7 @@ impl ClientInviteDialog {
             match msg {
                 SipMessage::Request(req) if req.method == crate::sip::Method::Ack => {
                     debug!(id = %self.id(), "received ACK for re-INVITE");
+                    self.inner.remote_ack.lock().replace(req);
                     break;
                 }
                 _ => {}
