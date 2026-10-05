@@ -1,3 +1,4 @@
+use crate::prelude::*;
 use super::authenticate::Credential;
 use super::dialog::{DialogSnapshot, DialogStateSender};
 use super::publication::{ClientPublicationDialog, ServerPublicationDialog};
@@ -11,9 +12,8 @@ use crate::transaction::make_tag;
 use crate::transaction::transaction::transaction_event_sender_noop;
 use crate::transaction::{endpoint::EndpointInnerRef, transaction::Transaction};
 use crate::Result;
-use dashmap::DashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
+use crate::platform::sync::RwMap;
+use core::sync::atomic::{AtomicU32, Ordering};
 use tracing::debug;
 
 /// Internal Dialog Layer State
@@ -34,7 +34,7 @@ use tracing::debug;
 /// * `dialogs` uses RwLock for concurrent read access with exclusive writes
 pub struct DialogLayerInner {
     pub(super) last_seq: AtomicU32,
-    pub(super) dialogs: DashMap<String, Dialog>,
+    pub(super) dialogs: RwMap<String, Dialog>,
 }
 pub type DialogLayerInnerRef = Arc<DialogLayerInner>;
 
@@ -60,7 +60,6 @@ pub type DialogLayerInnerRef = Arc<DialogLayerInner>;
 /// use rsipstack::dialog::dialog_layer::DialogLayer;
 /// use rsipstack::transaction::endpoint::EndpointInner;
 /// use std::sync::Arc;
-///
 /// # fn example() -> rsipstack::Result<()> {
 /// # let endpoint: Arc<EndpointInner> = todo!();
 /// # let transaction = todo!();
@@ -141,7 +140,7 @@ impl DialogLayer {
             endpoint,
             inner: Arc::new(DialogLayerInner {
                 last_seq: AtomicU32::new(0),
-                dialogs: DashMap::new(),
+                dialogs: RwMap::new(),
             }),
         }
     }
@@ -356,7 +355,7 @@ impl DialogLayer {
             credential,
             local_contact,
             {
-                let (tx, _) = tokio::sync::mpsc::unbounded_channel();
+                let (tx, _) = crate::platform::mpsc::unbounded_channel();
                 tx
             },
         )?;
@@ -404,7 +403,7 @@ impl DialogLayer {
             credential,
             local_contact,
             {
-                let (tx, _) = tokio::sync::mpsc::unbounded_channel();
+                let (tx, _) = crate::platform::mpsc::unbounded_channel();
                 tx
             },
         )?;
@@ -432,11 +431,7 @@ impl DialogLayer {
     }
 
     pub fn all_dialog_ids(&self) -> Vec<String> {
-        self.inner
-            .dialogs
-            .iter()
-            .map(|e| e.key().clone())
-            .collect::<Vec<_>>()
+        self.inner.dialogs.with(|m| m.keys().cloned().collect())
     }
 
     pub fn get_dialog(&self, id: &DialogId) -> Option<Dialog> {
@@ -455,16 +450,16 @@ impl DialogLayer {
     ///
     /// The returned vector may be empty if no matching client dialogs are found.
     pub fn get_client_dialog_by_call_id(&self, call_id: &str) -> Vec<InviteDialog> {
-        self.inner
-            .dialogs
-            .iter()
-            .filter_map(|e| match e.value() {
-                Dialog::Invite(client_dlg) if client_dlg.id().call_id == call_id => {
-                    Some(client_dlg.clone())
-                }
-                _ => None,
-            })
-            .collect()
+        self.inner.dialogs.with(|m| {
+            m.values()
+                .filter_map(|d| match d {
+                    Dialog::Invite(client_dlg) if client_dlg.id().call_id == call_id => {
+                        Some(client_dlg.clone())
+                    }
+                    _ => None,
+                })
+                .collect()
+        })
     }
 
     /// Restore a dialog from persisted snapshot.
@@ -509,7 +504,7 @@ impl DialogLayer {
     }
 
     pub fn remove_dialog(&self, id: &DialogId) {
-        if let Some((_, d)) = self.inner.dialogs.remove(&id.to_string()) {
+        if let Some(d) = self.inner.dialogs.remove(&id.to_string()) {
             d.on_remove()
         }
     }
@@ -520,7 +515,7 @@ impl DialogLayer {
     }
 
     pub fn new_dialog_state_channel(&self) -> (DialogStateSender, DialogStateReceiver) {
-        tokio::sync::mpsc::unbounded_channel()
+        crate::platform::mpsc::unbounded_channel()
     }
 
     pub fn build_local_contact(

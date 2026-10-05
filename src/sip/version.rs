@@ -1,3 +1,5 @@
+#[cfg(not(feature = "std"))]
+use crate::prelude::*;
 use crate::sip::Error;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash, Default)]
@@ -7,8 +9,8 @@ pub enum Version {
     V(u8, u8),
 }
 
-impl std::fmt::Display for Version {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Version {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::V2 => write!(f, "SIP/2.0"),
             Self::V(maj, min) => write!(f, "SIP/{}.{}", maj, min),
@@ -16,7 +18,7 @@ impl std::fmt::Display for Version {
     }
 }
 
-impl std::str::FromStr for Version {
+impl core::str::FromStr for Version {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -45,7 +47,7 @@ impl std::str::FromStr for Version {
     }
 }
 
-impl std::convert::TryFrom<&str> for Version {
+impl core::convert::TryFrom<&str> for Version {
     type Error = Error;
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         s.parse()

@@ -1,5 +1,6 @@
+use crate::prelude::*;
 use crate::sip::{Domain, Port, Transport};
-use std::net::SocketAddr;
+use core::net::SocketAddr;
 #[cfg(feature = "srv_lookup")]
 pub mod sip_resolver;
 
@@ -28,6 +29,8 @@ impl DummyResolver {
     pub fn new() -> Self {
         Self {}
     }
+
+    #[cfg(feature = "platform-tokio")]
     pub async fn lookup(
         &self,
         domain: &Domain,

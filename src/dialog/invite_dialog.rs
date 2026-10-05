@@ -11,6 +11,7 @@
 //! [`ServerInviteDialog`]: crate::dialog::server_dialog::ServerInviteDialog
 //! [`ClientInviteDialog`]: crate::dialog::client_dialog::ClientInviteDialog
 
+use crate::prelude::*;
 use super::dialog::{Dialog, DialogInnerRef, DialogState, TerminatedReason, TransactionHandle};
 use super::subscription::{ClientSubscriptionDialog, ServerSubscriptionDialog};
 use super::DialogId;
@@ -19,8 +20,8 @@ use crate::sip::{Header, Method, Request, Response, SipMessage, StatusCode, Stat
 use crate::transaction::key::TransactionRole;
 use crate::transaction::transaction::{Transaction, TransactionEvent};
 use crate::Result;
-use std::sync::atomic::Ordering;
-use tokio_util::sync::CancellationToken;
+use core::sync::atomic::Ordering;
+use crate::platform::CancellationToken;
 use tracing::{debug, trace, warn};
 
 /// Unified INVITE dialog that can act as either a UAS (Server) or UAC (Client).

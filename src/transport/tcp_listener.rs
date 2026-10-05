@@ -54,7 +54,7 @@ impl TcpListenerConnection {
         socket.listen(128)?;
         let listener = TcpListener::from_std(socket.into())?;
         let listener_local_addr = self.get_addr().clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             loop {
                 let (stream, remote_addr) = match listener.accept().await {
                     Ok((stream, remote_addr)) => (stream, remote_addr),

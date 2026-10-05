@@ -9,13 +9,17 @@ use crate::{
     Result,
 };
 use bytes::BytesMut;
+use crate::platform::net::UdpSocket as PlatformUdpSocket;
+use crate::platform::CancellationToken;
+#[cfg(feature = "platform-tokio")]
 use socket2::{Domain, Protocol, Socket, Type};
-use std::{net::SocketAddr, sync::Arc};
-use tokio::net::UdpSocket;
-use tokio_util::sync::CancellationToken;
+use alloc::borrow::ToOwned;
+use alloc::string::{String, ToString};
+use core::net::SocketAddr;
+use alloc::sync::Arc;
 use tracing::{debug, info, warn};
 pub struct UdpInner {
-    pub conn: UdpSocket,
+    pub conn: Arc<dyn PlatformUdpSocket>,
     pub addr: SipAddr,
 }
 
@@ -44,6 +48,32 @@ impl UdpConnection {
         }
     }
 
+    /// Backend-agnostic constructor: wraps an already-created platform
+    /// socket. Embedded backends (embassy-net adapters) build their socket
+    /// and hand it over here; `addr` must be the socket's local address.
+    pub async fn from_socket(
+        conn: Arc<dyn PlatformUdpSocket>,
+        external: Option<SocketAddr>,
+        cancel_token: Option<CancellationToken>,
+    ) -> Result<Self> {
+        let addr = SipAddr {
+            r#type: Some(crate::sip::transport::Transport::Udp),
+            addr: SipConnection::resolve_bind_address(conn.local_addr()?).into(),
+        };
+        let t = UdpConnection {
+            external: external.map(|addr| SipAddr {
+                r#type: Some(crate::sip::transport::Transport::Udp),
+                addr: addr.into(),
+            }),
+            remote: None,
+            inner: Arc::new(UdpInner { addr, conn }),
+            cancel_token,
+        };
+        debug!(local = %t, ?external, "created UDP connection (platform socket)");
+        Ok(t)
+    }
+
+    #[cfg(feature = "platform-tokio")]
     pub async fn create_connection(
         local: SocketAddr,
         external: Option<SocketAddr>,
@@ -63,7 +93,8 @@ impl UdpConnection {
         }
         socket.set_nonblocking(true)?;
         socket.bind(&local.into())?;
-        let conn = UdpSocket::from_std(socket.into())?;
+        let conn: Arc<dyn PlatformUdpSocket> =
+            Arc::new(tokio::net::UdpSocket::from_std(socket.into())?);
 
         let addr = SipAddr {
             r#type: Some(crate::sip::transport::Transport::Udp),
@@ -95,28 +126,31 @@ impl UdpConnection {
         let mut buf = BytesMut::with_capacity(MAX_UDP_BUF_SIZE);
         buf.resize(MAX_UDP_BUF_SIZE, 0);
         loop {
-            let (len, addr) = tokio::select! {
-                // Check for cancellation on each iteration
-                _ = async {
+            // Race cancellation against the next datagram (backend-agnostic
+            // combinator; both arms cancelled cleanly when one wins). The
+            // block scopes the pinned recv future so `buf` is released
+            // before the packet is parsed below.
+            let (len, addr) = {
+                let mut cancel_f = core::pin::pin!(async {
                     if let Some(ref cancel_token) = self.cancel_token {
                         cancel_token.cancelled().await;
                     } else {
-                        // If no cancel token, wait forever
-                        std::future::pending::<()>().await;
+                        core::future::pending::<()>().await;
                     }
-                } => {
-                    debug!(local = %self.get_addr(), "UDP serve_loop cancelled");
-                    return Ok(());
-                }
-                // Receive UDP packets
-                result = self.inner.conn.recv_from(&mut buf) => {
-                    match result {
+                });
+                let mut recv_f = core::pin::pin!(self.inner.conn.recv_from(&mut buf));
+                match crate::platform::select::select2(&mut cancel_f, &mut recv_f).await {
+                    crate::platform::select::Either::A(()) => {
+                        debug!(local = %self.get_addr(), "UDP serve_loop cancelled");
+                        return Ok(());
+                    }
+                    crate::platform::select::Either::B(result) => match result {
                         Ok((len, addr)) => (len, addr),
                         Err(e) => {
                             warn!(error = %e, "error receiving UDP packet");
                             continue;
                         }
-                    }
+                    },
                 }
             };
 
@@ -266,8 +300,8 @@ impl UdpConnection {
     }
 }
 
-impl std::fmt::Display for UdpConnection {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for UdpConnection {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self.inner.conn.local_addr() {
             Ok(addr) => write!(f, "{}", addr),
             Err(_) => write!(f, "*:*"),
@@ -275,8 +309,8 @@ impl std::fmt::Display for UdpConnection {
     }
 }
 
-impl std::fmt::Debug for UdpConnection {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for UdpConnection {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{}", self.inner.addr)
     }
 }

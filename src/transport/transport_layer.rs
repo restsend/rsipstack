@@ -1,19 +1,23 @@
+use crate::prelude::*;
+#[cfg(all(feature = "platform-tokio", feature = "rustls"))]
 use super::tls::{TlsConfig, TlsConnection};
+#[cfg(all(feature = "platform-tokio", feature = "websocket"))]
 use super::websocket::WebSocketConnection;
-use super::{connection::TransportSender, sip_addr::SipAddr, tcp::TcpConnection, SipConnection};
+#[cfg(feature = "platform-tokio")]
+use super::tcp::TcpConnection;
+use super::{connection::TransportSender, sip_addr::SipAddr, SipConnection};
+#[cfg(feature = "platform-tokio")]
 use crate::resolver::SipResolver;
 use crate::sip::{Host, HostWithPort, Transport};
 use crate::transaction::key::TransactionKey;
 use crate::transport::connection::TransportReceiver;
 use crate::{transport::TransportEvent, Result};
 use async_trait::async_trait;
-use dashmap::DashMap;
-use parking_lot::{Mutex, RwLock};
-use std::net::IpAddr;
-use std::sync::Arc;
-use tokio::select;
-use tokio::sync::mpsc;
-use tokio_util::sync::CancellationToken;
+use crate::platform::sync::RwMap;
+use crate::platform::sync::{Mutex, RwLock};
+use core::net::IpAddr;
+use crate::platform::mpsc;
+use crate::platform::CancellationToken;
 use tracing::{debug, info, warn};
 
 #[async_trait]
@@ -31,7 +35,7 @@ pub trait TransportWhitelist: Send + Sync {
 impl<F, Fut> TransportWhitelist for F
 where
     F: Send + Sync + Fn(IpAddr) -> Fut,
-    Fut: std::future::Future<Output = bool> + Send,
+    Fut: core::future::Future<Output = bool> + Send,
 {
     async fn allow(&self, ip: IpAddr) -> bool {
         (self)(ip).await
@@ -39,17 +43,35 @@ where
 }
 
 pub(crate) type TransportWhitelistRef = Arc<dyn TransportWhitelist>;
+
+/// No-backend placeholder: domain resolution requires a real backend
+/// (tokio today, embassy + embassy-net DNS in WP3).
+#[cfg(not(feature = "platform-tokio"))]
+struct UnimplementedDomainResolver;
+
+#[cfg(not(feature = "platform-tokio"))]
+#[async_trait]
+impl DomainResolver for UnimplementedDomainResolver {
+    async fn resolve(&self, target: &SipAddr) -> Result<SipAddr> {
+        Err(crate::Error::DnsResolutionError(format!(
+            "no platform backend: cannot resolve {target}"
+        )))
+    }
+}
 pub struct DefaultDomainResolver {
+#[cfg(feature = "platform-tokio")]
     resolver: SipResolver,
 }
 
 impl DefaultDomainResolver {
     pub fn new() -> Self {
         Self {
+#[cfg(feature = "platform-tokio")]
             resolver: SipResolver::default(),
         }
     }
 
+#[cfg(feature = "platform-tokio")]
     pub async fn resolve_with_lookup(&self, target: &SipAddr) -> Result<SipAddr> {
         let domain = match &target.addr.host {
             Host::Domain(domain) => domain,
@@ -99,6 +121,8 @@ impl Default for DefaultDomainResolver {
     }
 }
 
+#[cfg(feature = "platform-tokio")]
+#[cfg(feature = "platform-tokio")]
 #[async_trait]
 impl DomainResolver for DefaultDomainResolver {
     async fn resolve(&self, target: &SipAddr) -> Result<SipAddr> {
@@ -109,12 +133,14 @@ impl DomainResolver for DefaultDomainResolver {
 pub struct TransportLayerInner {
     pub(crate) cancel_token: CancellationToken,
     listens: Arc<RwLock<Vec<SipConnection>>>, // listening transports
-    connections: Arc<DashMap<SipAddr, SipConnection>>, // outbound/inbound connections
+    connections: Arc<RwMap<SipAddr, SipConnection>>, // outbound/inbound connections
     pub(crate) transport_tx: TransportSender,
     pub(crate) transport_rx: Mutex<Option<TransportReceiver>>,
     pub domain_resolver: Box<dyn DomainResolver>,
     whitelist: RwLock<Option<TransportWhitelistRef>>,
+#[cfg(all(feature = "platform-tokio", feature = "rustls"))]
     tls_config: RwLock<Option<TlsConfig>>,
+#[cfg(all(feature = "platform-tokio", feature = "websocket"))]
     ws_path: RwLock<Option<String>>,
 }
 pub(crate) type TransportLayerInnerRef = Arc<TransportLayerInner>;
@@ -134,12 +160,14 @@ impl TransportLayer {
         let inner = TransportLayerInner {
             cancel_token,
             listens: Arc::new(RwLock::new(Vec::new())),
-            connections: Arc::new(DashMap::new()),
+            connections: Arc::new(RwMap::new()),
             transport_tx,
             transport_rx: Mutex::new(Some(transport_rx)),
             domain_resolver,
             whitelist: RwLock::new(None),
+#[cfg(all(feature = "platform-tokio", feature = "rustls"))]
             tls_config: RwLock::new(None),
+#[cfg(all(feature = "platform-tokio", feature = "websocket"))]
             ws_path: RwLock::new(None),
         };
         Self {
@@ -148,8 +176,15 @@ impl TransportLayer {
         }
     }
 
+    #[cfg(feature = "platform-tokio")]
     pub fn new(cancel_token: CancellationToken) -> Self {
         let domain_resolver = Box::new(DefaultDomainResolver::default());
+        Self::new_with_domain_resolver(cancel_token, domain_resolver)
+    }
+
+    #[cfg(not(feature = "platform-tokio"))]
+    pub fn new(cancel_token: CancellationToken) -> Self {
+        let domain_resolver = Box::new(UnimplementedDomainResolver);
         Self::new_with_domain_resolver(cancel_token, domain_resolver)
     }
 
@@ -199,9 +234,11 @@ impl TransportLayer {
             .iter()
             .map(|t| t.get_addr().to_owned())
             .collect();
-        for conn in self.inner.connections.iter() {
-            addrs.push(conn.get_addr().clone());
-        }
+        self.inner.connections.with(|m| {
+            for conn in m.values() {
+                addrs.push(conn.get_addr().clone());
+            }
+        });
         addrs
     }
 
@@ -218,16 +255,19 @@ impl TransportLayer {
         self.inner.set_whitelist(None);
     }
 
+#[cfg(all(feature = "platform-tokio", feature = "rustls"))]
     /// Set the TLS configuration used for future outbound TLS connections.
     pub fn set_tls_config(&self, tls_config: TlsConfig) {
         self.inner.set_tls_config(Some(tls_config));
     }
 
     /// Remove the TLS configuration used for future outbound TLS connections.
+    #[cfg(all(feature = "platform-tokio", feature = "rustls"))]
     pub fn clear_tls_config(&self) {
         self.inner.set_tls_config(None);
     }
 
+#[cfg(all(feature = "platform-tokio", feature = "websocket"))]
     /// Set the WebSocket path used for future outbound WebSocket connections.
     /// Defaults to `/` if not set.
     pub fn set_ws_path(&self, path: impl Into<String>) {
@@ -235,6 +275,7 @@ impl TransportLayer {
     }
 
     /// Remove the WebSocket path override, reverting to default `/`.
+    #[cfg(all(feature = "platform-tokio", feature = "websocket"))]
     pub fn clear_ws_path(&self) {
         self.inner.set_ws_path(None);
     }
@@ -253,18 +294,22 @@ impl TransportLayerInner {
         }
     }
 
+#[cfg(all(feature = "platform-tokio", feature = "rustls"))]
     fn set_tls_config(&self, tls_config: Option<TlsConfig>) {
         *self.tls_config.write() = tls_config;
     }
 
+#[cfg(all(feature = "platform-tokio", feature = "rustls"))]
     fn tls_config(&self) -> Option<TlsConfig> {
         self.tls_config.read().clone()
     }
 
+#[cfg(all(feature = "platform-tokio", feature = "websocket"))]
     fn set_ws_path(&self, path: Option<String>) {
         *self.ws_path.write() = path;
     }
 
+    #[cfg(all(feature = "platform-tokio", feature = "websocket"))]
     fn ws_path(&self) -> Option<String> {
         self.ws_path.read().clone()
     }
@@ -299,8 +344,7 @@ impl TransportLayerInner {
         key: Option<&TransactionKey>,
     ) -> Result<(SipConnection, SipAddr)> {
         let target = outbound.unwrap_or(destination);
-        let tls_config = self.tls_config();
-
+#[cfg(all(feature = "platform-tokio", feature = "rustls"))]
         // Capture the original domain name before DNS resolution for TLS SNI
         let original_domain = match &target.addr.host {
             Host::Domain(domain) => Some(domain.to_string()),
@@ -317,19 +361,22 @@ impl TransportLayerInner {
         if let Some(transport) = self.connections.get(target) {
             return Ok((transport.clone(), target.clone()));
         }
+#[cfg(feature = "platform-tokio")]
         if let Some(Transport::Tcp | Transport::Tls | Transport::Ws | Transport::Wss) =
             target.r#type
         {
             let sip_connection = match target.r#type {
+#[cfg(feature = "platform-tokio")]
                 Some(Transport::Tcp) => {
                     let connection =
                         TcpConnection::connect(target, Some(self.cancel_token.child_token()))
                             .await?;
                     SipConnection::Tcp(connection)
                 }
+#[cfg(all(feature = "platform-tokio", feature = "rustls"))]
                 Some(Transport::Tls) => {
                     // Build effective TLS config with SNI from the original domain
-                    let mut effective_config = tls_config.clone().unwrap_or_default();
+                    let mut effective_config = self.tls_config().clone().unwrap_or_default();
                     if effective_config.sni_hostname.is_none() {
                         effective_config.sni_hostname = original_domain;
                     }
@@ -342,6 +389,7 @@ impl TransportLayerInner {
                     .await?;
                     SipConnection::Tls(connection)
                 }
+#[cfg(all(feature = "platform-tokio", feature = "websocket"))]
                 Some(Transport::Ws | Transport::Wss) => {
                     let ws_path = self.ws_path();
                     let connection = WebSocketConnection::connect_with_path(
@@ -386,19 +434,21 @@ impl TransportLayerInner {
     pub(super) async fn serve_listener(self: Arc<Self>, transport: SipConnection) -> Result<()> {
         let sender = self.transport_tx.clone();
         match transport {
+#[cfg(feature = "platform-tokio")]
             SipConnection::Udp(transport) => {
                 let transport_layer_inner = self.clone();
-                tokio::spawn(async move {
+                crate::platform::spawn(async move {
                     transport
                         .serve_loop_with_whitelist(sender, Some(transport_layer_inner))
                         .await
                 });
                 Ok(())
             }
+#[cfg(feature = "platform-tokio")]
             SipConnection::TcpListener(connection) => connection.serve_listener(self.clone()).await,
-            #[cfg(feature = "rustls")]
+#[cfg(all(feature = "platform-tokio", feature = "rustls"))]
             SipConnection::TlsListener(connection) => connection.serve_listener(self.clone()).await,
-            #[cfg(feature = "websocket")]
+#[cfg(all(feature = "platform-tokio", feature = "websocket"))]
             SipConnection::WebSocketListener(connection) => {
                 connection.serve_listener(self.clone()).await
             }
@@ -421,7 +471,7 @@ impl TransportLayerInner {
             .map(|addr| addr.to_string())
             .unwrap_or_else(|| "-".to_string());
         info!(addr=%transport.get_addr(), remote=%remote_addr, "serve_connection: starting serve_loop");
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             match sender_clone.send(TransportEvent::New(transport.clone())) {
                 Ok(()) => {
                     info!(addr=%transport.get_addr(), remote=%remote_addr, "serve_connection: New event sent");
@@ -431,11 +481,14 @@ impl TransportLayerInner {
                     return;
                 }
             }
-            select! {
-                _ = sub_token.cancelled() => { }
-                result = async {
-                    transport.serve_loop(sender_clone.clone()).await
-                } => {
+            let transport2 = transport.clone();
+            let mut cancel_f = core::pin::pin!(sub_token.cancelled());
+            let mut serve_f = core::pin::pin!(async {
+                transport2.serve_loop(sender_clone.clone()).await
+            });
+            match crate::platform::select::select2(&mut cancel_f, &mut serve_f).await {
+                crate::platform::select::Either::A(()) => {}
+                crate::platform::select::Either::B(result) => {
                     if let Err(e) = result {
                         warn!(addr=%transport.get_addr(), remote=%remote_addr, error = %e, "serve_loop error");
                     }
@@ -452,7 +505,7 @@ impl Drop for TransportLayer {
         self.inner.cancel_token.cancel();
     }
 }
-#[cfg(test)]
+#[cfg(all(test, feature = "platform-tokio"))]
 mod tests {
     use crate::resolver::SipResolver;
     use crate::sip::uri::ParamsExt;

@@ -387,7 +387,10 @@ async fn test_layer(
     let sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
     let addr = crate::transport::SipAddr::from(sock.local_addr()?);
     let conn = crate::transport::udp::UdpConnection::attach(
-        crate::transport::udp::UdpInner { conn: sock, addr },
+        crate::transport::udp::UdpInner {
+            conn: std::sync::Arc::new(sock),
+            addr,
+        },
         None,
         Some(token.child_token()),
     )

@@ -1,3 +1,4 @@
+use crate::prelude::*;
 use crate::sip::{
     headers::untyped::*,
     headers::{Header, Headers},
@@ -423,8 +424,8 @@ impl HasHeaders for Request {
 
 impl HeadersExt for Request {}
 
-impl std::fmt::Display for Request {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Request {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
             "{} {} {}\r\n{}\r\n{}",
@@ -445,7 +446,7 @@ impl Request {
     /// contain arbitrary bytes — e.g. a binary ISUP part or an eCall MSD — so
     /// it must not be forced through UTF-8.
     ///
-    /// Prefer this over [`Display`](std::fmt::Display) / `to_string()` when
+    /// Prefer this over [`Display`](core::fmt::Display) / `to_string()` when
     /// putting a message on the wire: `Display` renders the body with
     /// [`String::from_utf8_lossy`], which is fine for logging but corrupts
     /// non-UTF-8 bytes.
@@ -460,7 +461,7 @@ impl Request {
     }
 }
 
-impl std::convert::TryFrom<Vec<u8>> for Request {
+impl core::convert::TryFrom<Vec<u8>> for Request {
     type Error = Error;
     fn try_from(bytes: Vec<u8>) -> Result<Self, Error> {
         match crate::sip::parser::parse_message(&bytes)? {
@@ -472,7 +473,7 @@ impl std::convert::TryFrom<Vec<u8>> for Request {
     }
 }
 
-impl std::convert::TryFrom<&[u8]> for Request {
+impl core::convert::TryFrom<&[u8]> for Request {
     type Error = Error;
     fn try_from(bytes: &[u8]) -> Result<Self, Error> {
         match crate::sip::parser::parse_message(bytes)? {
@@ -484,27 +485,27 @@ impl std::convert::TryFrom<&[u8]> for Request {
     }
 }
 
-impl std::convert::TryFrom<&str> for Request {
+impl core::convert::TryFrom<&str> for Request {
     type Error = Error;
     fn try_from(s: &str) -> Result<Self, Error> {
         Self::try_from(s.as_bytes())
     }
 }
 
-impl std::convert::TryFrom<String> for Request {
+impl core::convert::TryFrom<String> for Request {
     type Error = Error;
     fn try_from(s: String) -> Result<Self, Error> {
         Self::try_from(s.as_bytes())
     }
 }
 
-impl std::convert::From<Request> for String {
+impl core::convert::From<Request> for String {
     fn from(r: Request) -> String {
         r.to_string()
     }
 }
 
-impl std::convert::From<Request> for Vec<u8> {
+impl core::convert::From<Request> for Vec<u8> {
     fn from(r: Request) -> Vec<u8> {
         r.to_bytes()
     }
@@ -593,8 +594,8 @@ impl Default for Response {
     }
 }
 
-impl std::fmt::Display for Response {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Response {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
             "{} {} {}\r\n{}\r\n{}",
@@ -626,7 +627,7 @@ impl Response {
     }
 }
 
-impl std::convert::TryFrom<Vec<u8>> for Response {
+impl core::convert::TryFrom<Vec<u8>> for Response {
     type Error = Error;
     fn try_from(bytes: Vec<u8>) -> Result<Self, Error> {
         match crate::sip::parser::parse_message(&bytes)? {
@@ -638,7 +639,7 @@ impl std::convert::TryFrom<Vec<u8>> for Response {
     }
 }
 
-impl std::convert::TryFrom<&[u8]> for Response {
+impl core::convert::TryFrom<&[u8]> for Response {
     type Error = Error;
     fn try_from(bytes: &[u8]) -> Result<Self, Error> {
         match crate::sip::parser::parse_message(bytes)? {
@@ -650,33 +651,33 @@ impl std::convert::TryFrom<&[u8]> for Response {
     }
 }
 
-impl std::convert::TryFrom<&str> for Response {
+impl core::convert::TryFrom<&str> for Response {
     type Error = Error;
     fn try_from(s: &str) -> Result<Self, Error> {
         Self::try_from(s.as_bytes())
     }
 }
 
-impl std::convert::TryFrom<String> for Response {
+impl core::convert::TryFrom<String> for Response {
     type Error = Error;
     fn try_from(s: String) -> Result<Self, Error> {
         Self::try_from(s.as_bytes())
     }
 }
 
-impl std::convert::From<Response> for String {
+impl core::convert::From<Response> for String {
     fn from(r: Response) -> String {
         r.to_string()
     }
 }
 
-impl std::convert::From<Response> for Vec<u8> {
+impl core::convert::From<Response> for Vec<u8> {
     fn from(r: Response) -> Vec<u8> {
         r.to_bytes()
     }
 }
 
-impl std::convert::TryFrom<bytes::Bytes> for SipMessage {
+impl core::convert::TryFrom<bytes::Bytes> for SipMessage {
     type Error = Error;
     fn try_from(bytes: bytes::Bytes) -> Result<Self, Error> {
         crate::sip::parser::parse_message(&bytes)
@@ -731,8 +732,8 @@ impl HasHeaders for SipMessage {
 
 impl HeadersExt for SipMessage {}
 
-impl std::fmt::Display for SipMessage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for SipMessage {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             SipMessage::Request(r) => write!(f, "{}", r),
             SipMessage::Response(r) => write!(f, "{}", r),
@@ -753,47 +754,47 @@ impl SipMessage {
     }
 }
 
-impl std::convert::TryFrom<Vec<u8>> for SipMessage {
+impl core::convert::TryFrom<Vec<u8>> for SipMessage {
     type Error = Error;
     fn try_from(bytes: Vec<u8>) -> Result<Self, Error> {
         crate::sip::parser::parse_message(&bytes)
     }
 }
 
-impl std::convert::TryFrom<&[u8]> for SipMessage {
+impl core::convert::TryFrom<&[u8]> for SipMessage {
     type Error = Error;
     fn try_from(bytes: &[u8]) -> Result<Self, Error> {
         crate::sip::parser::parse_message(bytes)
     }
 }
 
-impl std::convert::TryFrom<&str> for SipMessage {
+impl core::convert::TryFrom<&str> for SipMessage {
     type Error = Error;
     fn try_from(s: &str) -> Result<Self, Error> {
         Self::try_from(s.as_bytes())
     }
 }
 
-impl std::convert::TryFrom<String> for SipMessage {
+impl core::convert::TryFrom<String> for SipMessage {
     type Error = Error;
     fn try_from(s: String) -> Result<Self, Error> {
         Self::try_from(s.as_bytes())
     }
 }
 
-impl std::convert::From<Request> for SipMessage {
+impl core::convert::From<Request> for SipMessage {
     fn from(r: Request) -> SipMessage {
         SipMessage::Request(r)
     }
 }
 
-impl std::convert::From<Response> for SipMessage {
+impl core::convert::From<Response> for SipMessage {
     fn from(r: Response) -> SipMessage {
         SipMessage::Response(r)
     }
 }
 
-impl std::convert::TryFrom<SipMessage> for Request {
+impl core::convert::TryFrom<SipMessage> for Request {
     type Error = Error;
     fn try_from(m: SipMessage) -> Result<Self, Error> {
         match m {
@@ -803,7 +804,7 @@ impl std::convert::TryFrom<SipMessage> for Request {
     }
 }
 
-impl std::convert::TryFrom<SipMessage> for Response {
+impl core::convert::TryFrom<SipMessage> for Response {
     type Error = Error;
     fn try_from(m: SipMessage) -> Result<Self, Error> {
         match m {
@@ -813,13 +814,13 @@ impl std::convert::TryFrom<SipMessage> for Response {
     }
 }
 
-impl std::convert::From<SipMessage> for String {
+impl core::convert::From<SipMessage> for String {
     fn from(m: SipMessage) -> String {
         m.to_string()
     }
 }
 
-impl std::convert::From<SipMessage> for Vec<u8> {
+impl core::convert::From<SipMessage> for Vec<u8> {
     fn from(m: SipMessage) -> Vec<u8> {
         m.to_bytes()
     }

@@ -367,7 +367,7 @@ fn order_srv_records(mut records: Vec<SrvRecord>) -> Vec<SrvRecord> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use parking_lot::Mutex;
+    use crate::platform::sync::Mutex;
     use std::collections::HashMap;
 
     struct MockDns {

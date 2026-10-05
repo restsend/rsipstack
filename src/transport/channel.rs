@@ -1,17 +1,16 @@
-use tokio::sync::mpsc;
-use tokio_util::sync::CancellationToken;
+use crate::prelude::*;
+use crate::platform::CancellationToken;
 
 use super::{
     connection::{TransportReceiver, TransportSender},
     SipAddr, SipConnection,
 };
 use crate::Result;
-use parking_lot::Mutex;
-use std::sync::Arc;
+use crate::platform::sync::Mutex;
 
 enum Outgoing {
     Unbounded(TransportSender),
-    Bounded(mpsc::Sender<super::TransportEvent>),
+    Bounded(crate::platform::BoundedSender<super::TransportEvent>),
 }
 
 struct ChannelInner {
@@ -39,7 +38,7 @@ impl ChannelConnection {
 
     pub async fn create_connection_bounded(
         incoming: TransportReceiver,
-        outgoing: mpsc::Sender<super::TransportEvent>,
+        outgoing: crate::platform::BoundedSender<super::TransportEvent>,
         addr: SipAddr,
         cancel_token: Option<CancellationToken>,
     ) -> Result<Self> {
@@ -116,14 +115,14 @@ impl ChannelConnection {
     }
 }
 
-impl std::fmt::Display for ChannelConnection {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for ChannelConnection {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "*:*")
     }
 }
 
-impl std::fmt::Debug for ChannelConnection {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for ChannelConnection {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "*:*")
     }
 }
@@ -131,13 +130,14 @@ impl std::fmt::Debug for ChannelConnection {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::platform::mpsc;
     use crate::sip::{HostWithPort, Request, SipMessage, Version};
 
     fn test_sip_addr() -> SipAddr {
         SipAddr {
             r#type: None,
             addr: HostWithPort {
-                host: crate::sip::Host::IpAddr(std::net::IpAddr::V4(std::net::Ipv4Addr::new(
+                host: crate::sip::Host::IpAddr(core::net::IpAddr::V4(core::net::Ipv4Addr::new(
                     127, 0, 0, 1,
                 ))),
                 port: Some(5060.into()),
@@ -260,7 +260,7 @@ mod tests {
         let _ = incoming_tx.send(event);
 
         // Give the serve loop time to process
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        tokio::time::sleep(core::time::Duration::from_millis(50)).await;
     }
 
     #[tokio::test]

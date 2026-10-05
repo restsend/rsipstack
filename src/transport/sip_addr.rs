@@ -1,7 +1,9 @@
+use crate::prelude::*;
 use crate::sip::uri::ParamsExt;
 use crate::sip::{Host, HostWithPort, Param, Scheme, Transport, Uri};
 use crate::Result;
-use std::{fmt, hash::Hash, net::SocketAddr};
+use core::fmt;
+use core::hash::Hash;
 
 /// SIP Address
 ///
@@ -27,7 +29,7 @@ use std::{fmt, hash::Hash, net::SocketAddr};
 /// ```rust
 /// use rsipstack::transport::SipAddr;
 /// use rsipstack::sip::{HostWithPort, Transport};
-/// use std::net::SocketAddr;
+/// use core::net::SocketAddr;
 ///
 /// // Create from socket address
 /// let socket_addr: SocketAddr = "192.168.1.100:5060".parse().unwrap();
@@ -60,7 +62,7 @@ use std::{fmt, hash::Hash, net::SocketAddr};
 /// * `SocketAddr` (for IP addresses only)
 /// * `rsipstack::sip::Uri` (SIP URI format)
 /// * `rsipstack::sip::HostWithPort` (host/port only)
-#[derive(Debug, Eq, PartialEq, Clone, Default)]
+#[derive(Debug, Eq, PartialEq, Clone, Default, PartialOrd, Ord)]
 pub struct SipAddr {
     pub r#type: Option<Transport>,
     pub addr: HostWithPort,
@@ -79,7 +81,7 @@ impl fmt::Display for SipAddr {
 }
 
 impl Hash for SipAddr {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         self.r#type.hash(state);
         match self.addr.host {
             Host::Domain(ref domain) => domain.hash(state),
@@ -195,13 +197,13 @@ impl TryFrom<Uri> for SipAddr {
     }
 }
 
-impl<'a> TryFrom<std::borrow::Cow<'a, Uri>> for SipAddr {
+impl<'a> TryFrom<Cow<'a, Uri>> for SipAddr {
     type Error = crate::Error;
 
-    fn try_from(uri: std::borrow::Cow<'a, Uri>) -> Result<Self> {
+    fn try_from(uri: Cow<'a, Uri>) -> Result<Self> {
         match uri {
-            std::borrow::Cow::Owned(uri) => uri.try_into(),
-            std::borrow::Cow::Borrowed(uri) => uri.try_into(),
+            Cow::Owned(uri) => uri.try_into(),
+            Cow::Borrowed(uri) => uri.try_into(),
         }
     }
 }

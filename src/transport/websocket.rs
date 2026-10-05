@@ -22,7 +22,7 @@ use tokio_tungstenite::{
     },
     MaybeTlsStream, WebSocketStream,
 };
-use tokio_util::sync::CancellationToken;
+use crate::platform::CancellationToken;
 use tracing::{debug, info, warn};
 
 // Define a type alias for the WebSocket sink to make the code more readable
@@ -99,7 +99,7 @@ impl WebSocketListenerConnection {
         let listener_local_addr = self.get_addr().clone();
 
         debug!(local = %self.inner.local_addr, "Starting WebSocket listener");
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             loop {
                 let (stream, remote_addr) = match listener.accept().await {
                     Ok((stream, remote_addr)) => (stream, remote_addr),
@@ -121,7 +121,7 @@ impl WebSocketListenerConnection {
                 };
                 let transport_layer_inner_ref = transport_layer_inner.clone();
                 let local_addr = listener_local_addr.clone();
-                tokio::spawn(async move {
+                crate::platform::spawn(async move {
                     // Wrap the TCP stream in MaybeTlsStream
                     let maybe_tls_stream = MaybeTlsStream::Plain(stream);
 

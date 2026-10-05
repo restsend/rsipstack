@@ -1,3 +1,4 @@
+use crate::prelude::*;
 use super::parse_helpers::parse_display_uri_params_str;
 use crate::sip::{uri::Param, Error, Header, Uri};
 
@@ -137,7 +138,7 @@ impl HistoryInfo {
 
 /// Lexicographic comparison of dot-separated index values (numeric per level),
 /// e.g. `1.2` < `1.10`, `1.2.1` > `1.2`.
-fn compare_index(a: &str, b: &str) -> std::cmp::Ordering {
+fn compare_index(a: &str, b: &str) -> core::cmp::Ordering {
     let parse = |s: &str| -> Vec<u64> {
         s.split('.')
             .map(|p| p.trim().parse::<u64>().unwrap_or(0))
@@ -146,15 +147,15 @@ fn compare_index(a: &str, b: &str) -> std::cmp::Ordering {
     let (av, bv) = (parse(a), parse(b));
     for (x, y) in av.iter().zip(bv.iter()) {
         match x.cmp(y) {
-            std::cmp::Ordering::Equal => continue,
+            core::cmp::Ordering::Equal => continue,
             other => return other,
         }
     }
     av.len().cmp(&bv.len())
 }
 
-impl std::fmt::Display for HistoryInfoEntry {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for HistoryInfoEntry {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "<{}>;index={}", self.uri, self.index)?;
         if let Some(rc) = &self.rc {
             write!(f, ";rc={}", rc)?;
@@ -172,8 +173,8 @@ impl std::fmt::Display for HistoryInfoEntry {
     }
 }
 
-impl std::fmt::Display for HistoryInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for HistoryInfo {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let items = self
             .entries
             .iter()
@@ -184,13 +185,13 @@ impl std::fmt::Display for HistoryInfo {
     }
 }
 
-impl std::convert::From<HistoryInfo> for String {
+impl core::convert::From<HistoryInfo> for String {
     fn from(h: HistoryInfo) -> String {
         h.to_string()
     }
 }
 
-impl std::convert::From<HistoryInfo> for Header {
+impl core::convert::From<HistoryInfo> for Header {
     fn from(h: HistoryInfo) -> Header {
         Header::HistoryInfo(crate::sip::headers::HistoryInfo::new(h.to_string()))
     }

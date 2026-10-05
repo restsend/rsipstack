@@ -1,3 +1,4 @@
+use crate::prelude::*;
 use crate::sip::{
     param::Tag,
     prelude::{HeadersExt, ToTypedHeader},
@@ -5,8 +6,8 @@ use crate::sip::{
     Method, Request, Response,
 };
 use crate::{Error, Result};
-use std::fmt::Write;
-use std::hash::Hash;
+use core::fmt::Write;
+use core::hash::Hash;
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug, Copy)]
 pub enum TransactionRole {
@@ -14,8 +15,8 @@ pub enum TransactionRole {
     Server,
 }
 
-impl std::fmt::Display for TransactionRole {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for TransactionRole {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             TransactionRole::Client => write!(f, "c"),
             TransactionRole::Server => write!(f, "s"),
@@ -23,11 +24,11 @@ impl std::fmt::Display for TransactionRole {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub struct TransactionKey(String);
 
-impl std::fmt::Display for TransactionKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for TransactionKey {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{}", self.0)
     }
 }

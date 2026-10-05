@@ -17,7 +17,7 @@ use tokio_rustls::{
     rustls::{pki_types, pki_types::pem::PemObject, ClientConfig, RootCertStore, ServerConfig},
     TlsAcceptor, TlsConnector,
 };
-use tokio_util::sync::CancellationToken;
+use crate::platform::CancellationToken;
 use tracing::{debug, warn};
 
 /// Certificate info extracted from PEM for logging purposes
@@ -113,7 +113,7 @@ struct TlsKeyAndCert {
 }
 
 pub struct ReloadableCertResolver {
-    key_and_cert: parking_lot::RwLock<TlsKeyAndCert>,
+    key_and_cert: crate::platform::sync::RwLock<TlsKeyAndCert>,
     provider: Arc<CryptoProvider>,
 }
 
@@ -126,7 +126,7 @@ impl ReloadableCertResolver {
         let certified_key = Self::create_certified_key(cert_data, key_data, &provider)?;
 
         Ok(Self {
-            key_and_cert: parking_lot::RwLock::new(TlsKeyAndCert { certified_key }),
+            key_and_cert: crate::platform::sync::RwLock::new(TlsKeyAndCert { certified_key }),
             provider,
         })
     }
@@ -209,7 +209,7 @@ impl Debug for ReloadableCertResolver {
 impl Clone for ReloadableCertResolver {
     fn clone(&self) -> Self {
         Self {
-            key_and_cert: parking_lot::RwLock::new(TlsKeyAndCert {
+            key_and_cert: crate::platform::sync::RwLock::new(TlsKeyAndCert {
                 certified_key: self.key_and_cert.read().certified_key.clone(),
             }),
             provider: self.provider.clone(),
@@ -263,7 +263,7 @@ pub struct TlsListenerConnectionInner {
     pub local_addr: SipAddr,
     pub external: Option<SipAddr>,
     pub config: TlsConfig,
-    pub cert_resolver: parking_lot::Mutex<Option<Arc<ReloadableCertResolver>>>,
+    pub cert_resolver: crate::platform::sync::Mutex<Option<Arc<ReloadableCertResolver>>>,
 }
 
 #[derive(Clone)]
@@ -287,7 +287,7 @@ impl TlsListenerConnection {
                 addr: addr.into(),
             }),
             config,
-            cert_resolver: parking_lot::Mutex::new(None),
+            cert_resolver: crate::platform::sync::Mutex::new(None),
         };
         Ok(TlsListenerConnection {
             inner: Arc::new(inner),
@@ -316,7 +316,7 @@ impl TlsListenerConnection {
         *self.inner.cert_resolver.lock() = Some(resolver);
         let listener_local_addr = self.get_addr().clone();
 
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             loop {
                 let (stream, remote_addr) = match listener.accept().await {
                     Ok((stream, remote_addr)) => (stream, remote_addr),
@@ -334,7 +334,7 @@ impl TlsListenerConnection {
                 let transport_layer_inner_ref = transport_layer_inner.clone();
                 let local_addr = listener_local_addr.clone();
 
-                tokio::spawn(async move {
+                crate::platform::spawn(async move {
                     // Perform TLS handshake
                     let tls_stream = match acceptor_clone.accept(stream).await {
                         Ok(stream) => stream,

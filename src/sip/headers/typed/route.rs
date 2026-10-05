@@ -1,3 +1,4 @@
+use crate::prelude::*;
 use super::parse_helpers::parse_display_uri_params_str;
 use crate::sip::{uri::Param, uri::ParamsExt, Error, Header, Uri};
 
@@ -70,8 +71,8 @@ impl Route {
     }
 }
 
-impl std::fmt::Display for Route {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Route {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match &self.display_name {
             Some(name) => write!(f, "\"{}\" <{}>", name, self.uri)?,
             None => write!(f, "<{}>", self.uri)?,
@@ -83,7 +84,7 @@ impl std::fmt::Display for Route {
     }
 }
 
-impl std::convert::From<Uri> for Route {
+impl core::convert::From<Uri> for Route {
     fn from(uri: Uri) -> Self {
         Self {
             display_name: None,
@@ -93,13 +94,13 @@ impl std::convert::From<Uri> for Route {
     }
 }
 
-impl std::convert::From<Route> for String {
+impl core::convert::From<Route> for String {
     fn from(r: Route) -> String {
         r.to_string()
     }
 }
 
-impl std::convert::From<Route> for Header {
+impl core::convert::From<Route> for Header {
     fn from(r: Route) -> Header {
         Header::Route(crate::sip::headers::untyped::Route::new(r.to_string()))
     }

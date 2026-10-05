@@ -1,3 +1,4 @@
+use crate::prelude::*;
 use super::tokenizers::AuthTokenizer;
 use crate::sip::headers::auth::{Algorithm, AuthQop, Scheme};
 use crate::sip::{Error, Header, Uri};
@@ -82,8 +83,8 @@ impl ProxyAuthorization {
     }
 }
 
-impl std::fmt::Display for ProxyAuthorization {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for ProxyAuthorization {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
             "{} username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\"",
@@ -102,13 +103,13 @@ impl std::fmt::Display for ProxyAuthorization {
     }
 }
 
-impl std::convert::From<ProxyAuthorization> for String {
+impl core::convert::From<ProxyAuthorization> for String {
     fn from(p: ProxyAuthorization) -> String {
         p.to_string()
     }
 }
 
-impl std::convert::From<ProxyAuthorization> for Header {
+impl core::convert::From<ProxyAuthorization> for Header {
     fn from(p: ProxyAuthorization) -> Header {
         Header::ProxyAuthorization(crate::sip::headers::untyped::ProxyAuthorization::new(
             p.to_string(),

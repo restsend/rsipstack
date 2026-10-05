@@ -1,3 +1,4 @@
+use crate::prelude::*;
 use super::parse_helpers::parse_display_uri_params_str;
 use crate::sip::{
     uri::{Param, Tag},
@@ -40,8 +41,8 @@ impl From {
     }
 }
 
-impl std::fmt::Display for From {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for From {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match &self.display_name {
             Some(name) => write!(f, "\"{}\" <{}>", name, self.uri)?,
             None => write!(f, "<{}>", self.uri)?,
@@ -53,7 +54,7 @@ impl std::fmt::Display for From {
     }
 }
 
-impl std::convert::From<Uri> for From {
+impl core::convert::From<Uri> for From {
     fn from(uri: Uri) -> Self {
         Self {
             display_name: None,
@@ -63,19 +64,19 @@ impl std::convert::From<Uri> for From {
     }
 }
 
-impl std::convert::From<From> for String {
+impl core::convert::From<From> for String {
     fn from(s: From) -> String {
         s.to_string()
     }
 }
 
-impl std::convert::From<From> for Header {
+impl core::convert::From<From> for Header {
     fn from(s: From) -> Header {
         Header::From(crate::sip::headers::untyped::From::new(s.to_string()))
     }
 }
 
-impl std::convert::From<From> for crate::sip::headers::untyped::From {
+impl core::convert::From<From> for crate::sip::headers::untyped::From {
     fn from(s: From) -> crate::sip::headers::untyped::From {
         crate::sip::headers::untyped::From::new(s.to_string())
     }

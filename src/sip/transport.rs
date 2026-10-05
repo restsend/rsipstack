@@ -1,6 +1,8 @@
+#[cfg(not(feature = "std"))]
+use crate::prelude::*;
 use crate::sip::{Error, Scheme};
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash, Default)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash, Default, PartialOrd, Ord)]
 pub enum Transport {
     #[default]
     Udp,
@@ -47,8 +49,8 @@ impl Transport {
     }
 }
 
-impl std::fmt::Display for Transport {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Transport {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Udp => write!(f, "UDP"),
             Self::Tcp => write!(f, "TCP"),
@@ -61,7 +63,7 @@ impl std::fmt::Display for Transport {
     }
 }
 
-impl std::str::FromStr for Transport {
+impl core::str::FromStr for Transport {
     type Err = Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.trim() {
@@ -77,17 +79,17 @@ impl std::str::FromStr for Transport {
     }
 }
 
-impl std::convert::TryFrom<&str> for Transport {
+impl core::convert::TryFrom<&str> for Transport {
     type Error = Error;
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         s.parse()
     }
 }
 
-impl std::convert::TryFrom<&[u8]> for Transport {
+impl core::convert::TryFrom<&[u8]> for Transport {
     type Error = Error;
     fn try_from(b: &[u8]) -> Result<Self, Self::Error> {
-        std::str::from_utf8(b)?.parse()
+        core::str::from_utf8(b)?.parse()
     }
 }
 
@@ -100,8 +102,8 @@ impl Port {
     }
 }
 
-impl std::fmt::Display for Port {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Port {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{}", self.0)
     }
 }
@@ -118,14 +120,14 @@ impl From<Port> for u16 {
     }
 }
 
-impl std::str::FromStr for Port {
+impl core::str::FromStr for Port {
     type Err = Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(Port(s.trim().parse()?))
     }
 }
 
-impl std::convert::TryFrom<&str> for Port {
+impl core::convert::TryFrom<&str> for Port {
     type Error = Error;
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         s.parse()

@@ -1,8 +1,9 @@
+use crate::prelude::*;
 use crate::sip::{Error, Method, Transport};
-use std::convert::TryFrom;
-use std::fmt;
-use std::net::IpAddr;
-use std::str::FromStr;
+use core::convert::TryFrom;
+use core::fmt;
+use core::net::IpAddr;
+use core::str::FromStr;
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash, Default)]
 pub enum Scheme {
@@ -91,7 +92,7 @@ impl<S: Into<String>> From<S> for Auth {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Hash)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash, PartialOrd, Ord)]
 pub enum Host {
     Domain(Domain),
     IpAddr(IpAddr),
@@ -148,7 +149,7 @@ impl TryFrom<Host> for IpAddr {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Hash)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash, PartialOrd, Ord)]
 pub struct Domain(pub String);
 
 impl fmt::Display for Domain {
@@ -173,7 +174,7 @@ impl From<Domain> for HostWithPort {
 }
 
 pub use crate::sip::transport::Port;
-#[derive(Debug, PartialEq, Eq, Clone, Hash)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash, PartialOrd, Ord)]
 pub struct HostWithPort {
     pub host: Host,
     pub port: Option<Port>,
@@ -197,8 +198,8 @@ impl fmt::Display for HostWithPort {
     }
 }
 
-impl From<std::net::SocketAddr> for HostWithPort {
-    fn from(sa: std::net::SocketAddr) -> Self {
+impl From<core::net::SocketAddr> for HostWithPort {
+    fn from(sa: core::net::SocketAddr) -> Self {
         Self {
             host: Host::IpAddr(sa.ip()),
             port: Some(Port(sa.port())),
@@ -215,15 +216,15 @@ impl From<IpAddr> for HostWithPort {
     }
 }
 
-impl TryFrom<HostWithPort> for std::net::SocketAddr {
+impl TryFrom<HostWithPort> for core::net::SocketAddr {
     type Error = Error;
     fn try_from(h: HostWithPort) -> Result<Self, Self::Error> {
         let port = h.port.map(|p| p.0).unwrap_or(5060);
         match h.host {
-            Host::IpAddr(ip) => Ok(std::net::SocketAddr::new(ip, port)),
+            Host::IpAddr(ip) => Ok(core::net::SocketAddr::new(ip, port)),
             Host::Domain(d) => {
                 let ip: IpAddr = d.0.parse()?;
-                Ok(std::net::SocketAddr::new(ip, port))
+                Ok(core::net::SocketAddr::new(ip, port))
             }
         }
     }
@@ -406,7 +407,7 @@ macro_rules! string_newtype {
                 s.0
             }
         }
-        impl std::ops::Deref for $name {
+        impl core::ops::Deref for $name {
             type Target = str;
             fn deref(&self) -> &str {
                 &self.0
@@ -427,7 +428,7 @@ string_newtype!(OtherParam);
 string_newtype!(OtherParamValue);
 
 impl Received {
-    pub fn parse(&self) -> Result<IpAddr, std::net::AddrParseError> {
+    pub fn parse(&self) -> Result<IpAddr, core::net::AddrParseError> {
         self.0.parse()
     }
 }

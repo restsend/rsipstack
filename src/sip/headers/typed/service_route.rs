@@ -1,3 +1,4 @@
+use crate::prelude::*;
 use super::parse_helpers::parse_display_uri_params_str;
 use crate::sip::{uri::Param, uri::ParamsExt, Error, Header, Uri};
 
@@ -78,8 +79,8 @@ impl ServiceRoute {
     }
 }
 
-impl std::fmt::Display for ServiceRoute {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for ServiceRoute {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match &self.display_name {
             Some(name) => write!(f, "\"{}\" <{}>", name, self.uri)?,
             None => write!(f, "<{}>", self.uri)?,
@@ -91,7 +92,7 @@ impl std::fmt::Display for ServiceRoute {
     }
 }
 
-impl std::convert::From<Uri> for ServiceRoute {
+impl core::convert::From<Uri> for ServiceRoute {
     fn from(uri: Uri) -> Self {
         Self {
             display_name: None,
@@ -101,13 +102,13 @@ impl std::convert::From<Uri> for ServiceRoute {
     }
 }
 
-impl std::convert::From<ServiceRoute> for String {
+impl core::convert::From<ServiceRoute> for String {
     fn from(r: ServiceRoute) -> String {
         r.to_string()
     }
 }
 
-impl std::convert::From<ServiceRoute> for Header {
+impl core::convert::From<ServiceRoute> for Header {
     fn from(r: ServiceRoute) -> Header {
         Header::ServiceRoute(crate::sip::headers::untyped::ServiceRoute::new(
             r.to_string(),
@@ -115,7 +116,7 @@ impl std::convert::From<ServiceRoute> for Header {
     }
 }
 
-impl std::convert::From<ServiceRoute> for super::Route {
+impl core::convert::From<ServiceRoute> for super::Route {
     /// Convert a learned `Service-Route` entry into the `Route` header a user
     /// agent preloads on subsequent requests (RFC 3608 §5.2). The name-addr is
     /// carried over verbatim; only the header field name differs on the wire.

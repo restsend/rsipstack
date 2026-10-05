@@ -1,3 +1,4 @@
+use crate::prelude::*;
 use super::endpoint::EndpointInnerRef;
 use super::key::TransactionKey;
 use super::{SipConnection, TransactionState, TransactionTimer, TransactionType};
@@ -10,7 +11,7 @@ use crate::transaction::key::TransactionRole;
 use crate::transaction::make_tag;
 use crate::transport::SipAddr;
 use crate::{Error, Result};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use crate::platform::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tracing::{debug, trace, warn};
 
 pub type TransactionEventReceiver = UnboundedReceiver<TransactionEvent>;
@@ -65,7 +66,7 @@ pub enum TransactionEvent {
 /// is not available yet.
 pub fn transaction_event_sender_noop() -> TransactionEventSender {
     let (tx, mut rx) = unbounded_channel::<TransactionEvent>();
-    tokio::spawn(async move {
+    crate::platform::spawn(async move {
         while let Some(_ev) = rx.recv().await {
             // drop
         }
@@ -635,7 +636,9 @@ impl Transaction {
         self.retransmission = false;
         self.timer_a
             .take()
-            .map(|id| self.endpoint_inner.timers.cancel(id));
+            .map(|id| -> Option<TransactionTimer> {
+                self.endpoint_inner.timers.cancel(id)
+            });
     }
 
     pub async fn send_trying(&mut self) -> Result<()> {
@@ -961,11 +964,15 @@ impl Transaction {
             TransactionState::Trying | TransactionState::Proceeding => {
                 self.timer_a
                     .take()
-                    .map(|id| self.endpoint_inner.timers.cancel(id));
+                    .map(|id| -> Option<TransactionTimer> {
+                self.endpoint_inner.timers.cancel(id)
+            });
                 if matches!(self.transaction_type, TransactionType::ClientInvite) {
                     self.timer_b
                         .take()
-                        .map(|id| self.endpoint_inner.timers.cancel(id));
+                        .map(|id| -> Option<TransactionTimer> {
+                self.endpoint_inner.timers.cancel(id)
+            });
                     if self.timer_c.is_none() {
                         // start Timer C for client invite only
                         let timer_c = self.endpoint_inner.timers.timeout(
@@ -979,13 +986,19 @@ impl Transaction {
             TransactionState::Completed => {
                 self.timer_a
                     .take()
-                    .map(|id| self.endpoint_inner.timers.cancel(id));
+                    .map(|id| -> Option<TransactionTimer> {
+                self.endpoint_inner.timers.cancel(id)
+            });
                 self.timer_b
                     .take()
-                    .map(|id| self.endpoint_inner.timers.cancel(id));
+                    .map(|id| -> Option<TransactionTimer> {
+                self.endpoint_inner.timers.cancel(id)
+            });
                 self.timer_c
                     .take()
-                    .map(|id| self.endpoint_inner.timers.cancel(id));
+                    .map(|id| -> Option<TransactionTimer> {
+                self.endpoint_inner.timers.cancel(id)
+            });
 
                 if self.transaction_type == TransactionType::ServerInvite {
                     // start Timer G for server invite only
@@ -1060,22 +1073,34 @@ impl Transaction {
     fn cleanup_timer(&mut self) {
         self.timer_a
             .take()
-            .map(|id| self.endpoint_inner.timers.cancel(id));
+            .map(|id| -> Option<TransactionTimer> {
+                self.endpoint_inner.timers.cancel(id)
+            });
         self.timer_b
             .take()
-            .map(|id| self.endpoint_inner.timers.cancel(id));
+            .map(|id| -> Option<TransactionTimer> {
+                self.endpoint_inner.timers.cancel(id)
+            });
         self.timer_c
             .take()
-            .map(|id| self.endpoint_inner.timers.cancel(id));
+            .map(|id| -> Option<TransactionTimer> {
+                self.endpoint_inner.timers.cancel(id)
+            });
         self.timer_d
             .take()
-            .map(|id| self.endpoint_inner.timers.cancel(id));
+            .map(|id| -> Option<TransactionTimer> {
+                self.endpoint_inner.timers.cancel(id)
+            });
         self.timer_k
             .take()
-            .map(|id| self.endpoint_inner.timers.cancel(id));
+            .map(|id| -> Option<TransactionTimer> {
+                self.endpoint_inner.timers.cancel(id)
+            });
         self.timer_g
             .take()
-            .map(|id| self.endpoint_inner.timers.cancel(id));
+            .map(|id| -> Option<TransactionTimer> {
+                self.endpoint_inner.timers.cancel(id)
+            });
     }
 
     pub fn role(&self) -> TransactionRole {

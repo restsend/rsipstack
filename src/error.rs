@@ -1,3 +1,4 @@
+use crate::prelude::*;
 use crate::{dialog::DialogId, transaction::key::TransactionKey, transport::SipAddr};
 
 #[derive(Debug, thiserror::Error)]
@@ -21,11 +22,13 @@ pub enum Error {
     DialogError(String, DialogId, crate::sip::StatusCode),
 
     #[error("I/O error: {0}")]
+    #[cfg(feature = "std")]
     IoError(#[from] std::io::Error),
 
     #[error("Address parse error: {0}")]
-    AddrParseError(#[from] std::net::AddrParseError),
+    AddrParseError(#[from] core::net::AddrParseError),
 
+    #[cfg(feature = "websocket")]
     #[error("WebSocket error: {0}")]
     WebSocketError(#[from] tokio_tungstenite::tungstenite::Error),
 
@@ -33,14 +36,14 @@ pub enum Error {
     Error(String),
 }
 
-impl<T> From<tokio::sync::mpsc::error::SendError<T>> for Error {
-    fn from(e: tokio::sync::mpsc::error::SendError<T>) -> Self {
+impl<T> From<crate::platform::mpsc::error::SendError<T>> for Error {
+    fn from(e: crate::platform::mpsc::error::SendError<T>) -> Self {
         Error::Error(e.to_string())
     }
 }
 
-impl<T> From<tokio::sync::mpsc::error::TrySendError<T>> for Error {
-    fn from(e: tokio::sync::mpsc::error::TrySendError<T>) -> Self {
+impl<T> From<crate::platform::mpsc::error::TrySendError<T>> for Error {
+    fn from(e: crate::platform::mpsc::error::TrySendError<T>) -> Self {
         Error::Error(e.to_string())
     }
 }

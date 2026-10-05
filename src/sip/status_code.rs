@@ -1,3 +1,4 @@
+use crate::prelude::*;
 use crate::sip::Error;
 
 #[derive(Debug, PartialEq, Eq, Ord, PartialOrd, Clone, Default)]
@@ -343,14 +344,14 @@ impl From<StatusCode> for u16 {
     }
 }
 
-impl std::convert::TryFrom<(u16, &str)> for StatusCode {
+impl core::convert::TryFrom<(u16, &str)> for StatusCode {
     type Error = Error;
     fn try_from((code, reason): (u16, &str)) -> Result<Self, Self::Error> {
         Ok(Self::from_code(code, reason))
     }
 }
 
-impl std::convert::TryFrom<(&str, &str)> for StatusCode {
+impl core::convert::TryFrom<(&str, &str)> for StatusCode {
     type Error = Error;
     fn try_from((code_str, reason): (&str, &str)) -> Result<Self, Self::Error> {
         let code: u16 = code_str.trim().parse()?;
@@ -358,8 +359,8 @@ impl std::convert::TryFrom<(&str, &str)> for StatusCode {
     }
 }
 
-impl std::fmt::Display for StatusCode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for StatusCode {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{} {}", self.code(), self.text())
     }
 }

@@ -1,3 +1,4 @@
+use crate::prelude::*;
 use super::dialog::{Dialog, DialogInnerRef, DialogState, TerminatedReason, TransactionHandle};
 use super::subscription::ServerSubscriptionDialog;
 use super::DialogId;
@@ -6,8 +7,8 @@ use crate::{
     transaction::transaction::{Transaction, TransactionEvent},
     Result,
 };
-use std::sync::atomic::Ordering;
-use tokio_util::sync::CancellationToken;
+use core::sync::atomic::Ordering;
+use crate::platform::CancellationToken;
 use tracing::{debug, trace, warn};
 
 /// Server-side INVITE Dialog (UAS)
@@ -221,7 +222,7 @@ impl ServerInviteDialog {
     /// ```rust,no_run
     /// # use rsipstack::dialog::server_dialog::ServerInviteDialog;
     /// # use rsipstack::transport::SipAddr;
-    /// # use std::net::{IpAddr, Ipv4Addr};
+    /// # use core::net::{IpAddr, Ipv4Addr};
     /// # fn example() -> rsipstack::Result<()> {
     /// # let dialog: ServerInviteDialog = todo!();
     /// # let local_addr: SipAddr = todo!();

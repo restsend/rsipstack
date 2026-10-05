@@ -135,7 +135,7 @@ async fn test_cleanup_server_invite_completed_keeps_waiting_ack() -> crate::Resu
         finished.is_some(),
         "finished_transactions must contain the response for dropped ServerInvite in Completed"
     );
-    if let Some(Some(crate::sip::SipMessage::Response(r))) = finished.map(|v| v.value().clone()) {
+    if let Some(Some(crate::sip::SipMessage::Response(r))) = finished.map(|v| v.clone()) {
         assert_eq!(r.status_code, StatusCode::ServiceUnavailable);
     } else {
         panic!("finished_transactions entry should be a Response with 503");

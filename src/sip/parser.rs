@@ -1,3 +1,4 @@
+use crate::prelude::*;
 use crate::sip::{
     headers::{make_header, Headers},
     message::{Request, Response, SipMessage},
@@ -63,7 +64,7 @@ pub fn parse_message(data: &[u8]) -> Result<SipMessage, Error> {
         vec![]
     };
 
-    let start_str = std::str::from_utf8(start_line.as_bytes())
+    let start_str = core::str::from_utf8(start_line.as_bytes())
         .map_err(|_| Error::ParseError("SIP start line: invalid UTF-8".into()))?;
 
     if start_str.starts_with("SIP/") {
@@ -160,7 +161,7 @@ impl<'a> Iterator for SplitCrLf<'a> {
 
         self.pos = next_pos;
         let slice = &self.data[start..end];
-        std::str::from_utf8(slice).ok()
+        core::str::from_utf8(slice).ok()
     }
 }
 

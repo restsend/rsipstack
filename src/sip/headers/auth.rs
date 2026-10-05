@@ -1,3 +1,4 @@
+use crate::prelude::*;
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
 pub enum Algorithm {
     Md5,
@@ -9,8 +10,8 @@ pub enum Algorithm {
     Sha512Sess,
 }
 
-impl std::fmt::Display for Algorithm {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Algorithm {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Md5 => write!(f, "MD5"),
             Self::Md5Sess => write!(f, "MD5-sess"),
@@ -22,14 +23,14 @@ impl std::fmt::Display for Algorithm {
     }
 }
 
-impl std::str::FromStr for Algorithm {
+impl core::str::FromStr for Algorithm {
     type Err = crate::sip::Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Algorithm::try_from(s)
     }
 }
 
-impl std::convert::TryFrom<&str> for Algorithm {
+impl core::convert::TryFrom<&str> for Algorithm {
     type Error = crate::sip::Error;
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         match s.trim() {
@@ -53,8 +54,8 @@ pub enum Qop {
     AuthInt,
 }
 
-impl std::fmt::Display for Qop {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Qop {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Auth => write!(f, "auth"),
             Self::AuthInt => write!(f, "auth-int"),
@@ -62,14 +63,14 @@ impl std::fmt::Display for Qop {
     }
 }
 
-impl std::str::FromStr for Qop {
+impl core::str::FromStr for Qop {
     type Err = crate::sip::Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Qop::try_from(s)
     }
 }
 
-impl std::convert::TryFrom<&str> for Qop {
+impl core::convert::TryFrom<&str> for Qop {
     type Error = crate::sip::Error;
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         match s.trim() {
@@ -86,8 +87,8 @@ pub enum AuthQop {
     AuthInt { cnonce: String, nc: u8 },
 }
 
-impl std::fmt::Display for AuthQop {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for AuthQop {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Auth { cnonce, nc } => {
                 write!(f, "qop=\"auth\", nc={:08}, cnonce=\"{}\"", nc, cnonce)
@@ -106,8 +107,8 @@ pub enum Scheme {
     Other(String),
 }
 
-impl std::fmt::Display for Scheme {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Scheme {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Digest => write!(f, "Digest"),
             Self::Other(s) => write!(f, "{}", s),
@@ -115,14 +116,14 @@ impl std::fmt::Display for Scheme {
     }
 }
 
-impl std::str::FromStr for Scheme {
+impl core::str::FromStr for Scheme {
     type Err = crate::sip::Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Scheme::try_from(s)
     }
 }
 
-impl std::convert::TryFrom<&str> for Scheme {
+impl core::convert::TryFrom<&str> for Scheme {
     type Error = crate::sip::Error;
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         match s.trim() {
@@ -132,7 +133,7 @@ impl std::convert::TryFrom<&str> for Scheme {
     }
 }
 
-impl std::convert::TryFrom<String> for Scheme {
+impl core::convert::TryFrom<String> for Scheme {
     type Error = crate::sip::Error;
     fn try_from(s: String) -> Result<Self, Self::Error> {
         Scheme::try_from(s.as_str())

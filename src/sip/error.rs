@@ -1,4 +1,6 @@
-use std::{error::Error as StdError, fmt};
+use crate::prelude::*;
+use core::error::Error as StdError;
+use core::fmt;
 
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub struct TokenizerError {
@@ -74,20 +76,20 @@ impl From<TokenizerError> for Error {
     }
 }
 
-impl From<std::str::Utf8Error> for Error {
-    fn from(e: std::str::Utf8Error) -> Self {
+impl From<core::str::Utf8Error> for Error {
+    fn from(e: core::str::Utf8Error) -> Self {
         Self::Utf8Error(e.to_string())
     }
 }
 
-impl From<std::num::ParseIntError> for Error {
-    fn from(e: std::num::ParseIntError) -> Self {
+impl From<core::num::ParseIntError> for Error {
+    fn from(e: core::num::ParseIntError) -> Self {
         Self::ParseError(e.to_string())
     }
 }
 
-impl From<std::net::AddrParseError> for Error {
-    fn from(e: std::net::AddrParseError) -> Self {
+impl From<core::net::AddrParseError> for Error {
+    fn from(e: core::net::AddrParseError) -> Self {
         Self::ParseError(e.to_string())
     }
 }

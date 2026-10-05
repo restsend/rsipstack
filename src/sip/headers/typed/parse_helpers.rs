@@ -1,3 +1,4 @@
+use crate::prelude::*;
 use crate::sip::{
     uri::{parse_params, parse_uri, Param, Uri},
     Error,
@@ -140,7 +141,7 @@ mod tests {
         assert_eq!(result.2.len(), 1);
     }
 
-    // ── 无括号、纯 host（无 scheme、无 @、无 ';'） ────────────────────────────
+    // ── no brackets, bare host (no scheme, no @, no ';') ──────────────────────────
 
     #[test]
     fn test_no_brackets_no_params_host_only() {

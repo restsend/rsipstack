@@ -1,3 +1,4 @@
+use crate::prelude::*;
 use super::tokenizers::AuthTokenizer;
 use crate::sip::headers::auth::{Algorithm, Qop, Scheme};
 use crate::sip::{Error, Header};
@@ -49,8 +50,8 @@ impl WwwAuthenticate {
     }
 }
 
-impl std::fmt::Display for WwwAuthenticate {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for WwwAuthenticate {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{} realm=\"{}\"", self.scheme, self.realm)?;
         if let Some(d) = &self.domain {
             write!(f, ", domain=\"{}\"", d)?;
@@ -75,13 +76,13 @@ impl std::fmt::Display for WwwAuthenticate {
     }
 }
 
-impl std::convert::From<WwwAuthenticate> for String {
+impl core::convert::From<WwwAuthenticate> for String {
     fn from(w: WwwAuthenticate) -> String {
         w.to_string()
     }
 }
 
-impl std::convert::From<WwwAuthenticate> for Header {
+impl core::convert::From<WwwAuthenticate> for Header {
     fn from(w: WwwAuthenticate) -> Header {
         Header::WwwAuthenticate(crate::sip::headers::untyped::WwwAuthenticate::new(
             w.to_string(),

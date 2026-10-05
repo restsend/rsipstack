@@ -1,3 +1,4 @@
+use crate::prelude::*;
 use crate::sip::{uri::Param, Error, Header, Uri};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -86,8 +87,8 @@ impl Contact {
     }
 }
 
-impl std::fmt::Display for Contact {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Contact {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         if let Some(crate::sip::uri::Scheme::Other(ref s)) = self.uri.scheme {
             if s == "*" {
                 return write!(f, "*");
@@ -104,7 +105,7 @@ impl std::fmt::Display for Contact {
     }
 }
 
-impl std::convert::From<Uri> for Contact {
+impl core::convert::From<Uri> for Contact {
     fn from(uri: Uri) -> Self {
         Self {
             display_name: None,
@@ -114,19 +115,19 @@ impl std::convert::From<Uri> for Contact {
     }
 }
 
-impl std::convert::From<Contact> for String {
+impl core::convert::From<Contact> for String {
     fn from(c: Contact) -> String {
         c.to_string()
     }
 }
 
-impl std::convert::From<Contact> for Header {
+impl core::convert::From<Contact> for Header {
     fn from(c: Contact) -> Header {
         Header::Contact(crate::sip::headers::untyped::Contact::new(c.to_string()))
     }
 }
 
-impl std::convert::From<Contact> for crate::sip::headers::untyped::Contact {
+impl core::convert::From<Contact> for crate::sip::headers::untyped::Contact {
     fn from(c: Contact) -> crate::sip::headers::untyped::Contact {
         crate::sip::headers::untyped::Contact::new(c.to_string())
     }

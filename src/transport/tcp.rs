@@ -10,7 +10,7 @@ use crate::{
 };
 use std::{fmt, sync::Arc};
 use tokio::net::TcpStream;
-use tokio_util::sync::CancellationToken;
+use crate::platform::CancellationToken;
 use tracing::debug;
 
 type TcpInner =

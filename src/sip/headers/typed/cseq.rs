@@ -1,3 +1,4 @@
+use crate::prelude::*;
 use super::tokenizers::CseqTokenizer;
 use crate::sip::{Error, Header, Method};
 
@@ -19,25 +20,25 @@ impl CSeq {
     }
 }
 
-impl std::fmt::Display for CSeq {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for CSeq {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{} {}", self.seq, self.method)
     }
 }
 
-impl std::convert::From<(u32, Method)> for CSeq {
+impl core::convert::From<(u32, Method)> for CSeq {
     fn from((seq, method): (u32, Method)) -> Self {
         CSeq { seq, method }
     }
 }
 
-impl std::convert::From<CSeq> for String {
+impl core::convert::From<CSeq> for String {
     fn from(c: CSeq) -> String {
         c.to_string()
     }
 }
 
-impl std::convert::From<CSeq> for Header {
+impl core::convert::From<CSeq> for Header {
     fn from(c: CSeq) -> Header {
         Header::CSeq(crate::sip::headers::untyped::CSeq::new(c.to_string()))
     }

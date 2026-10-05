@@ -12,6 +12,7 @@ use crate::transaction::{endpoint::EndpointBuilder, key::TransactionRole};
 use crate::transport::TransportLayer;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio_util::sync::CancellationToken;
+use std::sync::Arc;
 
 /// Test helper to create a mock INVITE request
 pub fn create_invite_request(from_tag: &str, to_tag: &str, call_id: &str) -> Request {
@@ -68,7 +69,7 @@ pub async fn create_test_endpoint() -> crate::Result<crate::transaction::endpoin
 
     let udp_conn = crate::transport::udp::UdpConnection::attach(
         crate::transport::udp::UdpInner {
-            conn: tokio_socket,
+            conn: Arc::new(tokio_socket),
             addr: crate::transport::SipAddr::from(local_addr),
         },
         None,

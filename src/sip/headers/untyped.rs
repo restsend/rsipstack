@@ -1,18 +1,19 @@
+use crate::prelude::*;
 use crate::sip::Error;
 
 use super::typed;
 use super::Header;
 
 pub trait UntypedHeader<'a>:
-    std::fmt::Debug
-    + std::fmt::Display
-    + std::cmp::PartialEq
-    + std::cmp::Eq
-    + std::clone::Clone
-    + std::convert::From<String>
-    + std::convert::Into<String>
-    + std::convert::From<&'a str>
-    + std::convert::Into<Header>
+    core::fmt::Debug
+    + core::fmt::Display
+    + core::cmp::PartialEq
+    + core::cmp::Eq
+    + core::clone::Clone
+    + core::convert::From<String>
+    + core::convert::Into<String>
+    + core::convert::From<&'a str>
+    + core::convert::Into<Header>
 {
     fn new(value: impl Into<String>) -> Self;
     fn value(&self) -> &str;
@@ -20,7 +21,7 @@ pub trait UntypedHeader<'a>:
 }
 
 pub trait ToTypedHeader<'a>:
-    UntypedHeader<'a> + std::convert::TryInto<Self::Typed, Error = Error>
+    UntypedHeader<'a> + core::convert::TryInto<Self::Typed, Error = Error>
 {
     type Typed: typed::TypedHeader<'a> + Into<Self>;
 
@@ -49,28 +50,28 @@ macro_rules! untyped_header {
             }
         }
 
-        impl std::fmt::Display for $name {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        impl core::fmt::Display for $name {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 write!(f, "{}: {}", $display, self.0)
             }
         }
 
-        impl std::convert::From<String> for $name {
+        impl core::convert::From<String> for $name {
             fn from(s: String) -> Self {
                 Self(s)
             }
         }
-        impl<'a> std::convert::From<&'a str> for $name {
+        impl<'a> core::convert::From<&'a str> for $name {
             fn from(s: &'a str) -> Self {
                 Self(s.to_string())
             }
         }
-        impl std::convert::From<$name> for String {
+        impl core::convert::From<$name> for String {
             fn from(s: $name) -> String {
                 s.0
             }
         }
-        impl std::convert::From<$name> for Header {
+        impl core::convert::From<$name> for Header {
             fn from(s: $name) -> Header {
                 $variant(s)
             }
@@ -284,7 +285,7 @@ impl SessionId {
     }
 }
 
-impl std::convert::From<crate::sip::Uri> for ReferTo {
+impl core::convert::From<crate::sip::Uri> for ReferTo {
     fn from(uri: crate::sip::Uri) -> Self {
         Self(format!("<{}>", uri))
     }
@@ -303,27 +304,27 @@ impl CallId {
         self.0 = new_value.into();
     }
 }
-impl std::fmt::Display for CallId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for CallId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "Call-ID: {}", self.0)
     }
 }
-impl std::convert::From<String> for CallId {
+impl core::convert::From<String> for CallId {
     fn from(s: String) -> Self {
         Self(s)
     }
 }
-impl<'a> std::convert::From<&'a str> for CallId {
+impl<'a> core::convert::From<&'a str> for CallId {
     fn from(s: &'a str) -> Self {
         Self(s.to_string())
     }
 }
-impl std::convert::From<CallId> for String {
+impl core::convert::From<CallId> for String {
     fn from(s: CallId) -> String {
         s.0
     }
 }
-impl std::convert::From<CallId> for Header {
+impl core::convert::From<CallId> for Header {
     fn from(s: CallId) -> Header {
         Header::CallId(s)
     }
@@ -353,27 +354,27 @@ impl Contact {
         self.0 = new_value.into();
     }
 }
-impl std::fmt::Display for Contact {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Contact {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "Contact: {}", self.0)
     }
 }
-impl std::convert::From<String> for Contact {
+impl core::convert::From<String> for Contact {
     fn from(s: String) -> Self {
         Self(s)
     }
 }
-impl<'a> std::convert::From<&'a str> for Contact {
+impl<'a> core::convert::From<&'a str> for Contact {
     fn from(s: &'a str) -> Self {
         Self(s.to_string())
     }
 }
-impl std::convert::From<Contact> for String {
+impl core::convert::From<Contact> for String {
     fn from(s: Contact) -> String {
         s.0
     }
 }
-impl std::convert::From<Contact> for Header {
+impl core::convert::From<Contact> for Header {
     fn from(s: Contact) -> Header {
         Header::Contact(s)
     }
@@ -406,27 +407,27 @@ impl From {
         self.typed().map(|t: typed::From| t.uri)
     }
 }
-impl std::fmt::Display for From {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for From {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "From: {}", self.0)
     }
 }
-impl std::convert::From<String> for From {
+impl core::convert::From<String> for From {
     fn from(s: String) -> Self {
         Self(s)
     }
 }
-impl<'a> std::convert::From<&'a str> for From {
+impl<'a> core::convert::From<&'a str> for From {
     fn from(s: &'a str) -> Self {
         Self(s.to_string())
     }
 }
-impl std::convert::From<From> for String {
+impl core::convert::From<From> for String {
     fn from(s: From) -> String {
         s.0
     }
 }
-impl std::convert::From<From> for Header {
+impl core::convert::From<From> for Header {
     fn from(s: From) -> Header {
         Header::From(s)
     }
@@ -450,7 +451,7 @@ impl From {
 impl<'a> ToTypedHeader<'a> for From {
     type Typed = typed::From;
 }
-impl std::convert::TryInto<typed::From> for From {
+impl core::convert::TryInto<typed::From> for From {
     type Error = Error;
     fn try_into(self) -> Result<typed::From, Error> {
         typed::From::parse(self.0.trim())
@@ -473,27 +474,27 @@ impl To {
         self.typed().map(|t: typed::To| t.uri)
     }
 }
-impl std::fmt::Display for To {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for To {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "To: {}", self.0)
     }
 }
-impl std::convert::From<String> for To {
+impl core::convert::From<String> for To {
     fn from(s: String) -> Self {
         Self(s)
     }
 }
-impl<'a> std::convert::From<&'a str> for To {
+impl<'a> core::convert::From<&'a str> for To {
     fn from(s: &'a str) -> Self {
         Self(s.to_string())
     }
 }
-impl std::convert::From<To> for String {
+impl core::convert::From<To> for String {
     fn from(s: To) -> String {
         s.0
     }
 }
-impl std::convert::From<To> for Header {
+impl core::convert::From<To> for Header {
     fn from(s: To) -> Header {
         Header::To(s)
     }
@@ -537,7 +538,7 @@ impl To {
 impl<'a> ToTypedHeader<'a> for To {
     type Typed = typed::To;
 }
-impl std::convert::TryInto<typed::To> for To {
+impl core::convert::TryInto<typed::To> for To {
     type Error = Error;
     fn try_into(self) -> Result<typed::To, Error> {
         typed::To::parse(self.0.trim())
@@ -612,27 +613,27 @@ impl Via {
     }
 }
 
-impl std::fmt::Display for Via {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Via {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "Via: {}", self.0)
     }
 }
-impl std::convert::From<String> for Via {
+impl core::convert::From<String> for Via {
     fn from(s: String) -> Self {
         Self(s)
     }
 }
-impl<'a> std::convert::From<&'a str> for Via {
+impl<'a> core::convert::From<&'a str> for Via {
     fn from(s: &'a str) -> Self {
         Self(s.to_string())
     }
 }
-impl std::convert::From<Via> for String {
+impl core::convert::From<Via> for String {
     fn from(s: Via) -> String {
         s.0
     }
 }
-impl std::convert::From<Via> for Header {
+impl core::convert::From<Via> for Header {
     fn from(s: Via) -> Header {
         Header::Via(s)
     }
@@ -651,7 +652,7 @@ impl<'a> UntypedHeader<'a> for Via {
 impl<'a> ToTypedHeader<'a> for Via {
     type Typed = typed::Via;
 }
-impl std::convert::TryInto<typed::Via> for Via {
+impl core::convert::TryInto<typed::Via> for Via {
     type Error = Error;
     fn try_into(self) -> Result<typed::Via, Error> {
         typed::Via::parse(self.0.trim())
@@ -661,7 +662,7 @@ impl std::convert::TryInto<typed::Via> for Via {
 impl<'a> ToTypedHeader<'a> for CSeq {
     type Typed = typed::CSeq;
 }
-impl std::convert::TryInto<typed::CSeq> for CSeq {
+impl core::convert::TryInto<typed::CSeq> for CSeq {
     type Error = Error;
     fn try_into(self) -> Result<typed::CSeq, Error> {
         typed::CSeq::parse(self.0.trim())
@@ -695,19 +696,19 @@ impl CSeq {
     }
 }
 
-impl std::convert::From<u32> for ContentLength {
+impl core::convert::From<u32> for ContentLength {
     fn from(n: u32) -> Self {
         Self(n.to_string())
     }
 }
 
-impl std::convert::From<u32> for Expires {
+impl core::convert::From<u32> for Expires {
     fn from(n: u32) -> Self {
         Self(n.to_string())
     }
 }
 
-impl std::convert::From<u32> for MaxForwards {
+impl core::convert::From<u32> for MaxForwards {
     fn from(n: u32) -> Self {
         Self(n.to_string())
     }
@@ -716,7 +717,7 @@ impl std::convert::From<u32> for MaxForwards {
 impl<'a> ToTypedHeader<'a> for WwwAuthenticate {
     type Typed = typed::WwwAuthenticate;
 }
-impl std::convert::TryInto<typed::WwwAuthenticate> for WwwAuthenticate {
+impl core::convert::TryInto<typed::WwwAuthenticate> for WwwAuthenticate {
     type Error = Error;
     fn try_into(self) -> Result<typed::WwwAuthenticate, Error> {
         typed::WwwAuthenticate::parse(self.0.trim())
@@ -726,7 +727,7 @@ impl std::convert::TryInto<typed::WwwAuthenticate> for WwwAuthenticate {
 impl<'a> ToTypedHeader<'a> for ProxyAuthenticate {
     type Typed = typed::ProxyAuthenticate;
 }
-impl std::convert::TryInto<typed::ProxyAuthenticate> for ProxyAuthenticate {
+impl core::convert::TryInto<typed::ProxyAuthenticate> for ProxyAuthenticate {
     type Error = Error;
     fn try_into(self) -> Result<typed::ProxyAuthenticate, Error> {
         typed::ProxyAuthenticate::parse(self.0.trim())
@@ -736,7 +737,7 @@ impl std::convert::TryInto<typed::ProxyAuthenticate> for ProxyAuthenticate {
 impl<'a> ToTypedHeader<'a> for Route {
     type Typed = typed::Route;
 }
-impl std::convert::TryInto<typed::Route> for Route {
+impl core::convert::TryInto<typed::Route> for Route {
     type Error = Error;
     fn try_into(self) -> Result<typed::Route, Error> {
         typed::Route::parse(self.0.trim())
@@ -746,7 +747,7 @@ impl std::convert::TryInto<typed::Route> for Route {
 impl<'a> ToTypedHeader<'a> for RecordRoute {
     type Typed = typed::RecordRoute;
 }
-impl std::convert::TryInto<typed::RecordRoute> for RecordRoute {
+impl core::convert::TryInto<typed::RecordRoute> for RecordRoute {
     type Error = Error;
     fn try_into(self) -> Result<typed::RecordRoute, Error> {
         typed::RecordRoute::parse(self.0.trim())
@@ -756,7 +757,7 @@ impl std::convert::TryInto<typed::RecordRoute> for RecordRoute {
 impl<'a> ToTypedHeader<'a> for Contact {
     type Typed = typed::Contact;
 }
-impl std::convert::TryInto<typed::Contact> for Contact {
+impl core::convert::TryInto<typed::Contact> for Contact {
     type Error = Error;
     fn try_into(self) -> Result<typed::Contact, Error> {
         typed::Contact::parse(self.0.trim())
@@ -764,27 +765,27 @@ impl std::convert::TryInto<typed::Contact> for Contact {
 }
 
 // Typed -> Untyped conversions required by ToTypedHeader::Typed: Into<Self> bound
-impl std::convert::From<typed::CSeq> for CSeq {
+impl core::convert::From<typed::CSeq> for CSeq {
     fn from(c: typed::CSeq) -> Self {
         Self(c.to_string())
     }
 }
-impl std::convert::From<typed::WwwAuthenticate> for WwwAuthenticate {
+impl core::convert::From<typed::WwwAuthenticate> for WwwAuthenticate {
     fn from(w: typed::WwwAuthenticate) -> Self {
         Self(w.to_string())
     }
 }
-impl std::convert::From<typed::ProxyAuthenticate> for ProxyAuthenticate {
+impl core::convert::From<typed::ProxyAuthenticate> for ProxyAuthenticate {
     fn from(p: typed::ProxyAuthenticate) -> Self {
         Self(p.to_string())
     }
 }
-impl std::convert::From<typed::Route> for Route {
+impl core::convert::From<typed::Route> for Route {
     fn from(r: typed::Route) -> Self {
         Self(r.to_string())
     }
 }
-impl std::convert::From<typed::RecordRoute> for RecordRoute {
+impl core::convert::From<typed::RecordRoute> for RecordRoute {
     fn from(r: typed::RecordRoute) -> Self {
         Self(r.to_string())
     }
@@ -793,13 +794,13 @@ impl std::convert::From<typed::RecordRoute> for RecordRoute {
 impl<'a> ToTypedHeader<'a> for HistoryInfo {
     type Typed = typed::HistoryInfo;
 }
-impl std::convert::TryInto<typed::HistoryInfo> for HistoryInfo {
+impl core::convert::TryInto<typed::HistoryInfo> for HistoryInfo {
     type Error = Error;
     fn try_into(self) -> Result<typed::HistoryInfo, Error> {
         typed::HistoryInfo::parse(&self.0)
     }
 }
-impl std::convert::From<typed::HistoryInfo> for HistoryInfo {
+impl core::convert::From<typed::HistoryInfo> for HistoryInfo {
     fn from(h: typed::HistoryInfo) -> Self {
         Self(h.to_string())
     }

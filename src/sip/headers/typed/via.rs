@@ -1,6 +1,7 @@
+use crate::prelude::*;
 use crate::sip::uri::{Branch, HostWithPort, Received};
 use crate::sip::{uri::Param, Error, Header, Transport, Uri, Version};
-use std::net::IpAddr;
+use core::net::IpAddr;
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Via {
     pub version: Version,
@@ -103,8 +104,8 @@ impl Via {
     }
 }
 
-impl std::fmt::Display for Via {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Via {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "SIP/2.0/{} {}", self.transport, self.uri.host_with_port)?;
         for p in &self.params {
             write!(f, "{}", p)?;
@@ -113,19 +114,19 @@ impl std::fmt::Display for Via {
     }
 }
 
-impl std::convert::From<Via> for String {
+impl core::convert::From<Via> for String {
     fn from(v: Via) -> String {
         v.to_string()
     }
 }
 
-impl std::convert::From<Via> for Header {
+impl core::convert::From<Via> for Header {
     fn from(v: Via) -> Header {
         Header::Via(crate::sip::headers::untyped::Via::new(v.to_string()))
     }
 }
 
-impl std::convert::From<Via> for crate::sip::headers::untyped::Via {
+impl core::convert::From<Via> for crate::sip::headers::untyped::Via {
     fn from(v: Via) -> crate::sip::headers::untyped::Via {
         crate::sip::headers::untyped::Via::new(v.to_string())
     }

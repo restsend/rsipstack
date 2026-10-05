@@ -1,3 +1,4 @@
+use crate::prelude::*;
 use crate::sip::{prelude::HeadersExt, Request, Response};
 use crate::{
     transaction::{key::TransactionRole, transaction::Transaction},
@@ -48,7 +49,7 @@ mod tests;
 /// - During early dialog establishment, `remote_tag` may be an empty string
 /// - Dialog ID remains constant throughout the dialog lifetime
 /// - Used for managing and routing SIP messages at the dialog layer
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct DialogId {
     pub call_id: String,
     pub local_tag: String,
@@ -120,13 +121,13 @@ impl TryFrom<(&Response, TransactionRole)> for DialogId {
 impl TryFrom<&Transaction> for DialogId {
     type Error = crate::Error;
 
-    fn try_from(value: &Transaction) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &Transaction) -> core::result::Result<Self, Self::Error> {
         DialogId::try_from((&value.original, value.role()))
     }
 }
 
-impl std::fmt::Display for DialogId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for DialogId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{}-{}-{}", self.call_id, self.local_tag, self.remote_tag)
     }
 }

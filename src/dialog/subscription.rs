@@ -1,9 +1,10 @@
+use crate::prelude::*;
 use super::dialog::{DialogInnerRef, DialogState, TerminatedReason, TransactionHandle};
 use super::DialogId;
 use crate::sip::{Header, Method, StatusCode};
 use crate::transaction::transaction::Transaction;
 use crate::Result;
-use tokio_util::sync::CancellationToken;
+use crate::platform::CancellationToken;
 
 #[derive(Clone)]
 pub struct ClientSubscriptionDialog {

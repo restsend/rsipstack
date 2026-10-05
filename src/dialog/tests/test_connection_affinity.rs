@@ -149,7 +149,7 @@ async fn create_endpoint_with_inspector(
     };
     let udp_conn = UdpConnection::attach(
         UdpInner {
-            conn: local,
+            conn: Arc::new(local),
             addr: local_addr,
         },
         None,
@@ -462,7 +462,7 @@ async fn test_restored_dialog_falls_back_to_initial_via_dialback() {
     let dummy_sock = dummy.local_addr().unwrap();
     let udp_conn = UdpConnection::attach(
         UdpInner {
-            conn: dummy,
+            conn: Arc::new(dummy),
             addr: SipAddr {
                 r#type: Some(Transport::Udp),
                 addr: crate::sip::HostWithPort {

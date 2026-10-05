@@ -1,17 +1,3 @@
-// A SIP stack in Rust
-
-#![allow(
-    clippy::result_large_err,
-    clippy::too_many_arguments,
-    clippy::module_inception,
-    clippy::wrong_self_convention,
-    clippy::large_enum_variant
-)]
-// The legacy ServerInviteDialog / ClientInviteDialog wrappers are retained
-// (deprecated) only for compatibility; internal code and the From/TryFrom
-// conversions keep using them during the transition to InviteDialog.
-#![allow(deprecated)]
-
 //! # RSIPStack - A SIP Stack Implementation in Rust
 //!
 //! RSIPStack is a comprehensive Session Initiation Protocol (SIP) implementation
@@ -240,11 +226,51 @@
 //! * SIP proxy server
 //! * WebSocket SIP gateway
 //! * Load testing tools
+// A SIP stack in Rust
+//
+// no_std-capable: embedded targets build with `--no-default-features` and a
+// platform backend (embassy, WP3); host builds use the default `std` feature
+// (tokio backend).
+#![cfg_attr(not(feature = "std"), no_std)]
+#![allow(
+    clippy::result_large_err,
+    clippy::too_many_arguments,
+    clippy::module_inception,
+    clippy::wrong_self_convention,
+    clippy::large_enum_variant
+)]
+// The legacy ServerInviteDialog / ClientInviteDialog wrappers are retained
+// (deprecated) only for compatibility; internal code and the From/TryFrom
+// conversions keep using them during the transition to InviteDialog.
+#![allow(deprecated)]
 
-pub type Result<T> = std::result::Result<T, crate::error::Error>;
+// `alloc` is a sysroot crate; naming it in std builds is valid and lets the
+// codebase share one set of alloc imports across std/no_std.
+extern crate alloc;
+
+
+/// Crate-internal prelude: fills the no_std gaps with `alloc`/`core` items.
+/// In std builds the std prelude already provides most of these; the glob
+/// import here is harmless (same types) and only activates under no_std.
+pub mod prelude {
+    extern crate alloc;
+    pub use alloc::collections::{BTreeMap, BTreeSet};
+    pub use alloc::string::String;
+    pub use alloc::borrow::{Cow, ToOwned};
+    pub use alloc::boxed::Box;
+    pub use alloc::sync::{Arc, Weak};
+    pub use alloc::vec::Vec;
+    pub use core::net::{IpAddr, Ipv4Addr, SocketAddr};
+    pub use core::time::Duration;
+    #[cfg(not(feature = "std"))]
+    pub use alloc::{format, string::ToString, vec};
+}
+
+pub type Result<T> = core::result::Result<T, crate::error::Error>;
 pub use crate::error::Error;
 pub mod dialog;
 pub mod error;
+pub mod platform;
 pub mod resolver;
 pub mod transaction;
 pub mod transport;

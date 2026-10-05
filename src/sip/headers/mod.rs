@@ -2,6 +2,7 @@ pub mod auth;
 pub mod typed;
 pub mod untyped;
 pub use untyped::*;
+use crate::prelude::*;
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Header {
     Accept(Accept),
@@ -70,8 +71,8 @@ pub enum Header {
     HistoryInfo(HistoryInfo),
 }
 
-impl std::fmt::Display for Header {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Header {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Accept(inner) => write!(f, "{}", inner),
             Self::AcceptEncoding(inner) => write!(f, "{}", inner),
@@ -295,7 +296,7 @@ impl Headers {
 
     pub fn unique_push(&mut self, h: Header) {
         self.0
-            .retain(|s| std::mem::discriminant(s) != std::mem::discriminant(&h));
+            .retain(|s| core::mem::discriminant(s) != core::mem::discriminant(&h));
         self.push(h);
     }
 
@@ -352,32 +353,32 @@ impl Headers {
 
 impl IntoIterator for Headers {
     type Item = Header;
-    type IntoIter = std::vec::IntoIter<Header>;
+    type IntoIter = alloc::vec::IntoIter<Header>;
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
     }
 }
 
-impl std::convert::From<Header> for Headers {
+impl core::convert::From<Header> for Headers {
     fn from(h: Header) -> Self {
         Self(vec![h])
     }
 }
 
-impl std::convert::From<Vec<Header>> for Headers {
+impl core::convert::From<Vec<Header>> for Headers {
     fn from(v: Vec<Header>) -> Self {
         Self(v)
     }
 }
 
-impl std::convert::From<Headers> for Vec<Header> {
+impl core::convert::From<Headers> for Vec<Header> {
     fn from(h: Headers) -> Vec<Header> {
         h.0
     }
 }
 
-impl std::fmt::Display for Headers {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Headers {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         if self.is_empty() {
             return write!(f, "");
         }

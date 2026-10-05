@@ -31,10 +31,8 @@ async fn test_endpoint_serve() {
         } => {
         }
         _ = async {
-            while let Some(_) = incoming.recv().await {
-                // Handle transaction
-                break; // Exit for example
-            }
+            // Handle the transaction; this example exits on the first one.
+            let _ = incoming.recv().await;
         } => {
             assert!(false, "must not reach here");
         }

@@ -1,3 +1,4 @@
+use crate::prelude::*;
 use super::tokenizers::AuthTokenizer;
 use crate::sip::headers::auth::{Algorithm, Qop, Scheme};
 use crate::sip::{Error, Header};
@@ -49,8 +50,8 @@ impl ProxyAuthenticate {
     }
 }
 
-impl std::fmt::Display for ProxyAuthenticate {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for ProxyAuthenticate {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{} realm=\"{}\"", self.scheme, self.realm)?;
         if let Some(d) = &self.domain {
             write!(f, ", domain=\"{}\"", d)?;
@@ -75,13 +76,13 @@ impl std::fmt::Display for ProxyAuthenticate {
     }
 }
 
-impl std::convert::From<ProxyAuthenticate> for String {
+impl core::convert::From<ProxyAuthenticate> for String {
     fn from(p: ProxyAuthenticate) -> String {
         p.to_string()
     }
 }
 
-impl std::convert::From<ProxyAuthenticate> for Header {
+impl core::convert::From<ProxyAuthenticate> for Header {
     fn from(p: ProxyAuthenticate) -> Header {
         Header::ProxyAuthenticate(crate::sip::headers::untyped::ProxyAuthenticate::new(
             p.to_string(),

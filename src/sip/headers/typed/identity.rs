@@ -1,3 +1,4 @@
+use crate::prelude::*;
 use crate::sip::{Error, Header};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -101,8 +102,8 @@ fn split_identity_params(s: &str) -> Vec<String> {
     parts
 }
 
-impl std::fmt::Display for Identity {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Identity {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "Identity: {}", self.token)?;
         write!(f, ";alg={}", self.alg)?;
         if let Some(ppt) = &self.ppt {
@@ -119,13 +120,13 @@ impl std::fmt::Display for Identity {
     }
 }
 
-impl std::convert::From<Identity> for String {
+impl core::convert::From<Identity> for String {
     fn from(i: Identity) -> String {
         i.to_string()
     }
 }
 
-impl std::convert::From<Identity> for Header {
+impl core::convert::From<Identity> for Header {
     fn from(i: Identity) -> Header {
         Header::Identity(crate::sip::headers::untyped::Identity::new(format!(
             "{};alg={}{};info=<{}>{}",

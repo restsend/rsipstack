@@ -1,3 +1,4 @@
+use crate::prelude::*;
 use crate::sip::{Error, Header, Method};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -17,26 +18,26 @@ impl Allow {
     }
 }
 
-impl std::fmt::Display for Allow {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Allow {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let s: Vec<String> = self.methods.iter().map(|m| m.to_string()).collect();
         write!(f, "{}", s.join(", "))
     }
 }
 
-impl std::convert::From<Vec<Method>> for Allow {
+impl core::convert::From<Vec<Method>> for Allow {
     fn from(methods: Vec<Method>) -> Self {
         Allow { methods }
     }
 }
 
-impl std::convert::From<Allow> for String {
+impl core::convert::From<Allow> for String {
     fn from(a: Allow) -> String {
         a.to_string()
     }
 }
 
-impl std::convert::From<Allow> for Header {
+impl core::convert::From<Allow> for Header {
     fn from(a: Allow) -> Header {
         Header::Allow(crate::sip::headers::untyped::Allow::new(a.to_string()))
     }

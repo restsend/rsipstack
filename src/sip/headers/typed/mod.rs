@@ -1,14 +1,15 @@
+use crate::prelude::*;
 use crate::sip::{Error, Header};
 
 mod parse_helpers;
 pub mod tokenizers;
 
 pub trait TypedHeader<'a>:
-    std::fmt::Debug
-    + std::fmt::Display
-    + std::cmp::PartialEq
-    + std::cmp::Eq
-    + std::clone::Clone
+    core::fmt::Debug
+    + core::fmt::Display
+    + core::cmp::PartialEq
+    + core::cmp::Eq
+    + core::clone::Clone
     + Into<String>
     + Into<Header>
 {

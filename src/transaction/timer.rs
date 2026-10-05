@@ -1,11 +1,8 @@
-use parking_lot::{Condvar, Mutex, MutexGuard};
-use std::{
-    collections::{BTreeMap, HashMap},
-    sync::atomic::{AtomicU64, Ordering},
-    time::{Duration, Instant},
-};
-
-use tokio::sync::Notify;
+use crate::prelude::*;
+use crate::platform::sync::{Mutex, MutexGuard};
+use crate::platform::{Instant, Notify};
+use crate::platform::atomic64::AtomicU64;
+use core::sync::atomic::Ordering;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 struct TimerKey {
@@ -14,7 +11,7 @@ struct TimerKey {
 }
 
 impl Ord for TimerKey {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.execute_at
             .cmp(&other.execute_at)
             .then_with(|| self.task_id.cmp(&other.task_id))
@@ -22,14 +19,13 @@ impl Ord for TimerKey {
 }
 
 impl PartialOrd for TimerKey {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 pub struct Timer<T> {
     state: Mutex<TimerState<T>>,
-    condvar: Condvar,
     notify: Notify,
     last_task_id: AtomicU64,
 }
@@ -38,7 +34,6 @@ impl<T> Timer<T> {
     pub fn new() -> Self {
         Timer {
             state: Mutex::new(TimerState::new()),
-            condvar: Condvar::new(),
             notify: Notify::new(),
             last_task_id: AtomicU64::new(1),
         }
@@ -69,10 +64,8 @@ impl<T> Timer<T> {
         drop(state);
 
         if should_notify {
-            self.condvar.notify_all();
             self.notify.notify_waiters();
         } else {
-            self.condvar.notify_one();
             self.notify.notify_one();
         }
         task_id
@@ -99,10 +92,8 @@ impl<T> Timer<T> {
 
         if removed.is_some() {
             if was_head {
-                self.condvar.notify_all();
                 self.notify.notify_waiters();
             } else {
-                self.condvar.notify_one();
                 self.notify.notify_one();
             }
         }
@@ -138,9 +129,11 @@ impl<T> Timer<T> {
                     let now = Instant::now();
                     let wait_duration = deadline.checked_duration_since(now).unwrap_or_default();
 
-                    tokio::select! {
-                        _ = tokio::time::sleep(wait_duration) => {},
-                        _ = self.notify.notified() => {},
+                    let mut sleep_f = core::pin::pin!(crate::platform::sleep(wait_duration));
+                    let mut notify_f = core::pin::pin!(self.notify.notified());
+                    match crate::platform::select::select2(&mut sleep_f, &mut notify_f).await {
+                        crate::platform::select::Either::A(()) => {}
+                        crate::platform::select::Either::B(()) => {}
                     }
                 }
                 None => {
@@ -161,7 +154,7 @@ impl<T> Timer<T> {
 
 #[test]
 fn test_timer() {
-    use std::time::Duration;
+    use core::time::Duration;
     let timer = Timer::new();
     let now = Instant::now();
     let task_id = timer.timeout_at(now, "task1");
@@ -179,36 +172,40 @@ fn test_timer() {
     assert_eq!(timer.len(), 1);
 }
 
-#[tokio::test]
-async fn wait_for_ready_async_returns_ready() {
-    let timer = Timer::new();
-    timer.timeout(Duration::from_millis(50), "ready");
+#[cfg(all(test, feature = "platform-tokio"))]
+mod tokio_tests {
+    use super::*;
 
-    let ready = tokio::time::timeout(Duration::from_secs(1), timer.wait_for_ready())
-        .await
-        .expect("wait_for_ready_async timed out");
-    assert_eq!(ready, vec!["ready"]);
-}
+    #[tokio::test]
+    async fn wait_for_ready_async_returns_ready() {
+        let timer = Timer::new();
+        timer.timeout(Duration::from_millis(50), "ready");
 
-#[tokio::test]
-async fn wait_for_ready_async_wakes_on_new_timer() {
-    use std::sync::Arc;
+        let ready = tokio::time::timeout(Duration::from_secs(1), timer.wait_for_ready())
+            .await
+            .expect("wait_for_ready_async timed out");
+        assert_eq!(ready, vec!["ready"]);
+    }
 
-    let timer = Arc::new(Timer::new());
-    timer.timeout(Duration::from_secs(5), "late");
+    #[tokio::test]
+    async fn wait_for_ready_async_wakes_on_new_timer() {
+        
+        let timer = Arc::new(Timer::new());
+        timer.timeout(Duration::from_secs(5), "late");
 
-    let worker = Arc::clone(&timer);
-    let wait_handle = tokio::spawn(async move { worker.wait_for_ready().await });
+        let worker = Arc::clone(&timer);
+        let wait_handle = tokio::spawn(async move { worker.wait_for_ready().await });
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    timer.timeout(Duration::from_millis(200), "early");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        timer.timeout(Duration::from_millis(200), "early");
 
-    let ready = tokio::time::timeout(Duration::from_secs(2), wait_handle)
-        .await
-        .expect("wait_for_ready_async task timed out")
-        .expect("wait_for_ready_async task panicked");
+        let ready = tokio::time::timeout(Duration::from_secs(2), wait_handle)
+            .await
+            .expect("wait_for_ready_async task timed out")
+            .expect("wait_for_ready_async task panicked");
 
-    assert_eq!(ready, vec!["early"]);
+        assert_eq!(ready, vec!["early"]);
+    }
 }
 
 impl<T> Timer<T> {
@@ -236,14 +233,14 @@ impl<T> Timer<T> {
 
 struct TimerState<T> {
     tasks: BTreeMap<TimerKey, T>,
-    id_to_tasks: HashMap<u64, Instant>,
+    id_to_tasks: BTreeMap<u64, Instant>,
 }
 
 impl<T> TimerState<T> {
     fn new() -> Self {
         Self {
             tasks: BTreeMap::new(),
-            id_to_tasks: HashMap::new(),
+            id_to_tasks: BTreeMap::new(),
         }
     }
 }

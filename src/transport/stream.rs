@@ -360,7 +360,7 @@ mod tests {
         );
     }
 
-    // ── 基本解码 ──────────────────────────────────────────────────────────────
+    // ── basic decoding ─────────────────────────────────────────────────────────
 
     #[test]
     fn decode_complete_message_no_body() {
@@ -381,7 +381,7 @@ mod tests {
         assert_eq!(buf.len(), 0);
     }
 
-    // ── 分包：header 尚未完整 ─────────────────────────────────────────────────
+    // ── partial packet: header incomplete ──────────────────────────────────
 
     #[test]
     fn decode_returns_none_when_headers_incomplete() {
@@ -396,7 +396,7 @@ mod tests {
         assert_eq!(buf.as_ref(), half);
     }
 
-    // ── 分包：body 尚未完整 ───────────────────────────────────────────────────
+    // ── partial packet: body incomplete ────────────────────────────────────
 
     #[test]
     fn decode_returns_none_when_body_incomplete() {
@@ -413,7 +413,7 @@ mod tests {
         assert_eq!(buf.len(), partial.len());
     }
 
-    // ── 粘包：两条消息连在一起 ────────────────────────────────────────────────
+    // ── coalesced: two messages in one read ────────────────────────────────
 
     #[test]
     fn decode_two_back_to_back_messages() {
@@ -431,7 +431,7 @@ mod tests {
         assert_eq!(buf.len(), 0);
     }
 
-    // ── Content-Length 短格式 'l' ─────────────────────────────────────────────
+    // ── short-form Content-Length ('l') ───────────────────────────────────
 
     #[test]
     fn decode_short_content_length_header() {
@@ -457,7 +457,7 @@ mod tests {
         assert!(matches!(result, Some(SipCodecType::Message(_))));
     }
 
-    // ── Keepalive 帧 ──────────────────────────────────────────────────────────
+    // ── keepalive frame ───────────────────────────────────────────────────────
 
     #[test]
     fn decode_keepalive_request() {
@@ -477,7 +477,7 @@ mod tests {
         assert_eq!(buf.len(), 0);
     }
 
-    // ── 消息过大 ─────────────────────────────────────────────────────────────
+    // ── message too large ─────────────────────────────────────────────────
 
     #[test]
     fn decode_rejects_oversized_buffer() {

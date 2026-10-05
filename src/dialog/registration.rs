@@ -1,3 +1,4 @@
+use crate::prelude::*;
 use super::{
     authenticate::{handle_client_authenticate, Credential},
     DialogId,
@@ -73,7 +74,7 @@ use tracing::debug;
 /// # use rsipstack::dialog::registration::Registration;
 /// # use rsipstack::dialog::authenticate::Credential;
 /// # use rsipstack::transaction::endpoint::Endpoint;
-/// # use std::time::Duration;
+/// # use core::time::Duration;
 /// # async fn example() -> rsipstack::Result<()> {
 /// # let endpoint: Endpoint = todo!();
 /// # let credential: Credential = todo!();
@@ -120,7 +121,7 @@ pub struct Registration {
     /// Outbound proxy — override transport destination while keeping the
     /// domain in SIP headers. Used for NAT traversal with load-balanced
     /// proxy clusters where DNS may resolve to different IPs.
-    pub outbound_proxy: Option<std::net::SocketAddr>,
+    pub outbound_proxy: Option<core::net::SocketAddr>,
     /// Service-Route set (RFC 3608) learned from the last successful
     /// registration `200 OK`. These entries are the proxies the registrar
     /// (e.g. an IMS S-CSCF) wants traversed on subsequent requests; a UA
@@ -258,7 +259,7 @@ impl Registration {
     ///
     /// ```rust,no_run
     /// # use rsipstack::dialog::registration::Registration;
-    /// # use std::time::Duration;
+    /// # use core::time::Duration;
     /// # async fn example() {
     /// # let registration: Registration = todo!();
     /// let expires = registration.expires();
@@ -669,7 +670,7 @@ impl Registration {
     ///
     /// ```rust,no_run
     /// # use rsipstack::dialog::registration::Registration;
-    /// # use std::net::{IpAddr, Ipv4Addr};
+    /// # use core::net::{IpAddr, Ipv4Addr};
     /// # use rsipstack::transport::SipAddr;
     /// # fn example() {
     /// # let local_addr: SipAddr = todo!();
