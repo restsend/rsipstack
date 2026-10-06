@@ -351,3 +351,82 @@ async fn test_cancel_answered_487_sends_no_bye() -> crate::Result<()> {
     token.cancel();
     Ok(())
 }
+
+/// Dropped before any response: Terminated(UacCancel) is reported at once and
+/// nothing is sent while no provisional has arrived (RFC 3261 §9.1). The first
+/// response then gets a CANCEL (180), or an ACK and a BYE (200).
+async fn run_dropped_before_provisional(first: u16) -> crate::Result<()> {
+    let token = CancellationToken::new();
+    let Uac {
+        dialog_layer,
+        option,
+        peer,
+    } = setup(&token).await?;
+    let wait = Duration::from_secs(2);
+
+    let (state_sender, mut states) = unbounded_channel();
+    let invite = tokio::spawn(async move { dialog_layer.do_invite(option, state_sender).await });
+    let (inv, uac) = recv_request(&peer, Method::Invite, wait).await;
+    invite.abort();
+    let _ = invite.await;
+    let terminated = wait_for_state(&mut states, "Terminated", Duration::from_millis(200), |s| {
+        matches!(s, DialogState::Terminated(_, _))
+    })
+    .await;
+    assert!(matches!(
+        terminated,
+        DialogState::Terminated(_, TerminatedReason::UacCancel)
+    ));
+    // Over twice T1: not even an INVITE retransmission.
+    let mut buf = vec![0u8; 4096];
+    let silent = tokio::time::timeout(Duration::from_millis(1100), peer.recv_from(&mut buf)).await;
+    assert!(silent.is_err(), "nothing may be sent before a provisional");
+
+    match first {
+        180 => {
+            reply(&peer, uac, &inv, 180, "Ringing").await;
+            let (cancel, _) = recv_request(&peer, Method::Cancel, wait).await;
+            assert_eq!(cancel.cseq_header()?.seq()?, inv.cseq_header()?.seq()?);
+            reply(&peer, uac, &cancel, 200, "OK").await;
+            reply(&peer, uac, &inv, 487, "Request Terminated").await;
+        }
+        200 => reply(&peer, uac, &inv, 200, "OK").await,
+        _ => reply(&peer, uac, &inv, first, "Busy Here").await,
+    }
+    let (ack, _) = recv_request(&peer, Method::Ack, wait).await;
+    assert_in_dialog(&ack, &inv, "ACK");
+    if first == 200 {
+        let (bye, _) = recv_request(&peer, Method::Bye, wait).await;
+        assert_in_dialog(&bye, &inv, "BYE");
+        reply(&peer, uac, &bye, 200, "OK").await;
+    } else {
+        assert_no_bye(
+            &peer,
+            Duration::from_millis(500),
+            "a call that was not answered",
+        )
+        .await;
+    }
+    assert!(
+        !std::iter::from_fn(|| states.try_recv().ok())
+            .any(|s| matches!(s, DialogState::Terminated(..) | DialogState::Confirmed(..))),
+        "no second Terminated and no Confirmed"
+    );
+    token.cancel();
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_dropped_before_provisional_is_cancelled_after_the_180() -> crate::Result<()> {
+    run_dropped_before_provisional(180).await
+}
+
+#[tokio::test]
+async fn test_dropped_before_provisional_2xx_is_acked_and_byed() -> crate::Result<()> {
+    run_dropped_before_provisional(200).await
+}
+
+#[tokio::test]
+async fn test_dropped_before_provisional_final_failure_is_acked_only() -> crate::Result<()> {
+    run_dropped_before_provisional(486).await
+}
