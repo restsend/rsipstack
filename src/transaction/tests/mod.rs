@@ -5,6 +5,7 @@ use crate::{
 };
 use tokio_util::sync::CancellationToken;
 
+mod test_auto_ack_2xx;
 mod test_before_send;
 mod test_client;
 mod test_endpoint;

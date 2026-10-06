@@ -671,3 +671,97 @@ async fn test_2xx_over_tcp_is_retransmitted_until_the_ack() -> crate::Result<()>
     token.cancel();
     Ok(())
 }
+
+/// An ACK whose CSeq does not match the INVITE (RFC 3261 §13.2.2.4: e.g. a
+/// delayed ACK of an earlier re-INVITE) must not confirm the server INVITE
+/// transaction: the 2xx keeps being retransmitted, and a later ACK with the
+/// matching CSeq still confirms the dialog — without any BYE.
+#[tokio::test]
+async fn test_stale_ack_is_ignored_and_a_valid_ack_still_confirms() -> crate::Result<()> {
+    let token = CancellationToken::new();
+    let (mut states, mut dialogs, peer) = setup(&token, short_timers()).await?;
+
+    peer.send_request(Method::Invite, 1, None).await;
+    let dialog = tokio::time::timeout(Duration::from_secs(2), dialogs.recv())
+        .await
+        .expect("timeout waiting for the server dialog")
+        .unwrap();
+    dialog.accept(None, None)?;
+
+    // The first 200 OK; remember its To tag for the ACKs.
+    let mut buf = vec![0u8; 4096];
+    let to_tag = loop {
+        let Ok(Ok((len, _))) =
+            tokio::time::timeout(Duration::from_secs(2), peer.socket.recv_from(&mut buf)).await
+        else {
+            panic!("timeout waiting for the first 200");
+        };
+        let text = std::str::from_utf8(&buf[..len]).unwrap();
+        if let Ok(SipMessage::Response(resp)) = SipMessage::try_from(text) {
+            if resp.status_code.code() == 200 {
+                break resp
+                    .to_header()?
+                    .tag()?
+                    .expect("the 200 must carry the local tag")
+                    .value()
+                    .to_string();
+            }
+        }
+    };
+
+    // An ACK with a stale CSeq must be ignored: the 2xx keeps being
+    // retransmitted (Timer G must not stop).
+    peer.send_request(Method::Ack, 99, Some(&to_tag)).await;
+    let stale_at = Instant::now();
+    let retransmitted_after_stale = loop {
+        let now = Instant::now();
+        if now >= stale_at + T1X64 / 2 {
+            break None;
+        }
+        let Ok(Ok((len, _))) =
+            tokio::time::timeout(stale_at + T1X64 / 2 - now, peer.socket.recv_from(&mut buf)).await
+        else {
+            break None;
+        };
+        let text = std::str::from_utf8(&buf[..len]).unwrap();
+        if let Ok(SipMessage::Response(resp)) = SipMessage::try_from(text) {
+            if resp.status_code.code() == 200 {
+                break Some(Instant::now());
+            }
+        }
+    };
+    let retransmitted_after_stale = retransmitted_after_stale.expect(
+        "a stale ACK must not confirm the transaction: the 2xx must keep being retransmitted",
+    );
+    assert!(
+        !matches!(dialog.state(), DialogState::Confirmed(_, _)),
+        "a stale ACK must not confirm the dialog, got {}",
+        dialog.state()
+    );
+
+    // The ACK with the matching CSeq confirms; no BYE may follow.
+    peer.send_request(Method::Ack, 1, Some(&to_tag)).await;
+    let messages = peer
+        .collect(Instant::now() + T1X64 + Duration::from_millis(200))
+        .await;
+    assert!(
+        !messages.iter().any(|(_, m)| matches!(
+            m,
+            SipMessage::Request(req) if req.method == Method::Bye
+        )),
+        "a confirmed dialog must not be ended with a BYE"
+    );
+    assert!(
+        dialog.state().is_confirmed(),
+        "the valid ACK must confirm the dialog, got {}",
+        dialog.state()
+    );
+    assert!(
+        !states
+            .try_recv()
+            .is_ok_and(|s| matches!(s, DialogState::Terminated(_, _))),
+        "the dialog must not have been terminated"
+    );
+    token.cancel();
+    Ok(())
+}
