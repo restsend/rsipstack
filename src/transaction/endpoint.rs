@@ -367,7 +367,7 @@ impl EndpointInner {
                     if let Ok(dialog_id) =
                         DialogId::try_from((req, super::key::TransactionRole::Server))
                     {
-                        if let Some(tx_key) = self.waiting_ack.get(&dialog_id).map(|v| v.clone()) {
+                        if let Some(tx_key) = self.waiting_ack.get(&dialog_id) {
                             key = tx_key;
                         }
                     }

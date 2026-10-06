@@ -154,7 +154,7 @@ impl DialogLayer {
     ) -> Result<InviteDialog> {
         let mut id = DialogId::try_from(tx)?;
         if !id.local_tag.is_empty() {
-            let dlg = self.inner.dialogs.get(&id.to_string()).map(|d| d.clone());
+            let dlg = self.inner.dialogs.get(&id.to_string());
             match dlg {
                 Some(Dialog::Invite(dlg)) => return Ok(dlg),
                 _ => {
@@ -222,7 +222,7 @@ impl DialogLayer {
     ) -> Result<ServerSubscriptionDialog> {
         let mut id = DialogId::try_from(tx)?;
         if !id.local_tag.is_empty() {
-            let dlg = self.inner.dialogs.get(&id.to_string()).map(|d| d.clone());
+            let dlg = self.inner.dialogs.get(&id.to_string());
             match dlg {
                 Some(Dialog::ServerSubscription(dlg)) => return Ok(dlg),
                 _ => {
@@ -276,7 +276,7 @@ impl DialogLayer {
     ) -> Result<ServerPublicationDialog> {
         let mut id = DialogId::try_from(tx)?;
         if !id.local_tag.is_empty() {
-            let dlg = self.inner.dialogs.get(&id.to_string()).map(|d| d.clone());
+            let dlg = self.inner.dialogs.get(&id.to_string());
             match dlg {
                 Some(Dialog::ServerPublication(dlg)) => return Ok(dlg),
                 _ => {
@@ -439,7 +439,7 @@ impl DialogLayer {
     }
 
     pub fn get_dialog_with(&self, id: &String) -> Option<Dialog> {
-        self.inner.dialogs.get(id).map(|d| d.clone())
+        self.inner.dialogs.get(id)
     }
     /// Returns all client-side INVITE dialogs (UAC) that share the given Call-ID.
     ///
