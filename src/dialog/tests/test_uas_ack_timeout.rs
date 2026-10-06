@@ -734,6 +734,10 @@ async fn test_stale_ack_is_ignored_and_a_valid_ack_still_confirms() -> crate::Re
         "a stale ACK must not confirm the transaction: the 2xx must keep being retransmitted",
     );
     assert!(
+        retransmitted_after_stale >= stale_at,
+        "the 2xx retransmission must come after the stale ACK"
+    );
+    assert!(
         !matches!(dialog.state(), DialogState::Confirmed(_, _)),
         "a stale ACK must not confirm the dialog, got {}",
         dialog.state()
