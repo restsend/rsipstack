@@ -1,5 +1,5 @@
-use crate::prelude::*;
 use super::tokenizers::CseqTokenizer;
+use crate::prelude::*;
 use crate::sip::{Error, Header, Method};
 
 #[derive(Debug, PartialEq, Eq, Clone)]

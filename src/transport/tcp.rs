@@ -1,3 +1,4 @@
+use crate::platform::CancellationToken;
 use crate::sip::SipMessage;
 use crate::{
     transport::{
@@ -10,7 +11,6 @@ use crate::{
 };
 use std::{fmt, sync::Arc};
 use tokio::net::TcpStream;
-use crate::platform::CancellationToken;
 use tracing::debug;
 
 type TcpInner =

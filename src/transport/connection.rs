@@ -1,29 +1,32 @@
-#[cfg(not(feature = "std"))]
-use crate::prelude::*;
 use super::sip_addr::SipAddr;
 #[cfg(feature = "platform-tokio")]
 use super::stream::StreamConnection;
 #[cfg(feature = "platform-tokio")]
 use super::tcp::TcpConnection;
 use super::udp::UdpConnection;
+use crate::platform::mpsc::{UnboundedReceiver, UnboundedSender};
+use crate::platform::CancellationToken;
+#[cfg(not(feature = "std"))]
+use crate::prelude::*;
 use crate::sip::headers::untyped::Via;
 use crate::sip::{
     prelude::{HeadersExt, ToTypedHeader},
     HostWithPort, Param, SipMessage, Transport,
 };
 use crate::transport::channel::ChannelConnection;
-#[cfg(all(feature = "platform-tokio", feature = "websocket"))]
-use crate::transport::websocket::{WebSocketConnection, WebSocketListenerConnection};
 #[cfg(feature = "platform-tokio")]
 use crate::transport::tcp_listener::TcpListenerConnection;
 #[cfg(all(feature = "platform-tokio", feature = "rustls"))]
 use crate::transport::tls::{TlsConnection, TlsListenerConnection};
+#[cfg(all(feature = "platform-tokio", feature = "websocket"))]
+use crate::transport::websocket::{WebSocketConnection, WebSocketListenerConnection};
 use crate::Result;
+use core::net::SocketAddr;
+#[cfg(feature = "platform-tokio")]
+use core::net::{IpAddr, Ipv4Addr};
 #[cfg(feature = "platform-tokio")]
 use if_addrs::IfAddr;
-use crate::platform::mpsc::{UnboundedReceiver, UnboundedSender};
-use crate::platform::CancellationToken;
-use core::net::{IpAddr, Ipv4Addr, SocketAddr};
+#[cfg(feature = "platform-tokio")]
 use tracing::debug;
 
 /// Transport Layer Events
@@ -211,6 +214,9 @@ impl SipConnection {
             #[cfg(feature = "websocket")]
             #[cfg(all(feature = "platform-tokio", feature = "websocket"))]
             SipConnection::WebSocket(transport) => transport.cancel_token(),
+            // exhaustive in embassy builds; the catch-all only serves the
+            // tokio-only variants above.
+            #[cfg(feature = "platform-tokio")]
             _ => None,
         }
     }

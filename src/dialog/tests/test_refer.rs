@@ -69,8 +69,14 @@ async fn test_refer_event_keeps_established_dialog_usable() -> crate::Result<()>
         let invite = create_invite_request("local", "remote", "refer-established");
         let (tu_sender, _tu_receiver) = unbounded_channel();
         let inner = DialogInner::new(
-            role, id.clone(), invite.clone(), endpoint.inner.clone(), state_sender,
-            None, Some(Uri::try_from("sip:alice@example.com:5060")?), tu_sender,
+            role,
+            id.clone(),
+            invite.clone(),
+            endpoint.inner.clone(),
+            state_sender,
+            None,
+            Some(Uri::try_from("sip:alice@example.com:5060")?),
+            tu_sender,
         )?;
         inner.transition(DialogState::Confirmed(id.clone(), Response::default()))?;
         states.recv().await.unwrap();
@@ -82,13 +88,19 @@ async fn test_refer_event_keeps_established_dialog_usable() -> crate::Result<()>
             panic!("REFER must reach the application");
         };
         assert_eq!(received_id, id);
-        assert!(inner.is_confirmed(), "REFER must not disable in-dialog requests");
+        assert!(
+            inner.is_confirmed(),
+            "REFER must not disable in-dialog requests"
+        );
         transaction.reply(StatusCode::Accepted).await?;
         // The transaction task has not consumed the response yet. NOTIFY's
         // established-dialog guard must already pass at this point.
         assert!(inner.is_confirmed());
         assert!(responses.try_recv().is_ok());
-        assert!(states.try_recv().is_err(), "REFER must not emit a second confirmation");
+        assert!(
+            states.try_recv().is_err(),
+            "REFER must not emit a second confirmation"
+        );
     }
     Ok(())
 }

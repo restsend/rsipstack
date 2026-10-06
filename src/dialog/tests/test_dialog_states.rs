@@ -10,9 +10,9 @@ use crate::dialog::{
 use crate::sip::{headers::*, Request, Response, StatusCode};
 use crate::transaction::{endpoint::EndpointBuilder, key::TransactionRole};
 use crate::transport::TransportLayer;
+use std::sync::Arc;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio_util::sync::CancellationToken;
-use std::sync::Arc;
 
 /// Test helper to create a mock INVITE request
 pub fn create_invite_request(from_tag: &str, to_tag: &str, call_id: &str) -> Request {

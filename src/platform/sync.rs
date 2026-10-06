@@ -16,11 +16,11 @@ pub use parking_lot as parking_reexport;
 
 #[cfg(feature = "std")]
 mod rwmap_impl {
-    use alloc::collections::BTreeMap;
     use super::RwLock;
+    use alloc::collections::BTreeMap;
 
     /// DashMap-shaped shim: `RwLock<BTreeMap>`, covering the subset of
-/// methods used in-tree.
+    /// methods used in-tree.
     pub struct RwMap<K: Ord, V> {
         inner: RwLock<BTreeMap<K, V>>,
     }
@@ -91,7 +91,7 @@ mod spin_lock {
     use core::ops::{Deref, DerefMut};
     use core::sync::atomic::{AtomicBool, Ordering};
 
-        pub struct SpinLock<T> {
+    pub struct SpinLock<T> {
         locked: AtomicBool,
         data: UnsafeCell<T>,
     }
@@ -187,8 +187,8 @@ pub type RwLockWriteGuard<'a, T> = SpinGuard<'a, T>;
 
 #[cfg(not(feature = "std"))]
 mod rwmap_impl {
+    use super::Mutex;
     use alloc::collections::BTreeMap;
-    use super::{Mutex, MutexGuard};
 
     /// DashMap-shaped shim (no_std: spin `Mutex<BTreeMap>`).
     pub struct RwMap<K: Ord, V> {

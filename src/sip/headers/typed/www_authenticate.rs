@@ -1,5 +1,5 @@
-use crate::prelude::*;
 use super::tokenizers::AuthTokenizer;
+use crate::prelude::*;
 use crate::sip::headers::auth::{Algorithm, Qop, Scheme};
 use crate::sip::{Error, Header};
 

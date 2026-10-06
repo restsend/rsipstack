@@ -1,4 +1,3 @@
-use crate::prelude::*;
 use super::{
     key::TransactionKey,
     make_via_branch,
@@ -6,6 +5,11 @@ use super::{
     transaction::{Transaction, TransactionEvent, TransactionEventSender},
     CallIdFormat, SipConnection, TransactionReceiver, TransactionSender, TransactionTimer,
 };
+use crate::platform::mpsc::{error, unbounded_channel};
+use crate::platform::sync::Mutex;
+use crate::platform::sync::RwMap;
+use crate::platform::CancellationToken;
+use crate::prelude::*;
 use crate::sip::{prelude::HeadersExt, SipMessage};
 use crate::{
     dialog::DialogId,
@@ -13,10 +17,6 @@ use crate::{
     Error, Result, VERSION,
 };
 use async_trait::async_trait;
-use crate::platform::sync::RwMap;
-use crate::platform::sync::Mutex;
-use crate::platform::mpsc::{error, unbounded_channel};
-use crate::platform::CancellationToken;
 use tracing::{debug, info, trace, warn};
 
 pub trait MessageInspector: Send + Sync {
@@ -259,6 +259,7 @@ impl EndpointInner {
     async fn process_transport_layer(self: Arc<Self>) -> Result<()> {
         self.transport_layer.serve_listens().await.ok();
 
+        #[cfg_attr(not(feature = "platform-tokio"), allow(unused_mut))]
         let mut transport_rx = match self.transport_layer.inner.transport_rx.lock().take() {
             Some(rx) => rx,
             None => {
@@ -372,10 +373,7 @@ impl EndpointInner {
                     }
                 }
                 // check is the termination of an existing transaction
-                let last_message = self
-                    .finished_transactions
-                    .get(&key)
-                    .and_then(|v| v.clone());
+                let last_message = self.finished_transactions.get(&key).and_then(|v| v.clone());
 
                 if let Some(last_message) = last_message {
                     // ACK for a completed ServerInvite transaction: absorb it silently

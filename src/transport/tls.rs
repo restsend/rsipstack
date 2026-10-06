@@ -4,6 +4,7 @@ use super::{
     stream::{StreamConnection, StreamConnectionInner},
     SipConnection,
 };
+use crate::platform::CancellationToken;
 use crate::sip::SipMessage;
 use crate::{error::Error, transport::transport_layer::TransportLayerInnerRef, Result};
 use rustls::client::danger::ServerCertVerifier;
@@ -17,7 +18,6 @@ use tokio_rustls::{
     rustls::{pki_types, pki_types::pem::PemObject, ClientConfig, RootCertStore, ServerConfig},
     TlsAcceptor, TlsConnector,
 };
-use crate::platform::CancellationToken;
 use tracing::{debug, warn};
 
 /// Certificate info extracted from PEM for logging purposes

@@ -1,3 +1,4 @@
+use crate::platform::CancellationToken;
 use crate::sip::SipMessage;
 use crate::{
     transport::{
@@ -22,7 +23,6 @@ use tokio_tungstenite::{
     },
     MaybeTlsStream, WebSocketStream,
 };
-use crate::platform::CancellationToken;
 use tracing::{debug, info, warn};
 
 // Define a type alias for the WebSocket sink to make the code more readable

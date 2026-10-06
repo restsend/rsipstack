@@ -1,5 +1,5 @@
-use crate::prelude::*;
 use super::parse_helpers::parse_display_uri_params_str;
+use crate::prelude::*;
 use crate::sip::{uri::Param, uri::ParamsExt, Error, Header, Uri};
 
 #[derive(Debug, PartialEq, Eq, Clone)]

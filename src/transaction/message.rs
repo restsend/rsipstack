@@ -1,5 +1,5 @@
-use crate::prelude::*;
 use super::{endpoint::EndpointInner, make_call_id};
+use crate::prelude::*;
 use crate::sip::{
     prelude::{HeadersExt, ToTypedHeader},
     typed::Route as TypedRoute,

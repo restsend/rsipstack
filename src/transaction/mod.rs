@@ -1,8 +1,8 @@
+use crate::platform::mpsc::{UnboundedReceiver, UnboundedSender};
 use crate::prelude::*;
 use crate::transport::{SipAddr, SipConnection};
-use key::TransactionKey;
 use core::time::Duration;
-use crate::platform::mpsc::{UnboundedReceiver, UnboundedSender};
+use key::TransactionKey;
 pub use transaction::Transaction;
 pub mod endpoint;
 pub mod key;
@@ -379,8 +379,7 @@ pub fn random_text(count: usize) -> String {
 
 #[cfg(not(feature = "std"))]
 pub fn random_text(count: usize) -> String {
-    const ALNUM: &[u8; 62] =
-        b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    const ALNUM: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
     let mut bytes = vec![0u8; count];
     fill_random_bytes(&mut bytes);
     bytes

@@ -1,5 +1,8 @@
+#[cfg(feature = "platform-tokio")]
 use crate::prelude::*;
-use crate::sip::{Domain, Port, Transport};
+use crate::sip::Transport;
+#[cfg(feature = "platform-tokio")]
+use crate::sip::{Domain, Port};
 use core::net::SocketAddr;
 #[cfg(feature = "srv_lookup")]
 pub mod sip_resolver;

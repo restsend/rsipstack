@@ -1,12 +1,12 @@
-use crate::prelude::*;
 use crate::platform::CancellationToken;
+use crate::prelude::*;
 
 use super::{
     connection::{TransportReceiver, TransportSender},
     SipAddr, SipConnection,
 };
-use crate::Result;
 use crate::platform::sync::Mutex;
+use crate::Result;
 
 enum Outgoing {
     Unbounded(TransportSender),
@@ -94,6 +94,7 @@ impl ChannelConnection {
     }
 
     pub async fn serve_loop(&self, sender: TransportSender) -> Result<()> {
+        #[cfg_attr(not(feature = "platform-tokio"), allow(unused_mut))]
         let mut incoming = match self.inner.clone().incoming.lock().take() {
             Some(incoming) => incoming,
             None => {

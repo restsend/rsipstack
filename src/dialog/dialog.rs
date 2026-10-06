@@ -1,4 +1,3 @@
-use crate::prelude::*;
 use super::{
     authenticate::{handle_client_authenticate, Credential},
     invite_dialog::InviteDialog,
@@ -6,6 +5,10 @@ use super::{
     subscription::{ClientSubscriptionDialog, ServerSubscriptionDialog},
     DialogId,
 };
+use crate::platform::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use crate::platform::sync::Mutex;
+use crate::platform::CancellationToken;
+use crate::prelude::*;
 use crate::sip::{
     headers::typed::record_route::split_rr_values,
     prelude::{HeadersExt, ToTypedHeader},
@@ -22,11 +25,8 @@ use crate::{
     transport::{SipAddr, SipConnection},
     Result,
 };
-use futures::FutureExt;
-use crate::platform::sync::Mutex;
 use core::sync::atomic::{AtomicU32, Ordering};
-use crate::platform::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use crate::platform::CancellationToken;
+use futures::FutureExt;
 use tracing::{debug, info, warn};
 
 pub type TransactionCommandSender = crate::platform::BoundedSender<TransactionCommand>;
@@ -1451,8 +1451,7 @@ impl DialogInner {
         // Late state updates after termination (e.g. CANCEL's 200 arriving
         // after the INVITE's 487) are no longer broadcast and do not change
         // the lifecycle state — observers already saw Terminated.
-        let terminated_now =
-            matches!(&*self.state.lock(), DialogState::Terminated(..));
+        let terminated_now = matches!(&*self.state.lock(), DialogState::Terminated(..));
         if terminated_now && !matches!(state, DialogState::Terminated(..)) {
             debug!(target = ?state, "dialog already terminated, ignoring late transition");
             return Ok(());
@@ -1492,6 +1491,7 @@ impl DialogInner {
         Ok(())
     }
 
+    #[cfg_attr(not(feature = "platform-tokio"), allow(unused_mut))]
     pub async fn process_transaction_handle(
         &self,
         tx: &mut Transaction,

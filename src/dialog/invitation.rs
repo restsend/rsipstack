@@ -1,10 +1,10 @@
-use crate::prelude::*;
 use super::{
     authenticate::Credential,
     dialog::{DialogInner, DialogStateSender},
     dialog_layer::DialogLayer,
     invite_dialog::InviteDialog,
 };
+use crate::prelude::*;
 use crate::sip::{
     prelude::{HeadersExt, ToTypedHeader},
     uri::ParamsExt,
@@ -221,7 +221,8 @@ impl<'a> Drop for DialogGuardForUnconfirmed<'a> {
 
                 debug!(%self.id, "unconfirmed dialog dropped, cancelling it");
                 let _handle = crate::platform::spawn(async move {
-                    let mut timeout = core::pin::pin!(crate::platform::sleep(core::time::Duration::from_secs(2)));
+                    let mut timeout =
+                        core::pin::pin!(crate::platform::sleep(core::time::Duration::from_secs(2)));
                     invite_tx.stop_retransmissions();
 
                     let mut cancel_done = false;
@@ -230,7 +231,7 @@ impl<'a> Drop for DialogGuardForUnconfirmed<'a> {
                     use crate::platform::select::Which3;
                     loop {
                         // after cancel completes, use pending as placeholder (3-arm race with
-// unchanged types)
+                        // unchanged types)
                         let cancel_sel = if cancel_done {
                             futures::future::Either::Left(core::future::pending::<
                                 core::result::Result<(), crate::Error>,
@@ -257,8 +258,7 @@ impl<'a> Drop for DialogGuardForUnconfirmed<'a> {
                             },
                             Which3::C(msg) => match msg {
                                 Some(SipMessage::Response(resp))
-                                    if resp.status_code.kind()
-                                        != StatusCodeKind::Provisional =>
+                                    if resp.status_code.kind() != StatusCodeKind::Provisional =>
                                 {
                                     debug!(
                                         id = %client_dialog.id(),

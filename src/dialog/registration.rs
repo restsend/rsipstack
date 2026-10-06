@@ -1,8 +1,8 @@
-use crate::prelude::*;
 use super::{
     authenticate::{handle_client_authenticate, Credential},
     DialogId,
 };
+use crate::prelude::*;
 use crate::sip::prelude::HeadersExt;
 use crate::sip::{Header, Param, Response, SipMessage, StatusCode};
 use crate::{

@@ -41,6 +41,8 @@ pub type BoundedSender<T> = tokio::sync::mpsc::Sender<T>;
 #[cfg(feature = "platform-tokio")]
 pub type BoundedReceiver<T> = tokio::sync::mpsc::Receiver<T>;
 #[cfg(feature = "platform-tokio")]
+pub use std::time::Instant;
+#[cfg(feature = "platform-tokio")]
 pub use tokio::sync::Notify;
 #[cfg(feature = "platform-tokio")]
 pub use tokio::task::JoinHandle;
@@ -48,8 +50,6 @@ pub use tokio::task::JoinHandle;
 pub use tokio::time::error::Elapsed;
 #[cfg(feature = "platform-tokio")]
 pub use tokio_util::sync::CancellationToken;
-#[cfg(feature = "platform-tokio")]
-pub use std::time::Instant;
 
 /// Sleeps for the given duration.
 #[cfg(feature = "platform-tokio")]
@@ -102,7 +102,7 @@ pub mod embassy_impl {
     use embassy_sync::signal::Signal;
 
     /// Spawn function injected by the application: hands a boxed future to the
-/// executor's task pool.
+    /// executor's task pool.
     pub type SpawnFn = fn(Box<dyn Future<Output = ()> + Send>);
 
     static SPAWN_FN: AtomicPtr<SpawnFn> = AtomicPtr::new(core::ptr::null_mut());
@@ -113,14 +113,8 @@ pub mod embassy_impl {
         SPAWN_FN.store(leaked as *mut SpawnFn, Ordering::Release);
     }
 
-    fn spawn_fn() -> SpawnFn {
-        let ptr = SPAWN_FN.load(Ordering::Acquire);
-        assert!(!ptr.is_null(), "platform: spawn fn not configured (call set_spawn_fn after executor init)");
-        unsafe { *ptr }
-    }
-
     /// Internal shared Notify channel (Signal's `()` semantics match tokio
-/// Notify's waiter wakeup).
+    /// Notify's waiter wakeup).
     #[derive(Clone)]
     pub struct Notify {
         signal: Arc<Signal<CriticalSectionRawMutex, ()>>,
@@ -154,7 +148,7 @@ pub mod embassy_impl {
     }
 
     /// Waits inside the executor context until the spawn function is injected
-/// (briefly enters a critical section internally).
+    /// (briefly enters a critical section internally).
     pub(crate) fn with_spawn_fn<R>(f: impl FnOnce(SpawnFn) -> R) -> R {
         critical_section::with(|_| {
             let ptr = SPAWN_FN.load(Ordering::Acquire);
@@ -167,9 +161,9 @@ pub mod embassy_impl {
 #[cfg(feature = "platform-embassy")]
 pub use embassy_impl::{set_spawn_fn, Notify as EmbassyNotify};
 #[cfg(feature = "platform-embassy")]
-pub use EmbassyNotify as Notify;
-#[cfg(feature = "platform-embassy")]
 pub use mpsc::bounded::{Receiver as BoundedReceiver, Sender as BoundedSender};
+#[cfg(feature = "platform-embassy")]
+pub use EmbassyNotify as Notify;
 
 /// Instant wrapper: unifies the `+ core::time::Duration` and
 /// `checked_duration_since` call shapes (std backend =
@@ -184,10 +178,7 @@ impl Instant {
         Self(embassy_time::Instant::now())
     }
 
-    pub fn checked_duration_since(
-        &self,
-        earlier: Self,
-    ) -> Option<core::time::Duration> {
+    pub fn checked_duration_since(&self, earlier: Self) -> Option<core::time::Duration> {
         if self.0 >= earlier.0 {
             let d = self.0 - earlier.0;
             let micros = d.as_micros();
@@ -255,7 +246,10 @@ pub struct JoinHandle<T> {
 #[cfg(feature = "platform-embassy")]
 impl<T: Send + 'static> Future for JoinHandle<T> {
     type Output = T;
-    fn poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> core::task::Poll<T> {
+    fn poll(
+        self: core::pin::Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<T> {
         let this = self.get_mut();
         let fut = this.rx.recv();
         let mut fut = core::pin::pin!(fut);

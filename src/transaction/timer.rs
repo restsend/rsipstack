@@ -1,7 +1,7 @@
-use crate::prelude::*;
+use crate::platform::atomic64::AtomicU64;
 use crate::platform::sync::{Mutex, MutexGuard};
 use crate::platform::{Instant, Notify};
-use crate::platform::atomic64::AtomicU64;
+use crate::prelude::*;
 use core::sync::atomic::Ordering;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -189,7 +189,6 @@ mod tokio_tests {
 
     #[tokio::test]
     async fn wait_for_ready_async_wakes_on_new_timer() {
-        
         let timer = Arc::new(Timer::new());
         timer.timeout(Duration::from_secs(5), "late");
 

@@ -11,11 +11,9 @@
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 use core::cell::RefCell;
-use core::future::Future;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
 
 pub mod error {
@@ -144,7 +142,6 @@ pub fn unbounded_channel<T>() -> (Sender<T>, Receiver<T>) {
 pub mod bounded {
     use super::error;
     use alloc::sync::Arc;
-    use core::future::Future;
     use core::sync::atomic::{AtomicBool, Ordering};
 
     use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -158,7 +155,7 @@ pub mod bounded {
     }
 
     /// Bounded channel pair (`cap` ignored: embassy `Channel` capacity is
-/// fixed at compile time as CAPACITY).
+    /// fixed at compile time as CAPACITY).
     pub fn pair<T>() -> (Sender<T>, Receiver<T>) {
         let inner = Arc::new(Inner {
             channel: Channel::new(),
@@ -202,7 +199,7 @@ pub mod bounded {
 
     impl<T> Sender<T> {
         /// Bounded semantics: waits when full (matches tokio bounded
-/// `send().await`).
+        /// `send().await`).
         pub async fn send(&self, value: T) -> Result<(), error::SendError<T>> {
             if self.inner.closed.load(Ordering::Acquire) {
                 return Err(error::SendError(value));
@@ -215,12 +212,9 @@ pub mod bounded {
             if self.inner.closed.load(Ordering::Acquire) {
                 return Err(error::TrySendError::Closed(value));
             }
-            self.inner
-                .channel
-                .try_send(value)
-                .map_err(|e| match e {
-                    embassy_sync::channel::TrySendError::Full(v) => error::TrySendError::Full(v),
-                })
+            self.inner.channel.try_send(value).map_err(|e| match e {
+                embassy_sync::channel::TrySendError::Full(v) => error::TrySendError::Full(v),
+            })
         }
     }
 

@@ -1,10 +1,10 @@
-use crate::prelude::*;
 use super::dialog::{DialogInnerRef, DialogState, TerminatedReason, TransactionHandle};
 use super::DialogId;
+use crate::platform::CancellationToken;
+use crate::prelude::*;
 use crate::sip::{Header, Method, StatusCode};
 use crate::transaction::transaction::Transaction;
 use crate::Result;
-use crate::platform::CancellationToken;
 
 #[derive(Clone)]
 pub struct ClientSubscriptionDialog {

@@ -1,5 +1,5 @@
-use crate::prelude::*;
 use super::parse_helpers::parse_display_uri_params_str;
+use crate::prelude::*;
 use crate::sip::{uri::Param, uri::ParamsExt, Error, Header, Uri};
 
 /// Typed `Service-Route` header (RFC 3608).

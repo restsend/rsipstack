@@ -1,4 +1,6 @@
 use super::{connection::TransportSender, SipAddr, SipConnection};
+use crate::platform::net::UdpSocket as PlatformUdpSocket;
+use crate::platform::CancellationToken;
 use crate::sip::prelude::HeadersExt;
 use crate::{
     transport::transport_layer::TransportLayerInnerRef,
@@ -8,15 +10,13 @@ use crate::{
     },
     Result,
 };
-use bytes::BytesMut;
-use crate::platform::net::UdpSocket as PlatformUdpSocket;
-use crate::platform::CancellationToken;
-#[cfg(feature = "platform-tokio")]
-use socket2::{Domain, Protocol, Socket, Type};
 use alloc::borrow::ToOwned;
 use alloc::string::{String, ToString};
-use core::net::SocketAddr;
 use alloc::sync::Arc;
+use bytes::BytesMut;
+use core::net::SocketAddr;
+#[cfg(feature = "platform-tokio")]
+use socket2::{Domain, Protocol, Socket, Type};
 use tracing::{debug, info, warn};
 pub struct UdpInner {
     pub conn: Arc<dyn PlatformUdpSocket>,

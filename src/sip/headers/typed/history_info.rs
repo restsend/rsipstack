@@ -1,5 +1,5 @@
-use crate::prelude::*;
 use super::parse_helpers::parse_display_uri_params_str;
+use crate::prelude::*;
 use crate::sip::{uri::Param, Error, Header, Uri};
 
 /// A single `hi-entry` of the History-Info header (RFC 7044 §5).

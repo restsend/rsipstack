@@ -1,14 +1,14 @@
-use crate::prelude::*;
 use super::dialog::{Dialog, DialogInnerRef, DialogState, TerminatedReason, TransactionHandle};
 use super::subscription::ServerSubscriptionDialog;
 use super::DialogId;
+use crate::platform::CancellationToken;
+use crate::prelude::*;
 use crate::sip::{prelude::HeadersExt, Header, Method, Request, SipMessage, StatusCode};
 use crate::{
     transaction::transaction::{Transaction, TransactionEvent},
     Result,
 };
 use core::sync::atomic::Ordering;
-use crate::platform::CancellationToken;
 use tracing::{debug, trace, warn};
 
 /// Server-side INVITE Dialog (UAS)

@@ -51,9 +51,8 @@ impl TokenInner {
         // Collect under the critical section, wake outside it: waking a
         // task may run arbitrary scheduling code that must not re-enter
         // the critical section.
-        let drained = critical_section::with(|cs| {
-            core::mem::take(&mut *self.wakers.borrow_ref_mut(cs))
-        });
+        let drained =
+            critical_section::with(|cs| core::mem::take(&mut *self.wakers.borrow_ref_mut(cs)));
         for w in drained {
             w.wake();
         }

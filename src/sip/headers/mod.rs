@@ -1,8 +1,8 @@
 pub mod auth;
 pub mod typed;
 pub mod untyped;
-pub use untyped::*;
 use crate::prelude::*;
+pub use untyped::*;
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Header {
     Accept(Accept),

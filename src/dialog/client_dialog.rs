@@ -1,6 +1,7 @@
-use crate::prelude::*;
 use super::dialog::DialogInnerRef;
 use super::DialogId;
+use crate::platform::CancellationToken;
+use crate::prelude::*;
 use crate::sip::prelude::HeadersExt;
 use crate::sip::{Response, SipMessage, StatusCode};
 use crate::transaction::transaction::Transaction;
@@ -14,7 +15,6 @@ use crate::{
     transaction::key::TransactionRole,
 };
 use core::sync::atomic::Ordering;
-use crate::platform::CancellationToken;
 use tracing::{debug, trace, warn};
 
 /// Client-side INVITE Dialog (UAC)

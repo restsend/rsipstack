@@ -1,5 +1,5 @@
-use crate::prelude::*;
 use super::DialogId;
+use crate::prelude::*;
 use crate::sip::headers::auth::{Algorithm, AuthQop, Qop};
 use crate::sip::prelude::{HasHeaders, HeadersExt, ToTypedHeader};
 use crate::sip::typed::{Authorization, ProxyAuthorization};

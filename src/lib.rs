@@ -248,22 +248,21 @@
 // codebase share one set of alloc imports across std/no_std.
 extern crate alloc;
 
-
 /// Crate-internal prelude: fills the no_std gaps with `alloc`/`core` items.
 /// In std builds the std prelude already provides most of these; the glob
 /// import here is harmless (same types) and only activates under no_std.
 pub mod prelude {
     extern crate alloc;
-    pub use alloc::collections::{BTreeMap, BTreeSet};
-    pub use alloc::string::String;
     pub use alloc::borrow::{Cow, ToOwned};
     pub use alloc::boxed::Box;
+    pub use alloc::collections::{BTreeMap, BTreeSet};
+    pub use alloc::string::String;
     pub use alloc::sync::{Arc, Weak};
     pub use alloc::vec::Vec;
-    pub use core::net::{IpAddr, Ipv4Addr, SocketAddr};
-    pub use core::time::Duration;
     #[cfg(not(feature = "std"))]
     pub use alloc::{format, string::ToString, vec};
+    pub use core::net::{IpAddr, Ipv4Addr, SocketAddr};
+    pub use core::time::Duration;
 }
 
 pub type Result<T> = core::result::Result<T, crate::error::Error>;
