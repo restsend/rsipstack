@@ -198,7 +198,20 @@
 //!
 //! * **RFC 3261** - SIP: Session Initiation Protocol (core specification)
 //! * **RFC 3581** - Symmetric Response Routing (rport)
-//! * **RFC 6026** - Correct Transaction Handling for 2xx Responses to INVITE
+//! * **RFC 6026** - Correct Transaction Handling for 2xx Responses to INVITE.
+//!   Server `Accepted` state + Timer L (§7.1); client `Accepted` state + Timer M
+//!   (§7.2). Two documented deviations keep the rsipstack 0.5.x wire behavior
+//!   inside the new state machine. Client deviation: the transaction auto-ACKs
+//!   a 2xx (and re-ACKs every retransmitted/forked 2xx) while parked in
+//!   `Accepted`; strict §7.2 + RFC 3261 §17.1.1.3 place that responsibility on
+//!   the TU — set `EndpointOption::auto_ack_2xx = false` for strict TU-owned
+//!   ACKs (proxy mode: the 2xx then terminates the transaction at once).
+//!   Server deviation: the transaction keeps Timer G (T1, doubling to T2,
+//!   RFC 3261 §13.3.1.4) while in `Accepted` and stops it when the ACK
+//!   arrives, because the rsipstack dialog layer does not retransmit 2xx
+//!   itself. Dialog users must keep receiving the client transaction until
+//!   Timer M ends it (`DialogLayer::do_invite`/`do_invite_async` do this);
+//!   the absorption window delivers every retransmitted/forked 2xx to the TU.
 //!
 //! ## Performance
 //!

@@ -111,7 +111,7 @@ async fn test_server_invite_ignores_ack_with_other_cseq() {
     assert_eq!(tx.original.method, Method::Invite);
 
     tx.reply(StatusCode::OK).await.expect("reply 200");
-    assert_eq!(tx.state, TransactionState::Completed);
+    assert_eq!(tx.state, TransactionState::Accepted);
     assert!(tx.timer_g.is_some(), "Timer G must run for 2xx over UDP");
 
     let mut buf = vec![0u8; 4096];
@@ -136,7 +136,7 @@ async fn test_server_invite_ignores_ack_with_other_cseq() {
     );
     assert_eq!(
         tx.state,
-        TransactionState::Completed,
+        TransactionState::Accepted,
         "an ACK with CSeq 1 must not confirm the CSeq 2 INVITE transaction"
     );
     assert!(tx.timer_g.is_some(), "Timer G must keep running");
@@ -170,9 +170,12 @@ async fn test_server_invite_ignores_ack_with_other_cseq() {
         }
         other => panic!("expected ACK, got {}", other),
     }
-    assert_eq!(tx.state, TransactionState::Confirmed);
+    // RFC 6026 §7.1: the ACK does not end the Accepted state (Timer L
+    // does); retransmissions stop and the waiting_ack entry stays so any
+    // retransmitted ACK keeps being routed here until then.
+    assert_eq!(tx.state, TransactionState::Accepted);
     assert!(tx.timer_g.is_none(), "Timer G must stop once ACKed");
-    assert_eq!(endpoint.inner.waiting_ack.len(), 0);
+    assert_eq!(endpoint.inner.waiting_ack.len(), 1);
 
     token.cancel();
     serve_handle.abort();
@@ -225,7 +228,7 @@ async fn test_server_invite_ignores_ack_with_other_cseq_over_tcp() {
         .expect("timeout waiting for incoming transaction")
         .expect("no incoming transaction");
     tx.reply(StatusCode::OK).await.expect("reply 200");
-    assert_eq!(tx.state, TransactionState::Completed);
+    assert_eq!(tx.state, TransactionState::Accepted);
 
     // Delayed ACK of CSeq 1, then the ACK of CSeq 2, on the ordered stream:
     // the first ACK the transaction delivers must be the CSeq 2 one.
@@ -242,8 +245,11 @@ async fn test_server_invite_ignores_ack_with_other_cseq_over_tcp() {
         }
         other => panic!("expected ACK, got {}", other),
     }
-    assert_eq!(tx.state, TransactionState::Confirmed);
-    assert_eq!(endpoint.inner.waiting_ack.len(), 0);
+    // RFC 6026 §7.1: the ACK does not end the Accepted state (Timer L
+    // does); the waiting_ack entry stays so retransmitted ACKs keep being
+    // routed here until then.
+    assert_eq!(tx.state, TransactionState::Accepted);
+    assert_eq!(endpoint.inner.waiting_ack.len(), 1);
 
     token.cancel();
     serve_handle.abort();
