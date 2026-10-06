@@ -148,6 +148,7 @@ fn credential() -> Credential {
         username: "alice".to_string(),
         password: "secret".to_string(),
         realm: None,
+        auth_username: None,
     }
 }
 
