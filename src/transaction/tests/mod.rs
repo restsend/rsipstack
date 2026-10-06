@@ -10,6 +10,7 @@ mod test_client;
 mod test_endpoint;
 mod test_provisional_responses;
 mod test_server;
+mod test_server_invite_ack;
 mod test_server_invite_drop;
 mod test_transaction_states;
 

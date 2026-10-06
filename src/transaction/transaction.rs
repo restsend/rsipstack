@@ -727,6 +727,22 @@ impl Transaction {
             TransactionState::Completed | TransactionState::Confirmed
                 if req.method == Method::Ack =>
             {
+                // RFC 3261 §17.1.1.3 / §13.2.2.4: an ACK carries the CSeq
+                // number of the INVITE it acknowledges. ACKs for 2xx are
+                // routed per dialog (`waiting_ack`), so a delayed ACK of an
+                // earlier re-INVITE can land here; it must not confirm this
+                // transaction or stop its 2xx retransmissions.
+                let ack_seq = req.cseq_header().and_then(|c| c.seq()).ok();
+                let invite_seq = self.original.cseq_header().and_then(|c| c.seq()).ok();
+                if ack_seq != invite_seq {
+                    debug!(
+                        key = %self.key,
+                        ?ack_seq,
+                        ?invite_seq,
+                        "ignoring ACK with a CSeq that does not match the INVITE"
+                    );
+                    return None;
+                }
                 self.transition(TransactionState::Confirmed).ok();
                 return Some(req.into());
             }
