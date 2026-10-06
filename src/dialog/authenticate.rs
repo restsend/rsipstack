@@ -34,6 +34,7 @@ use crate::Result;
 ///     username: "alice".to_string(),
 ///     password: "secret123".to_string(),
 ///     realm: Some("example.com".to_string()),
+///     auth_username: None,
 /// };
 /// # Ok(())
 /// # }
@@ -48,6 +49,7 @@ use crate::Result;
 ///     username: "alice".to_string(),
 ///     password: "secret123".to_string(),
 ///     realm: None, // Will be extracted from server challenge
+///     auth_username: None,
 /// };
 ///
 /// // Use credential with registration
@@ -67,6 +69,7 @@ use crate::Result;
 /// #     username: "alice".to_string(),
 /// #     password: "secret123".to_string(),
 /// #     realm: Some("example.com".to_string()),
+/// #     auth_username: None,
 /// # };
 /// let invite_option = InviteOption {
 ///     caller: rsipstack::sip::Uri::try_from("sip:alice@example.com")?,
@@ -80,11 +83,33 @@ use crate::Result;
 /// # Ok(())
 /// # }
 /// ```
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Credential {
+    /// The user part of the AOR (From/To/Contact of REGISTER, local contact
+    /// of dialogs). Also the digest username unless `auth_username` is set.
     pub username: String,
     pub password: String,
     pub realm: Option<String>,
+    /// Digest authentication username, when it differs from `username`.
+    ///
+    /// Some PBXs (3CX, Asterisk `auth` objects, …) hand out an
+    /// "Authentication ID" that is distinct from the extension: the AOR is
+    /// `sip:01@pbx` but the `username=` in the Authorization /
+    /// Proxy-Authorization header (and the digest) must be that ID.
+    /// `None` (or an empty string) keeps the classic behavior of
+    /// authenticating as `username`.
+    pub auth_username: Option<String>,
+}
+
+impl Credential {
+    /// The name used for digest authentication: `auth_username` when set
+    /// and non-empty, otherwise `username`.
+    pub fn digest_username(&self) -> &str {
+        match self.auth_username.as_deref() {
+            Some(name) if !name.is_empty() => name,
+            _ => self.username.as_str(),
+        }
+    }
 }
 
 /// Handle client-side authentication challenge
@@ -121,6 +146,7 @@ pub struct Credential {
 /// #     username: "alice".to_string(),
 /// #     password: "secret123".to_string(),
 /// #     realm: Some("example.com".to_string()),
+/// #     auth_username: None,
 /// # };
 /// // This is typically called automatically by dialog methods
 /// let new_tx = handle_client_authenticate(
@@ -148,6 +174,7 @@ pub struct Credential {
 /// #     username: "alice".to_string(),
 /// #     password: "secret123".to_string(),
 /// #     realm: Some("example.com".to_string()),
+/// #     auth_username: None,
 /// # };
 /// # let new_seq = 2u32;
 /// // Send initial request
@@ -263,7 +290,7 @@ pub async fn handle_client_authenticate(
         .unwrap_or(crate::sip::headers::auth::Algorithm::Md5);
 
     let response = DigestGenerator {
-        username: cred.username.as_str(),
+        username: cred.digest_username(),
         password: cred.password.as_str(),
         algorithm,
         nonce: challenge.nonce.as_str(),
@@ -276,7 +303,7 @@ pub async fn handle_client_authenticate(
 
     let auth = Authorization {
         scheme: challenge.scheme,
-        username: cred.username.clone(),
+        username: cred.digest_username().to_string(),
         realm: challenge.realm,
         nonce: challenge.nonce,
         uri: tx.original.uri.clone(),

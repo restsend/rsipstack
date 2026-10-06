@@ -113,6 +113,7 @@ use tracing::{debug, info, warn};
 ///     username: "alice".to_string(),
 ///     password: "secret123".to_string(),
 ///     realm: Some("example.com".to_string()),
+///     auth_username: None,
 /// };
 ///
 /// let invite_option = InviteOption {
