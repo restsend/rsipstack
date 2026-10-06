@@ -98,7 +98,9 @@ http = "1.4.0"
 [[example]]
 name = "client"
 path = "examples/client/main.rs"
+required-features = ["bench"]
 
 [[example]]
 name = "proxy"
 path = "examples/proxy.rs"
+required-features = ["bench"]
