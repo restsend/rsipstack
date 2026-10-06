@@ -319,9 +319,11 @@ impl Transaction {
         // Try to send if we have a connection; log errors instead of returning
         // so the transaction always enters the state machine (Calling) and
         // timers (Timer A / Timer B) handle retries and timeouts.
+        let mut stream_failed = false;
         if let Some(connection) = self.connection.as_ref() {
             if let Err(e) = connection.send(message, self.destination.as_ref()).await {
                 warn!(key = %self.key, error = %e, "send failed");
+                stream_failed = connection.is_stream();
             }
         } else {
             debug!(key = %self.key, "no connection, will retry on timer");
@@ -330,7 +332,29 @@ impl Transaction {
         // Always transition to Calling — the transaction enters the state machine
         // even when transport is unavailable. Timer A will retry the send (and
         // redo the transport lookup if needed), and Timer B handles timeout.
-        self.transition(TransactionState::Calling).map(|_| ())
+        self.transition(TransactionState::Calling)?;
+        if stream_failed {
+            self.on_stream_send_failure()?;
+        }
+        Ok(())
+    }
+
+    /// A write on a stream connection (TCP/TLS/WS) failed. Nothing will ever
+    /// retransmit the request on it (no Timer A on reliable transports), so
+    /// instead of leaving the TU to wait for Timer B/F: retire the dead
+    /// connection, so later requests to the peer do not pick it again, and
+    /// report the failure to the TU as a local 503 (RFC 3261 §17.1.4,
+    /// §8.1.3.1).
+    fn on_stream_send_failure(&mut self) -> Result<()> {
+        if let Some(connection) = self.connection.as_ref() {
+            self.endpoint_inner
+                .transport_layer
+                .retire_connection(connection);
+        }
+        let response =
+            self.endpoint_inner
+                .make_response(&self.original, StatusCode::ServiceUnavailable, None);
+        self.inform_tu_response(response)
     }
 
     /// Resolve the target URI for sending a request.
@@ -867,6 +891,9 @@ impl Transaction {
                                 .await
                             {
                                 warn!(key = %self.key, error = %e, "timer A resend failed");
+                                if connection.is_stream() {
+                                    return self.on_stream_send_failure();
+                                }
                             }
                         } else {
                             debug!(key = %self.key, "timer A: no connection yet");
