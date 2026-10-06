@@ -1,10 +1,10 @@
 //! Tests for ACK matching on a server INVITE transaction (RFC 3261 §17.1.1.3,
 //! §13.2.2.4): an ACK acknowledges only the INVITE with the same CSeq number.
 //!
-//! ACKs for 2xx are routed per dialog through `waiting_ack`, so a delayed ACK
-//! of an earlier (re-)INVITE on the same dialog reaches the transaction of the
-//! current re-INVITE. It must not confirm that transaction or stop its 2xx
-//! retransmissions (Timer G).
+//! ACKs for 2xx are routed by dialog and CSeq (`waiting_ack_cseq`). A delayed
+//! ACK of an earlier (re-)INVITE on the same dialog must not confirm the
+//! transaction of the current re-INVITE or stop its 2xx retransmissions
+//! (Timer G).
 
 use crate::sip::headers::*;
 use crate::sip::prelude::HeadersExt;
@@ -145,6 +145,7 @@ async fn test_server_invite_ignores_ack_with_other_cseq() {
         1,
         "the dialog must still route ACKs to the CSeq 2 transaction"
     );
+    assert_eq!(endpoint.inner.waiting_ack_cseq.len(), 1);
 
     // The 2xx was retransmitted by Timer G.
     let (len, _) = timeout(Duration::from_secs(1), client_conn.recv_raw(&mut buf))
@@ -173,6 +174,7 @@ async fn test_server_invite_ignores_ack_with_other_cseq() {
     assert_eq!(tx.state, TransactionState::Confirmed);
     assert!(tx.timer_g.is_none(), "Timer G must stop once ACKed");
     assert_eq!(endpoint.inner.waiting_ack.len(), 0);
+    assert_eq!(endpoint.inner.waiting_ack_cseq.len(), 0);
 
     token.cancel();
     serve_handle.abort();
@@ -244,6 +246,7 @@ async fn test_server_invite_ignores_ack_with_other_cseq_over_tcp() {
     }
     assert_eq!(tx.state, TransactionState::Confirmed);
     assert_eq!(endpoint.inner.waiting_ack.len(), 0);
+    assert_eq!(endpoint.inner.waiting_ack_cseq.len(), 0);
 
     token.cancel();
     serve_handle.abort();

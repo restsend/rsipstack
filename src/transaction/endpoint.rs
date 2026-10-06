@@ -120,6 +120,10 @@ pub struct EndpointInner {
     pub finished_transactions: RwMap<TransactionKey, Option<SipMessage>>,
     pub transactions: RwMap<TransactionKey, TransactionEventSender>,
     pub waiting_ack: RwMap<DialogId, TransactionKey>,
+    /// Server INVITE transactions waiting for the ACK of their 2xx, by dialog
+    /// and INVITE CSeq number: `waiting_ack` holds only a dialog's latest
+    /// INVITE, and the ACK of an earlier one can arrive after it (§13.2.2.4).
+    pub(crate) waiting_ack_cseq: RwMap<(DialogId, u32), TransactionKey>,
     incoming_sender: TransactionSender,
     incoming_receiver: Mutex<Option<TransactionReceiver>>,
     cancel_token: CancellationToken,
@@ -239,6 +243,7 @@ impl EndpointInner {
             transactions: RwMap::<TransactionKey, TransactionEventSender>::new(),
             finished_transactions: RwMap::<TransactionKey, Option<SipMessage>>::new(),
             waiting_ack: RwMap::<DialogId, TransactionKey>::new(),
+            waiting_ack_cseq: RwMap::new(),
             timer_interval: timer_interval.unwrap_or(Duration::from_millis(20)),
             cancel_token,
             incoming_sender,
@@ -319,6 +324,7 @@ impl EndpointInner {
                     self.transactions.remove(&key);
                     self.finished_transactions.remove(&key);
                     self.waiting_ack.retain(|_, v| v != &key);
+                    self.waiting_ack_cseq.retain(|_, v| v != &key);
                     continue;
                 }
 
@@ -379,7 +385,12 @@ impl EndpointInner {
                     if let Ok(dialog_id) =
                         DialogId::try_from((req, super::key::TransactionRole::Server))
                     {
-                        if let Some(tx_key) = self.waiting_ack.get(&dialog_id) {
+                        // By dialog AND CSeq number: a late ACK of an earlier
+                        // re-INVITE must reach its own transaction.
+                        let seq = req.cseq_header().and_then(|c| c.seq()).ok();
+                        if let Some(tx_key) =
+                            seq.and_then(|seq| self.waiting_ack_cseq.get(&(dialog_id, seq)))
+                        {
                             key = tx_key;
                         }
                     }
@@ -394,7 +405,7 @@ impl EndpointInner {
                         if let Ok(dialog_id) =
                             DialogId::try_from((req, super::key::TransactionRole::Server))
                         {
-                            self.waiting_ack.remove(&dialog_id);
+                            self.forget_waiting_ack(dialog_id, req, &key);
                         }
                         return Ok(());
                     }
@@ -602,6 +613,28 @@ impl EndpointInner {
             params,
         };
         Ok(via)
+    }
+
+    /// Drop `key`'s ACK routes for `dialog_id`, never another transaction's.
+    pub(crate) fn forget_waiting_ack(
+        &self,
+        dialog_id: DialogId,
+        req: &crate::sip::Request,
+        key: &TransactionKey,
+    ) {
+        if let Ok(seq) = req.cseq_header().and_then(|c| c.seq()) {
+            let route = (dialog_id.clone(), seq);
+            self.waiting_ack_cseq.with_mut(|m| {
+                if m.get(&route) == Some(key) {
+                    m.remove(&route);
+                }
+            });
+        }
+        self.waiting_ack.with_mut(|m| {
+            if m.get(&dialog_id) == Some(key) {
+                m.remove(&dialog_id);
+            }
+        });
     }
 
     pub fn get_running_transactions(&self) -> Option<Vec<TransactionKey>> {
