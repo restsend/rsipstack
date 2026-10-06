@@ -212,6 +212,11 @@ impl InviteDialog {
         {
             return Ok(());
         }
+        self.send_cancel().await
+    }
+
+    /// Send the CANCEL for the initial INVITE, whatever the dialog state.
+    pub(super) async fn send_cancel(&self) -> Result<()> {
         debug!(id = %self.id(), "sending cancel request");
         let mut cancel_request = self.inner.initial_request.lock().clone();
         let invite_seq = cancel_request.cseq_header()?.seq()?;
