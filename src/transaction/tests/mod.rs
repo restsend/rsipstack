@@ -11,6 +11,7 @@ mod test_auto_ack_2xx;
 mod test_before_send;
 mod test_client;
 mod test_endpoint;
+mod test_forked_2xx_ack;
 mod test_provisional_responses;
 mod test_server;
 mod test_server_invite_ack;
