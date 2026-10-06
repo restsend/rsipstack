@@ -620,16 +620,22 @@ impl Transaction {
             }
         }
         let ack = match self.last_ack.clone() {
-            Some(ack) => ack,
-            None => match self.last_response {
-                Some(ref resp) => self.endpoint_inner.make_ack(&self.original, resp)?,
-                None => {
-                    return Err(Error::TransactionError(
-                        "no last response found to send ACK".to_string(),
-                        self.key.clone(),
-                    ));
-                }
-            },
+            // A retransmission of the same 2xx re-uses the cached ACK. A
+            // forked 2xx (different To tag) establishes a different dialog
+            // (RFC 3261 §13.2.2.4): rebuild the ACK from that response so it
+            // carries its To tag, remote target and route set (§12.2.1.1).
+            // Non-2xx finals have a single branch — the cached ACK always
+            // matches there.
+            Some(ack) if Self::cached_ack_matches_response(&ack, self.last_response.as_ref()) => {
+                ack
+            }
+            _ => {
+                let resp = self.last_response.as_ref().ok_or(Error::TransactionError(
+                    "no last response found to send ACK".to_string(),
+                    self.key.clone(),
+                ))?;
+                self.endpoint_inner.make_ack(&self.original, resp)?
+            }
         };
 
         // Capture locator + transport lookup result
@@ -1055,6 +1061,37 @@ impl Transaction {
         Some(SipMessage::Response(resp))
     }
 
+    /// Retransmit `last_response` and re-arm Timer G with a doubled interval
+    /// capped at T2 (RFC 3261 §13.3.1.4 / §17.2.1). Used by both the
+    /// Completed (non-2xx) and Accepted (2xx) Timer G arms.
+    async fn retransmit_last_response(
+        &mut self,
+        key: &TransactionKey,
+        duration: &Duration,
+    ) -> Result<()> {
+        if let Some(last_response) = &self.last_response {
+            if let Some(connection) = &self.connection {
+                let last_response =
+                    if let Some(ref inspector) = self.endpoint_inner.message_inspector {
+                        inspector
+                            .before_send(last_response.to_owned().into(), self.destination.as_ref())
+                    } else {
+                        last_response.to_owned().into()
+                    };
+                connection
+                    .send(last_response, self.destination.as_ref())
+                    .await?;
+            }
+        }
+        let duration = (*duration * 2).min(self.endpoint_inner.option.t2);
+        let timer_g = self
+            .endpoint_inner
+            .timers
+            .timeout(duration, TransactionTimer::TimerG(key.clone(), duration));
+        self.timer_g.replace(timer_g);
+        Ok(())
+    }
+
     async fn on_timer(&mut self, timer: TransactionTimer) -> Result<()> {
         match self.state {
             TransactionState::Calling | TransactionState::Trying => {
@@ -1138,30 +1175,7 @@ impl Transaction {
                 if let TransactionTimer::TimerG(key, duration) = timer {
                     // resend the response (non-2xx final — RFC 3261 §17.2.1;
                     // 2xx finals route to Accepted, never here)
-                    if let Some(last_response) = &self.last_response {
-                        if let Some(connection) = &self.connection {
-                            let last_response = if let Some(ref inspector) =
-                                self.endpoint_inner.message_inspector
-                            {
-                                inspector.before_send(
-                                    last_response.to_owned().into(),
-                                    self.destination.as_ref(),
-                                )
-                            } else {
-                                last_response.to_owned().into()
-                            };
-                            connection
-                                .send(last_response, self.destination.as_ref())
-                                .await?;
-                        }
-                    }
-                    // restart Timer G, doubling up to T2 (RFC 3261 §13.3.1.4, §17.2.1)
-                    let duration = (duration * 2).min(self.endpoint_inner.option.t2);
-                    let timer_g = self
-                        .endpoint_inner
-                        .timers
-                        .timeout(duration, TransactionTimer::TimerG(key, duration));
-                    self.timer_g.replace(timer_g);
+                    self.retransmit_last_response(&key, &duration).await?;
                 } else if let TransactionTimer::TimerD(_) = timer {
                     self.transition(TransactionState::Terminated)?;
                 } else if let TransactionTimer::TimerK(_) = timer {
@@ -1189,30 +1203,9 @@ impl Transaction {
                         self.transition(TransactionState::Terminated)?;
                     }
                     (TransactionType::ServerInvite, TransactionTimer::TimerG(key, duration)) => {
-                        if let Some(last_response) = &self.last_response {
-                            if let Some(connection) = &self.connection {
-                                let last_response = if let Some(ref inspector) =
-                                    self.endpoint_inner.message_inspector
-                                {
-                                    inspector.before_send(
-                                        last_response.to_owned().into(),
-                                        self.destination.as_ref(),
-                                    )
-                                } else {
-                                    last_response.to_owned().into()
-                                };
-                                connection
-                                    .send(last_response, self.destination.as_ref())
-                                    .await?;
-                            }
-                        }
-                        // restart Timer G, doubling up to T2 (RFC 3261 §13.3.1.4)
-                        let duration = (*duration * 2).min(self.endpoint_inner.option.t2);
-                        let timer_g = self
-                            .endpoint_inner
-                            .timers
-                            .timeout(duration, TransactionTimer::TimerG(key.clone(), duration));
-                        self.timer_g.replace(timer_g);
+                        // retransmit the 2xx (documented Timer G deviation,
+                        // doubling up to T2 — RFC 3261 §13.3.1.4)
+                        self.retransmit_last_response(key, &duration).await?;
                     }
                     (
                         TransactionType::ClientNonInvite
@@ -1434,21 +1427,16 @@ impl Transaction {
                 });
 
                 if self.transaction_type == TransactionType::ServerInvite {
-                    // start Timer G for server invite only
+                    // start Timer G for server invite only. Completed only
+                    // carries non-2xx finals (2xx route to Accepted), so
+                    // Timer G retransmits on unreliable transports only
+                    // (RFC 3261 §17.2.1); reliable transports need no
+                    // response retransmission.
                     let connection = self.connection.as_ref().ok_or(Error::TransactionError(
                         "no connection found".to_string(),
                         self.key.clone(),
                     ))?;
-                    // RFC 3261 §13.3.1.4: the UAS core retransmits a 2xx on
-                    // every transport, reliable ones included (it can be lost
-                    // at a later UDP hop), until the ACK or 64*T1. A non-2xx
-                    // final is retransmitted on unreliable transports only
-                    // (§17.2.1).
-                    let answered_2xx = self
-                        .last_response
-                        .as_ref()
-                        .is_some_and(|r| r.status_code.kind() == StatusCodeKind::Successful);
-                    if answered_2xx || !connection.is_reliable() {
+                    if !connection.is_reliable() {
                         let timer_g = self.endpoint_inner.timers.timeout(
                             self.endpoint_inner.option.t1,
                             TransactionTimer::TimerG(
@@ -1465,9 +1453,8 @@ impl Transaction {
                             .waiting_ack
                             .insert(dialog_id, self.key.clone());
                     }
-                    // Wait for the ACK until Timer D (64*T1): Timer H for a
-                    // non-2xx (RFC 3261 §17.2.1), the 2xx retransmission limit
-                    // for a 2xx (§13.3.1.4). Timer G keeps retransmitting.
+                    // Wait for the ACK until Timer D (64*T1) — Timer H for a
+                    // non-2xx (RFC 3261 §17.2.1). Timer G keeps retransmitting.
                 }
                 // start Timer D
                 let timer_d = self.endpoint_inner.timers.timeout(
@@ -1538,6 +1525,31 @@ impl Transaction {
         self.timer_m
             .take()
             .map(|id| -> Option<TransactionTimer> { self.endpoint_inner.timers.cancel(id) });
+    }
+
+    /// Whether the cached ACK acknowledges the response currently stored in
+    /// `last_response`: true when the tags match (a retransmission) — a
+    /// different tag means a forked 2xx that needs its own ACK.
+    fn cached_ack_matches_response(ack: &Request, resp: Option<&Response>) -> bool {
+        let Some(resp) = resp else {
+            return true;
+        };
+        let ack_tag = ack
+            .to_header()
+            .ok()
+            .and_then(|h| h.tag().ok())
+            .flatten()
+            .map(|t| t.value().to_string());
+        let resp_tag = resp
+            .to_header()
+            .ok()
+            .and_then(|h| h.tag().ok())
+            .flatten()
+            .map(|t| t.value().to_string());
+        match (ack_tag, resp_tag) {
+            (Some(a), Some(b)) => a == b,
+            _ => true,
+        }
     }
 
     pub fn role(&self) -> TransactionRole {

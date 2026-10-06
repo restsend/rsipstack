@@ -212,6 +212,10 @@ async fn test_server_accepted_transaction_ends_on_ack() -> crate::Result<()> {
         inner.waiting_ack.is_empty(),
         "waiting_ack must not retain the confirmed dialog"
     );
+    assert!(
+        inner.waiting_ack_cseq.is_empty(),
+        "waiting_ack_cseq must not retain the confirmed dialog's (dialog, CSeq) route"
+    );
     // The 2xx stays cached so retransmitted ACKs / late INVITE retransmits
     // are absorbed below the TU.
     assert!(
@@ -262,7 +266,7 @@ async fn test_client_accepted_transaction_detaches_on_timer_m() -> crate::Result
 
     // Answer the INVITE (and its retransmissions) with a tagged 200 OK.
     let mut buf = vec![0u8; 4096];
-    let ok = loop {
+    loop {
         let Ok(Ok((len, src))) =
             tokio::time::timeout(Duration::from_secs(2), peer.recv_from(&mut buf)).await
         else {
@@ -296,7 +300,7 @@ async fn test_client_accepted_transaction_detaches_on_timer_m() -> crate::Result
             peer.send_to(resp.as_bytes(), src).await?;
             break;
         }
-    };
+    }
 
     // First 2xx → Accepted (auto-ACK fired on the wire).
     let first = tokio::time::timeout(Duration::from_secs(2), tx.receive())
@@ -340,7 +344,118 @@ async fn test_client_accepted_transaction_detaches_on_timer_m() -> crate::Result
     assert!(endpoint.inner.finished_transactions.contains_key(&key));
 
     serve.abort();
-    let _ = ok;
+    token.cancel();
+    Ok(())
+}
+
+/// Integration guard for the do_invite drainer (#164): after `do_invite`
+/// returns a confirmed dialog, a retransmitted 200 OK must still be
+/// re-ACKed on the wire. Without the drainer the Accepted transaction's
+/// channel would go unread and the re-ACK would never fire.
+#[tokio::test]
+async fn test_do_invite_drainer_reacks_retransmitted_2xx() -> crate::Result<()> {
+    use crate::dialog::invitation::InviteOption;
+    use crate::sip::Uri;
+
+    let token = CancellationToken::new();
+    let transport_layer = TransportLayer::new(token.child_token());
+    let udp =
+        UdpConnection::create_connection("127.0.0.1:0".parse()?, None, Some(token.child_token()))
+            .await?;
+    let uac_addr = udp.get_addr().addr.clone();
+    transport_layer.add_transport(udp.into());
+    let endpoint = EndpointBuilder::new()
+        .with_user_agent("rsipstack-test")
+        .with_transport_layer(transport_layer)
+        .with_cancel_token(token.child_token())
+        .build();
+    let endpoint_inner = endpoint.inner.clone();
+    tokio::spawn(async move {
+        let _ = endpoint_inner.serve().await;
+    });
+    let dialog_layer = Arc::new(DialogLayer::new(endpoint.inner.clone()));
+
+    let peer = UdpSocket::bind("127.0.0.1:0").await?;
+    let peer_addr = peer.local_addr()?;
+
+    let option = InviteOption {
+        caller: Uri::try_from("sip:alice@example.com")?,
+        callee: Uri::try_from(format!("sip:bob@{peer_addr};transport=udp").as_str())?,
+        contact: Uri::try_from(format!("sip:alice@{uac_addr}").as_str())?,
+        ..Default::default()
+    };
+    let (state_sender, mut states) = tokio::sync::mpsc::unbounded_channel();
+    let invite = {
+        let dialog_layer = dialog_layer.clone();
+        tokio::spawn(async move { dialog_layer.do_invite(option, state_sender).await })
+    };
+
+    // The raw UAS: answer the INVITE with a tagged 200 OK, twice.
+    let mut buf = vec![0u8; 4096];
+    let ok = loop {
+        let Ok(Ok((len, src))) =
+            tokio::time::timeout(Duration::from_secs(2), peer.recv_from(&mut buf)).await
+        else {
+            panic!("timeout waiting for the INVITE");
+        };
+        let text = String::from_utf8_lossy(&buf[..len]).to_string();
+        if text.starts_with("INVITE") {
+            let header = |name: &str| {
+                text.lines()
+                    .find(|l| l.starts_with(name))
+                    .expect("INVITE header missing")
+                    .strip_prefix(&format!("{name} "))
+                    .expect("INVITE header malformed")
+                    .to_string()
+            };
+            let ok = format!(
+                "SIP/2.0 200 OK\r\nVia: {via}\r\nFrom: {from}\r\nTo: {to};tag=drain-tag\r\nCall-ID: {callid}\r\nCSeq: {cseq}\r\nContact: <sip:bob@{peer_addr};transport=udp>\r\nContent-Length: 0\r\n\r\n",
+                via = header("Via:"),
+                from = header("From:"),
+                to = header("To:"),
+                callid = header("Call-ID:"),
+                cseq = header("CSeq:"),
+                peer_addr = peer_addr,
+            );
+            peer.send_to(ok.as_bytes(), src).await?;
+            break ok;
+        }
+    };
+
+    // do_invite confirms; then the UAS retransmits the same 200 OK.
+    let (dialog, resp) = tokio::time::timeout(Duration::from_secs(2), invite)
+        .await
+        .expect("do_invite timed out")
+        .expect("do_invite task panicked")
+        .expect("do_invite failed");
+    assert!(matches!(
+        resp.as_ref().map(|r| r.status_code.code()),
+        Some(200)
+    ));
+    peer.send_to(ok.as_bytes(), peer_addr).await?;
+
+    // The drainer must have re-ACKed the retransmission.
+    loop {
+        let Ok(Ok((len, _))) =
+            tokio::time::timeout(Duration::from_secs(2), peer.recv_from(&mut buf)).await
+        else {
+            panic!("no re-ACK for the retransmitted 200 OK — did the do_invite drainer stop receiving?");
+        };
+        let text = String::from_utf8_lossy(&buf[..len]).to_string();
+        if text.starts_with("BYE") {
+            panic!("a confirmed dialog must not be ended with a BYE");
+        }
+        if text.starts_with("ACK") {
+            assert!(
+                text.contains(";tag=drain-tag"),
+                "the re-ACK must carry the 2xx's To tag, got {text}"
+            );
+            break;
+        }
+    }
+    let _ = &mut states;
+    drop(dialog);
+
     token.cancel();
     Ok(())
 }
