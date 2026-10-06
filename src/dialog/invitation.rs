@@ -691,6 +691,19 @@ impl DialogLayer {
                         self.inner
                             .dialogs
                             .insert(new_dialog_id.to_string(), Dialog::Invite(dialog.clone()));
+
+                        // RFC 6026 §7.2: the client transaction is in Accepted
+                        // with Timer M (64*T1) armed. Keep receiving until it
+                        // ends so retransmitted 2xx keep being re-ACKed and
+                        // forked 2xx are observed; abandoning the transaction
+                        // here would leave it (and its timers) in the
+                        // endpoint's table and silently stop the re-ACKs.
+                        if let Some(mut tx) = guard.invite_tx.take() {
+                            crate::platform::spawn(async move {
+                                while tx.receive().await.is_some() {}
+                                debug!(id = %new_dialog_id, "accepted transaction drained (Timer M expired)");
+                            });
+                        }
                     }
                     _ => {}
                 }
@@ -756,6 +769,16 @@ impl DialogLayer {
                         inner
                             .dialogs
                             .insert(new_id.to_string(), Dialog::Invite(dialog_clone.clone()));
+
+                        // RFC 6026 §7.2: keep draining the Accepted transaction
+                        // until Timer M ends it (re-ACKs retransmitted 2xx,
+                        // observes forked 2xx, and detaches it from the
+                        // endpoint's table). See do_invite for the rationale.
+                        let confirmed_id = new_id.clone();
+                        crate::platform::spawn(async move {
+                            while tx.receive().await.is_some() {}
+                            debug!(id = %confirmed_id, "accepted transaction drained (Timer M expired)");
+                        });
                     }
                 }
                 Err(e) => debug!(%id0, error = %e, "async invite failed"),

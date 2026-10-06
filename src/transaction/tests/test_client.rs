@@ -408,6 +408,7 @@ async fn test_invite_2xx_upstream_via_delivery_and_ack() -> Result<()> {
             response.to_header_mut()?.mut_tag(crate::transaction::make_tag())?;
             response.headers.push(Contact::new("<sip:bob@127.0.0.1:5090>").into());
             let suppress_ack = proxy && status == crate::sip::StatusCode::OK;
+            let is_2xx = status == crate::sip::StatusCode::OK;
             let mut deadline = None;
             for iteration in 0..3 {
                 if iteration == 2 {
@@ -415,31 +416,48 @@ async fn test_invite_2xx_upstream_via_delivery_and_ack() -> Result<()> {
                     response.to_header_mut()?.mut_tag(crate::transaction::make_tag())?;
                 }
                 endpoint.inner.on_received_message(response.clone().into(), conn.clone(), &addr).await?;
-                if iteration == 0 || suppress_ack {
+                // RFC 6026 §7.2: an Accepted client INVITE delivers every 2xx
+                // (retransmissions and forks) to the TU, so the test must
+                // keep receiving them; proxy-mode (suppress_ack) transactions
+                // in Accepted do the same.
+                if iteration == 0 || suppress_ack || is_2xx {
                     let delivered = tokio::time::timeout(Duration::from_secs(1), tx.receive()).await
                         .expect("response must reach application").expect("response");
                     assert_eq!(delivered, SipMessage::Response(response.clone()));
                 }
                 if suppress_ack {
-                    assert_eq!(tx.state, TransactionState::Completed);
+                    // RFC 6026 §7.2 with the documented auto-ACK deviation:
+                    // an upstream-Via 2xx parks the forwarding transaction in
+                    // Accepted (Timer M) and the TU owns the ACK.
+                    assert_eq!(tx.state, TransactionState::Accepted);
                     assert!(tx.last_ack.is_none());
                     assert!(outgoing_rx.try_recv().is_err(), "proxy must not send ACK");
                     if iteration == 0 {
-                        deadline = tx.timer_d;
+                        deadline = tx.timer_m;
                         assert!(deadline.is_some());
                     }
-                    assert_eq!(tx.timer_d, deadline, "duplicates must not extend lifetime");
+                    assert_eq!(tx.timer_m, deadline, "duplicates must not extend lifetime");
+                } else if is_2xx {
+                    // UA single-Via 2xx: Accepted with the convenience
+                    // auto-ACK; every retransmission/fork is re-ACKed.
+                    assert_eq!(tx.state, TransactionState::Accepted);
+                    let TransportEvent::Incoming(SipMessage::Request(ack), _, _) =
+                        outgoing_rx.try_recv().expect("UA 2xx requires ACK") else {
+                            panic!("expected ACK");
+                        };
+                    assert_eq!(ack.method, crate::sip::Method::Ack);
                 } else {
+                    // 3xx-6xx: Completed → ACK → Terminated (RFC 3261 §17.1.1.3).
                     assert_eq!(tx.state, TransactionState::Terminated);
                     let TransportEvent::Incoming(SipMessage::Request(ack), _, _) =
-                        outgoing_rx.try_recv().expect("UA 2xx and proxy non-2xx require ACK") else {
+                        outgoing_rx.try_recv().expect("proxy non-2xx requires ACK") else {
                             panic!("expected ACK");
                         };
                     assert_eq!(ack.method, crate::sip::Method::Ack);
                 }
             }
             if suppress_ack {
-                tx.tu_sender.send(TransactionEvent::Timer(TransactionTimer::TimerD(key.clone()))).unwrap();
+                tx.tu_sender.send(TransactionEvent::Timer(TransactionTimer::TimerM(key.clone()))).unwrap();
                 assert!(tokio::time::timeout(Duration::from_secs(1), tx.receive()).await.unwrap().is_none());
                 assert_eq!(tx.state, TransactionState::Terminated);
                 assert!(!endpoint.inner.transactions.contains_key(&key));

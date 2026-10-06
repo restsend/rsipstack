@@ -162,7 +162,9 @@ async fn test_default_auto_acks_2xx_once() -> Result<()> {
         let mut tx = Transaction::new_client(key, invite, inner.clone(), None);
         tx.send().await?;
 
-        // The 2xx reaches the TU exactly once ...
+        // The 2xx reaches the TU and the transaction enters Accepted with
+        // Timer M armed (RFC 6026 §7.2; the auto-ACK is the documented
+        // rsipstack 0.5.x deviation).
         let first = tokio::time::timeout(Duration::from_secs(2), tx.receive())
             .await
             .expect("timeout waiting for the 200")
@@ -173,18 +175,21 @@ async fn test_default_auto_acks_2xx_once() -> Result<()> {
             }
             other => panic!("expected the 200 OK, got {other}"),
         }
-        // ... a retransmitted 200 OK must not reach the TU again: after the
-        // auto-ACK the transaction terminates and the TU channel closes, so
-        // receive() returns None instead of ever repeating the 2xx.
-        let next = tokio::time::timeout(Duration::from_millis(1200), tx.receive()).await;
-        assert!(
-            matches!(next, Ok(None)),
-            "the TU channel must close after the auto-ACK (no duplicate 2xx), got {next:?}"
-        );
-        // RFC 3261 §17.1.1.2: the client INVITE transaction terminates
-        // immediately after ACKing the 2xx; retransmissions are absorbed
-        // below the TU (finished_transactions replays the stored ACK).
-        assert_eq!(tx.state, TransactionState::Terminated);
+        assert_eq!(tx.state, TransactionState::Accepted);
+
+        // A retransmitted 200 OK is delivered to the TU again (§7.2) and
+        // re-ACKed below the TU.
+        let second = tokio::time::timeout(Duration::from_millis(1200), tx.receive())
+            .await
+            .expect("timeout waiting for the retransmitted 200")
+            .expect("transaction ended before the retransmitted 200");
+        match second {
+            SipMessage::Response(ref resp) => {
+                assert_eq!(resp.status_code.code(), 200);
+            }
+            other => panic!("expected the retransmitted 200 OK, got {other}"),
+        }
+        assert_eq!(tx.state, TransactionState::Accepted);
         Ok::<_, crate::Error>(())
     };
 
@@ -212,10 +217,10 @@ async fn test_default_auto_acks_2xx_once() -> Result<()> {
         "the ACK must carry the 2xx's To tag, got {ack}"
     );
 
-    // Each retransmitted 200 OK is absorbed with a re-ACK (the endpoint
-    // replays the stored ACK), never forwarded to the TU.
+    // Each retransmitted 200 OK is re-ACKed (RFC 6026 §7.2 absorption with
+    // the documented auto-ACK deviation).
     let re_ack = next_wire_event(&mut peer, Duration::from_millis(1100)).await;
-    let re_ack = re_ack.expect("a retransmitted 200 OK must be re-ACKed (absorbed)");
+    let re_ack = re_ack.expect("a retransmitted 200 OK must be re-ACKed");
     assert!(
         re_ack.contains("CSeq: 1 ACK"),
         "the re-ACK must carry the INVITE's CSeq, got {re_ack}"
