@@ -769,3 +769,93 @@ async fn test_stale_ack_is_ignored_and_a_valid_ack_still_confirms() -> crate::Re
     token.cancel();
     Ok(())
 }
+
+/// RFC 3261 §13.2.2.4: the ACK of a 2xx carries the CSeq number of its
+/// INVITE. Over UDP the ACK of a re-INVITE can arrive after the next
+/// re-INVITE on the dialog: it must still stop its own 2xx, and the newer
+/// re-INVITE must still wait for its own ACK.
+#[tokio::test]
+async fn test_late_ack_of_an_earlier_reinvite_reaches_its_own_transaction() -> crate::Result<()> {
+    let token = CancellationToken::new();
+    let (mut states, mut dialogs, peer) = setup(&token, short_timers()).await?;
+    peer.send_request(Method::Invite, 1, None).await;
+    let dialog = tokio::time::timeout(Duration::from_secs(2), dialogs.recv())
+        .await
+        .expect("timeout waiting for the server dialog")
+        .unwrap();
+    dialog.accept(None, None)?;
+    let first = peer.collect(Instant::now() + T1 * 2).await;
+    let Some((_, SipMessage::Response(ok))) = first.iter().find(|(_, m)| is_2xx_to(m, 1)) else {
+        panic!("the 2xx");
+    };
+    let local_tag = ok.to_header()?.tag()?.unwrap().value().to_string();
+    peer.send_request(Method::Ack, 1, Some(&local_tag)).await;
+    wait_confirmed(&mut states).await;
+
+    // re-INVITE 2 and 3 are answered; the ACK of 2 arrives after re-INVITE 3.
+    let mut answered = None;
+    for cseq in [2, 3] {
+        peer.send_request(Method::Invite, cseq, Some(&local_tag))
+            .await;
+        let handle = loop {
+            let state = tokio::time::timeout(Duration::from_secs(2), states.recv())
+                .await
+                .expect("timeout waiting for the re-INVITE")
+                .expect("state channel closed");
+            if let DialogState::Updated(_, _, handle) = state {
+                break handle;
+            }
+        };
+        answered.get_or_insert(Instant::now());
+        handle.reply(crate::sip::StatusCode::OK).await.ok();
+        // The next request follows this 2xx on the wire.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !peer
+            .collect(Instant::now() + T1)
+            .await
+            .iter()
+            .any(|(_, m)| is_2xx_to(m, cseq))
+        {
+            assert!(
+                Instant::now() < deadline,
+                "timeout waiting for the 2xx to {cseq}"
+            );
+        }
+    }
+    peer.send_request(Method::Ack, 2, Some(&local_tag)).await;
+    let acked_2 = Instant::now();
+    let messages = peer.collect(acked_2 + T1 * 16).await;
+    assert!(
+        !messages
+            .iter()
+            .any(|(at, m)| is_2xx_to(m, 2) && *at > acked_2 + T1 * 4),
+        "the late ACK of CSeq 2 must stop the retransmissions of its 2xx"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|(at, m)| is_2xx_to(m, 3) && *at > acked_2),
+        "the ACK of CSeq 2 must not stop the 2xx to CSeq 3"
+    );
+
+    peer.send_request(Method::Ack, 3, Some(&local_tag)).await;
+    let acked_3 = Instant::now();
+    let messages = peer.collect(answered.unwrap() + T1X64 + T1 * 10).await;
+    assert!(
+        !messages
+            .iter()
+            .any(|(at, m)| is_invite_2xx(m) && *at > acked_3 + T1 * 4),
+        "no 2xx may be retransmitted once both are ACKed"
+    );
+    assert!(
+        !messages.iter().any(|(_, m)| matches!(
+            m,
+            SipMessage::Request(req) if req.method == Method::Bye
+        )),
+        "an ACKed call must not be ended"
+    );
+    assert!(terminated_reason(&mut states).is_none());
+    assert!(dialog.state().is_confirmed());
+    token.cancel();
+    Ok(())
+}

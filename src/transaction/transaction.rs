@@ -918,8 +918,8 @@ impl Transaction {
             {
                 // RFC 3261 §17.1.1.3 / §13.2.2.4: an ACK carries the CSeq
                 // number of the INVITE it acknowledges. ACKs for 2xx are
-                // routed per dialog (`waiting_ack`), so a delayed ACK of an
-                // earlier re-INVITE can land here; it must not confirm this
+                // routed by dialog and CSeq (`waiting_ack_cseq`); one with
+                // another CSeq that lands here anyway must not confirm this
                 // transaction or stop its 2xx retransmissions.
                 let ack_seq = req.cseq_header().and_then(|c| c.seq()).ok();
                 let invite_seq = self.original.cseq_header().and_then(|c| c.seq()).ok();
@@ -1358,6 +1358,18 @@ impl Transaction {
 
                         if let Some(ref resp) = self.last_response {
                             let dialog_id = DialogId::try_from((resp, TransactionRole::Server))?;
+                            // Route the ACK by dialog AND INVITE CSeq: the ACK
+                            // of an earlier re-INVITE can arrive after a newer
+                            // one was answered, and must reach its own
+                            // transaction (RFC 3261 §13.2.2.4). A non-2xx ACK
+                            // matches by branch (§17.2.3) — unreachable here,
+                            // Accepted only carries 2xx.
+                            let seq = self.original.cseq_header().and_then(|c| c.seq()).ok();
+                            if let Some(seq) = seq {
+                                self.endpoint_inner
+                                    .waiting_ack_cseq
+                                    .insert((dialog_id.clone(), seq), self.key.clone());
+                            }
                             self.endpoint_inner
                                 .waiting_ack
                                 .insert(dialog_id, self.key.clone());
@@ -1470,7 +1482,11 @@ impl Transaction {
                 if self.transaction_type == TransactionType::ServerInvite {
                     if let Some(ref resp) = self.last_response {
                         if let Ok(dialog_id) = DialogId::try_from((resp, self.role())) {
-                            self.endpoint_inner.waiting_ack.remove(&dialog_id);
+                            self.endpoint_inner.forget_waiting_ack(
+                                dialog_id,
+                                &self.original,
+                                &self.key,
+                            );
                         }
                     }
                 }
@@ -1547,17 +1563,14 @@ impl Transaction {
             matches!(self.transaction_type, TransactionType::ServerInvite)
                 && self.state == TransactionState::Completed;
         if !is_server_invite_waiting_ack {
-            match self.last_response {
-                Some(ref resp) => match DialogId::try_from((resp, self.role())) {
-                    Ok(dialog_id) => self
-                        .endpoint_inner
-                        .waiting_ack
-                        .remove(&dialog_id)
-                        .map(|_| ()),
-                    Err(_) => None,
-                },
-                _ => None,
-            };
+            if let Some(Ok(dialog_id)) = self
+                .last_response
+                .as_ref()
+                .map(|resp| DialogId::try_from((resp, self.role())))
+            {
+                self.endpoint_inner
+                    .forget_waiting_ack(dialog_id, &self.original, &self.key);
+            }
         }
 
         let last_message = {
