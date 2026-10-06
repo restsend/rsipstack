@@ -853,6 +853,7 @@ impl ServerInviteDialog {
             .last_response
             .as_ref()
             .is_some_and(|resp| resp.status_code.kind() == crate::sip::StatusCodeKind::Successful);
+        let mut acked = false;
 
         while let Some(msg) = tx.receive().await {
             if let SipMessage::Request(req) = msg {
@@ -863,11 +864,17 @@ impl ServerInviteDialog {
                         self.id(),
                         tx.last_response.clone().unwrap_or_default(),
                     ))?;
+                    acked = true;
                     break;
                 }
             }
         }
-        self.inner.end_session_without_ack(tx, answered_2xx).await;
+        // A matching ACK ends the Accepted transaction; `acked` keeps the
+        // timeout path (no ACK within 64*T1) from firing on a confirmed
+        // re-INVITE.
+        self.inner
+            .end_session_without_ack(tx, answered_2xx && !acked)
+            .await;
         Ok(())
     }
 
