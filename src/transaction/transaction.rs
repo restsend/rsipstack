@@ -905,11 +905,11 @@ impl Transaction {
                         return None;
                     }
                     // The peer confirmed the dialog: stop the 2xx
-                    // retransmissions (RFC 3261 §13.3.1.4) and remain in
-                    // Accepted until Timer L ends the transaction.
-                    if let Some(id) = self.timer_g.take() {
-                        self.endpoint_inner.timers.cancel(id);
-                    }
+                    // retransmissions (RFC 3261 §13.3.1.4) and end the
+                    // transaction. Retransmitted ACKs and late INVITE
+                    // retransmissions are absorbed below the TU by
+                    // `finished_transactions`.
+                    self.transition(TransactionState::Terminated).ok();
                     return Some(req.into());
                 }
             }
@@ -1136,20 +1136,8 @@ impl Transaction {
             }
             TransactionState::Completed => {
                 if let TransactionTimer::TimerG(key, duration) = timer {
-                    // RFC 6026 §7.1 defensive guard: the server transaction
-                    // MUST NOT retransmit 2xx responses on its own. Per the
-                    // RFC 6026 routing in respond() + on_received_response(),
-                    // 2xx finals route to the Accepted state, not Completed —
-                    // so `last_response` here should always be non-2xx. This
-                    // guard catches any legacy / out-of-band code path that
-                    // might land a 2xx in Completed; suppress the retransmit
-                    // and let Timer D / Timer K handle Termination.
-                    if let Some(last_response) = &self.last_response {
-                        if last_response.status_code.kind() == StatusCodeKind::Successful {
-                            return Ok(());
-                        }
-                    }
-                    // resend the response (non-2xx final — RFC 3261 §17.2.1)
+                    // resend the response (non-2xx final — RFC 3261 §17.2.1;
+                    // 2xx finals route to Accepted, never here)
                     if let Some(last_response) = &self.last_response {
                         if let Some(connection) = &self.connection {
                             let last_response = if let Some(ref inspector) =
