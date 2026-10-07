@@ -22,7 +22,7 @@ use crate::transaction::key::TransactionRole;
 use crate::transaction::transaction::{Transaction, TransactionEvent};
 use crate::Result;
 use core::sync::atomic::Ordering;
-use tracing::{debug, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 /// Unified INVITE dialog that can act as either a UAS (Server) or UAC (Client).
 ///
@@ -403,6 +403,45 @@ impl InviteDialog {
             .make_request(Method::Bye, None, None, None, None, None)?;
         self.inner.do_request(request).await?;
         Ok(())
+    }
+
+    /// End a forked dialog a later 2xx established (RFC 3261 §13.2.2.4).
+    ///
+    /// Called from the Accepted-window drainer for every message the client
+    /// INVITE transaction delivers after the dialog confirmed. A 2xx whose To
+    /// tag differs from the confirmed dialog's is a forked branch: the
+    /// transaction has already ACKed it, and the UAC — keeping a single
+    /// session — terminates it with a BYE. Everything else (retransmitted
+    /// 2xx with the same tag, non-2xx) is ignored.
+    pub(super) async fn end_forked_branch(&self, msg: &SipMessage, confirmed_remote_tag: &str) {
+        let SipMessage::Response(resp) = msg else {
+            return;
+        };
+        if resp.status_code.kind() != StatusCodeKind::Successful {
+            return;
+        }
+        // Same tag: a retransmission of the confirmed 2xx, already re-ACKed.
+        let tag = match resp
+            .to_header()
+            .ok()
+            .and_then(|to| to.tag().ok().flatten())
+            .map(|tag| tag.value().to_string())
+        {
+            Some(tag) => tag,
+            None => return,
+        };
+        if tag == confirmed_remote_tag {
+            return;
+        }
+        let id = self.id();
+        info!(
+            id = %id,
+            tag = %tag,
+            "forked 2xx acknowledged; ending the extra branch with a BYE (RFC 3261 §13.2.2.4)"
+        );
+        if let Err(e) = self.inner.bye_forked_branch(resp).await {
+            warn!(id = %id, tag = %tag, error = %e, "failed to BYE the forked branch");
+        }
     }
 
     // ── Shared request semantics ──────────────────────────────────────────

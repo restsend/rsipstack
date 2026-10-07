@@ -1335,6 +1335,67 @@ impl DialogInner {
         result.map(|_| ())
     }
 
+    /// End a dialog a forked 2xx established (RFC 3261 §13.2.2.4).
+    ///
+    /// Every 2xx to the INVITE with a new To tag creates its own dialog; the
+    /// UAC keeps a single session (the first 2xx's), so the transaction has
+    /// already ACKed the forked 2xx and this sends the BYE that terminates
+    /// the extra branch. The BYE is built from that response's own remote
+    /// target (Contact) and route set (Record-Route); the confirmed dialog's
+    /// state is not touched and no dialog is registered for the branch.
+    pub(super) async fn bye_forked_branch(&self, resp: &Response) -> Result<()> {
+        let contact_uri = resp
+            .typed_contact_headers()?
+            .first()
+            .map(|c| c.uri.clone())
+            .ok_or_else(|| crate::Error::Error("missing Contact header".to_string()))?;
+
+        // §12.2.1.1: the forked dialog's route set is the 2xx's Record-Route.
+        let mut routes: Vec<Route> = resp
+            .record_route_headers()
+            .into_iter()
+            .flat_map(|rr| split_rr_values(rr.value()))
+            .map(Route::from)
+            .collect();
+        routes.reverse();
+
+        // To carries the forked branch's tag, From keeps ours.
+        let to = resp.to_header()?.clone();
+        let id = self.id.lock().clone();
+        let via = self
+            .endpoint_inner
+            .get_via(self.via_addr_for_send_transport(), None)?;
+        let cseq = CSeq {
+            seq: self.increment_local_seq(),
+            method: Method::Bye,
+        };
+
+        let mut headers: Vec<Header> = vec![
+            Header::Via(via.into()),
+            Header::CallId(id.call_id.clone().into()),
+            Header::From(self.from.clone().to_string().into()),
+            Header::To(to),
+            Header::CSeq(cseq.into()),
+            Header::UserAgent(self.endpoint_inner.user_agent.clone().into()),
+        ];
+        if let Some(uri) = self.local_contact.as_ref() {
+            headers.push(Contact::from(uri.clone()).into());
+        }
+        headers.extend(routes.into_iter().map(Header::Route));
+        headers.push(Header::MaxForwards(70.into()));
+
+        debug!(id = %id, uri = %contact_uri, "sending BYE to a forked dialog");
+        self.do_request(crate::sip::Request {
+            method: Method::Bye,
+            uri: contact_uri,
+            headers: headers.into(),
+            body: Vec::new(),
+            version: crate::sip::Version::V2,
+        })
+        .await?;
+        Ok(())
+    }
+
     /// RFC 3261 §13.3.1.4: the server transaction of an INVITE or re-INVITE
     /// retransmitted our 2xx (`answered_2xx`) for 64*T1 and ended without an
     /// ACK. The dialog is terminated with [`TerminatedReason::Timeout`] and the

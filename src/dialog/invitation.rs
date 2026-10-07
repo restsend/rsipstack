@@ -719,8 +719,12 @@ impl DialogLayer {
                         // here would leave it (and its timers) in the
                         // endpoint's table and silently stop the re-ACKs.
                         if let Some(mut tx) = guard.invite_tx.take() {
+                            let dlg = dialog.clone();
+                            let confirmed_tag = new_dialog_id.remote_tag.clone();
                             crate::platform::spawn(async move {
-                                while tx.receive().await.is_some() {}
+                                while let Some(msg) = tx.receive().await {
+                                    dlg.end_forked_branch(&msg, &confirmed_tag).await;
+                                }
                                 debug!(id = %new_dialog_id, "accepted transaction drained (Timer M expired)");
                             });
                         }
@@ -795,8 +799,12 @@ impl DialogLayer {
                         // observes forked 2xx, and detaches it from the
                         // endpoint's table). See do_invite for the rationale.
                         let confirmed_id = new_id.clone();
+                        let confirmed_tag = new_id.remote_tag.clone();
+                        let forked_dlg = dialog_clone.clone();
                         crate::platform::spawn(async move {
-                            while tx.receive().await.is_some() {}
+                            while let Some(msg) = tx.receive().await {
+                                forked_dlg.end_forked_branch(&msg, &confirmed_tag).await;
+                            }
                             debug!(id = %confirmed_id, "accepted transaction drained (Timer M expired)");
                         });
                     }
