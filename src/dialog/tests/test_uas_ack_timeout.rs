@@ -514,14 +514,18 @@ async fn test_unacked_reinvite_2xx_ends_the_session() -> crate::Result<()> {
     Ok(())
 }
 
-async fn wait_confirmed(states: &mut DialogStateReceiver) {
+/// Wait for `Confirmed` and return the CSeq number of the 2xx it carries.
+async fn wait_confirmed(states: &mut DialogStateReceiver) -> u32 {
     loop {
         let state = tokio::time::timeout(Duration::from_secs(2), states.recv())
             .await
             .expect("timeout waiting for the call to be confirmed")
             .expect("state channel closed");
-        if matches!(state, DialogState::Confirmed(..)) {
-            return;
+        if let DialogState::Confirmed(_, resp) = state {
+            let cseq = resp.cseq_header().expect("Confirmed carries the 2xx");
+            assert_eq!(cseq.method().unwrap(), Method::Invite);
+            assert_eq!(resp.status_code.code(), 200);
+            return cseq.seq().unwrap();
         }
     }
 }
@@ -652,7 +656,7 @@ async fn test_2xx_over_tcp_is_retransmitted_until_the_ack() -> crate::Result<()>
         .write_all(request(Method::Ack, 1, Some(&to_tag)).as_bytes())
         .await?;
     let acked = Instant::now();
-    wait_confirmed(&mut states).await;
+    assert_eq!(wait_confirmed(&mut states).await, 1);
     let after_ack = read_tcp_messages(&mut stream, &mut buf, acked + T1 * 30).await;
     assert!(
         !after_ack
@@ -790,7 +794,7 @@ async fn test_late_ack_of_an_earlier_reinvite_reaches_its_own_transaction() -> c
     };
     let local_tag = ok.to_header()?.tag()?.unwrap().value().to_string();
     peer.send_request(Method::Ack, 1, Some(&local_tag)).await;
-    wait_confirmed(&mut states).await;
+    assert_eq!(wait_confirmed(&mut states).await, 1);
 
     // re-INVITE 2 and 3 are answered; the ACK of 2 arrives after re-INVITE 3.
     let mut answered = None;
@@ -854,6 +858,9 @@ async fn test_late_ack_of_an_earlier_reinvite_reaches_its_own_transaction() -> c
         )),
         "an ACKed call must not be ended"
     );
+    // Each ACK confirms its own re-INVITE, in the order the ACKs arrived.
+    assert_eq!(wait_confirmed(&mut states).await, 2);
+    assert_eq!(wait_confirmed(&mut states).await, 3);
     assert!(terminated_reason(&mut states).is_none());
     assert!(dialog.state().is_confirmed());
     token.cancel();
