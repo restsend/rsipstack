@@ -32,6 +32,7 @@ pub use tokio::sync::mpsc;
 pub mod atomic64;
 pub mod net;
 pub mod select;
+pub mod tls;
 
 pub use select::{select2, select3, Either, Select2, Select3, Which3};
 

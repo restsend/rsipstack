@@ -7,6 +7,9 @@ use super::{
 use crate::platform::CancellationToken;
 use crate::sip::SipMessage;
 use crate::{error::Error, transport::transport_layer::TransportLayerInnerRef, Result};
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 use rustls::client::danger::ServerCertVerifier;
 use rustls::crypto::CryptoProvider;
 use rustls::server::{ClientHello, ResolvesServerCert};
@@ -436,6 +439,117 @@ impl fmt::Debug for TlsListenerConnection {
 type TlsClientStream = tokio_rustls::client::TlsStream<TcpStream>;
 type TlsServerStream = tokio_rustls::server::TlsStream<TcpStream>;
 
+/// Client halves are boxed so rustls and platform-seam streams share one
+/// `TlsConnectionInner::Client` representation.
+type ClientReadHalf = Box<dyn tokio::io::AsyncRead + Unpin + Send>;
+type ClientWriteHalf = Box<dyn tokio::io::AsyncWrite + Unpin + Send>;
+
+type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
+
+/// Bridges a seam TLS stream (async-fn, owned-data) back into the tokio
+/// world. Chunks from `recv()` are buffered; `send_all`/`shutdown` futures
+/// hold an owned `Arc` + `Vec`, so nothing borrows across polls.
+struct TokioSeamStream {
+    inner: Arc<dyn crate::platform::tls::TlsStream>,
+    recv_fut: Option<BoxFuture<Result<Vec<u8>>>>,
+    send_fut: Option<BoxFuture<Result<()>>>,
+    shutdown_fut: Option<BoxFuture<Result<()>>>,
+    chunk: alloc::collections::VecDeque<u8>,
+}
+
+impl TokioSeamStream {
+    fn new(inner: Arc<dyn crate::platform::tls::TlsStream>) -> Self {
+        Self {
+            inner,
+            recv_fut: None,
+            send_fut: None,
+            shutdown_fut: None,
+            chunk: alloc::collections::VecDeque::new(),
+        }
+    }
+}
+
+impl tokio::io::AsyncRead for TokioSeamStream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        rbuf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        loop {
+            if !this.chunk.is_empty() {
+                let n = this.chunk.len().min(rbuf.remaining());
+                let data: Vec<u8> = this.chunk.drain(..n).collect();
+                rbuf.put_slice(&data);
+                return Poll::Ready(Ok(()));
+            }
+            if this.recv_fut.is_none() {
+                let inner = this.inner.clone();
+                this.recv_fut = Some(Box::pin(async move { inner.recv().await }));
+            }
+            match this.recv_fut.as_mut().unwrap().as_mut().poll(cx) {
+                Poll::Ready(Ok(data)) => {
+                    this.recv_fut = None;
+                    if data.is_empty() {
+                        // Peer closed the stream.
+                        return Poll::Ready(Ok(()));
+                    }
+                    this.chunk.extend(data);
+                }
+                Poll::Ready(Err(e)) => return Poll::Ready(Err(seam_io_err(e))),
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+    }
+}
+
+fn seam_io_err(e: crate::Error) -> std::io::Error {
+    std::io::Error::other(e.to_string())
+}
+
+impl tokio::io::AsyncWrite for TokioSeamStream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let this = self.get_mut();
+        if this.send_fut.is_none() {
+            let inner = this.inner.clone();
+            let data = buf.to_vec();
+            this.send_fut = Some(Box::pin(async move { inner.send_all(data).await }));
+        }
+        match this.send_fut.as_mut().unwrap().as_mut().poll(cx) {
+            Poll::Ready(Ok(())) => {
+                this.send_fut = None;
+                Poll::Ready(Ok(buf.len()))
+            }
+            Poll::Ready(Err(e)) => Poll::Ready(Err(seam_io_err(e))),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(())) // send_all is already awaited to completion
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        if this.shutdown_fut.is_none() {
+            let inner = this.inner.clone();
+            this.shutdown_fut = Some(Box::pin(async move { inner.shutdown().await }));
+        }
+        match this.shutdown_fut.as_mut().unwrap().as_mut().poll(cx) {
+            Poll::Ready(Ok(())) => {
+                this.shutdown_fut = None;
+                Poll::Ready(Ok(()))
+            }
+            Poll::Ready(Err(e)) => Poll::Ready(Err(seam_io_err(e))),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
 // TLS connection - uses enum to handle both client and server streams
 #[derive(Clone)]
 pub struct TlsConnection {
@@ -445,14 +559,7 @@ pub struct TlsConnection {
 
 #[derive(Clone)]
 enum TlsConnectionInner {
-    Client(
-        Arc<
-            StreamConnectionInner<
-                tokio::io::ReadHalf<TlsClientStream>,
-                tokio::io::WriteHalf<TlsClientStream>,
-            >,
-        >,
-    ),
+    Client(Arc<StreamConnectionInner<ClientReadHalf, ClientWriteHalf>>),
     Server(
         Arc<
             StreamConnectionInner<
@@ -479,6 +586,13 @@ impl TlsConnection {
         custom_verifier: Option<Arc<dyn ServerCertVerifier>>,
         cancel_token: Option<CancellationToken>,
     ) -> Result<Self> {
+        // A registered platform connector (embedded backends) takes
+        // precedence over the built-in rustls path.
+        if let Some(connector) = crate::platform::tls::client_connector() {
+            return Self::connect_via_platform(remote_addr, tls_config, cancel_token, connector)
+                .await;
+        }
+
         let mut root_store = RootCertStore::empty();
 
         // Load CA certificates if provided
@@ -552,6 +666,10 @@ impl TlsConnection {
 
         let tls_stream = connector.connect(server_name, stream).await?;
         let (read_half, write_half) = tokio::io::split(tls_stream);
+        let (read_half, write_half) = (
+            Box::new(read_half) as ClientReadHalf,
+            Box::new(write_half) as ClientWriteHalf,
+        );
 
         let connection = Self {
             inner: TlsConnectionInner::Client(Arc::new(StreamConnectionInner::new(
@@ -564,6 +682,67 @@ impl TlsConnection {
         };
         debug!(
             "Created TLS client connection: {} -> {}",
+            local_addr, remote_addr
+        );
+
+        Ok(connection)
+    }
+
+    // Client connect through the platform TLS seam (embedded backends).
+    async fn connect_via_platform(
+        remote_addr: &SipAddr,
+        tls_config: Option<&TlsConfig>,
+        cancel_token: Option<CancellationToken>,
+        connector: Arc<dyn crate::platform::tls::TlsConnector>,
+    ) -> Result<Self> {
+        let config = crate::platform::tls::TlsClientConfig {
+            server_name: tls_config
+                .and_then(|c| c.sni_hostname.clone())
+                .unwrap_or_else(|| match &remote_addr.addr.host {
+                    crate::sip::Host::Domain(domain) => domain.to_string(),
+                    crate::sip::Host::IpAddr(ip) => ip.to_string(),
+                }),
+            root_certs: tls_config.and_then(|c| c.ca_certs.clone()),
+            client_cert: tls_config.and_then(|c| c.client_cert.clone()),
+            client_key: tls_config.and_then(|c| c.client_key.clone()),
+        };
+
+        let socket_addr = match &remote_addr.addr.host {
+            crate::sip::Host::Domain(domain) => {
+                let port = remote_addr.addr.port.as_ref().map_or(5061, |p| p.value());
+                format!("{}:{}", domain, port).parse()?
+            }
+            crate::sip::Host::IpAddr(ip) => {
+                let port = remote_addr.addr.port.as_ref().map_or(5061, |p| p.value());
+                SocketAddr::new(*ip, port)
+            }
+        };
+
+        // The connector owns the TCP dial (backend-specific TCP stack).
+        let tls_stream = connector.connect(&config, socket_addr).await?;
+        let local = tls_stream.local_addr()?;
+
+        let local_addr = SipAddr {
+            r#type: Some(crate::sip::transport::Transport::Tls),
+            addr: local.into(),
+        };
+        let (read_half, write_half) = tokio::io::split(TokioSeamStream::new(Arc::from(tls_stream)));
+        let (read_half, write_half) = (
+            Box::new(read_half) as ClientReadHalf,
+            Box::new(write_half) as ClientWriteHalf,
+        );
+
+        let connection = Self {
+            inner: TlsConnectionInner::Client(Arc::new(StreamConnectionInner::new(
+                local_addr.clone(),
+                remote_addr.clone(),
+                read_half,
+                write_half,
+            ))),
+            cancel_token,
+        };
+        debug!(
+            "Created TLS client connection (platform seam): {} -> {}",
             local_addr, remote_addr
         );
 
@@ -583,6 +762,10 @@ impl TlsConnection {
 
         // Split stream into read and write halves
         let (read_half, write_half) = tokio::io::split(stream);
+        let (read_half, write_half) = (
+            Box::new(read_half) as ClientReadHalf,
+            Box::new(write_half) as ClientWriteHalf,
+        );
 
         // Create TLS connection
         let connection = Self {
@@ -702,5 +885,96 @@ impl fmt::Display for TlsConnection {
 impl fmt::Debug for TlsConnection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(self, f)
+    }
+}
+
+#[cfg(test)]
+mod platform_seam_tests {
+    use super::*;
+    use crate::platform::tls as seam;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// Plaintext pass-through "TLS": proves the registered connector was used
+    /// instead of rustls (which would fail to handshake with a plain echoer).
+    /// The connector dials `addr` itself, exactly like an embedded backend
+    /// (embassy-net + embedded-tls) would.
+    struct MockConnector;
+
+    #[async_trait::async_trait]
+    impl seam::TlsConnector for MockConnector {
+        async fn connect(
+            &self,
+            _config: &seam::TlsClientConfig,
+            addr: SocketAddr,
+        ) -> Result<Box<dyn seam::TlsStream>> {
+            let tcp = tokio::net::TcpStream::connect(addr).await?;
+            let local = tcp.local_addr()?;
+            Ok(Box::new(MockStream {
+                inner: tcp.into(),
+                local,
+            }))
+        }
+    }
+
+    struct MockStream {
+        inner: tokio::sync::Mutex<tokio::net::TcpStream>,
+        local: SocketAddr,
+    }
+
+    #[async_trait::async_trait]
+    impl seam::TlsStream for MockStream {
+        async fn recv(&self) -> Result<Vec<u8>> {
+            let mut buf = vec![0u8; 512];
+            let mut tcp = self.inner.lock().await;
+            let n = tcp.read(&mut buf).await?;
+            buf.truncate(n);
+            Ok(buf)
+        }
+
+        async fn send_all(&self, data: Vec<u8>) -> Result<()> {
+            let mut tcp = self.inner.lock().await;
+            tcp.write_all(&data).await?;
+            Ok(())
+        }
+
+        async fn shutdown(&self) -> Result<()> {
+            Ok(())
+        }
+
+        fn local_addr(&self) -> Result<SocketAddr> {
+            Ok(self.local)
+        }
+    }
+
+    #[tokio::test]
+    async fn platform_connector_takes_precedence_over_rustls() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let echo = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 4];
+            tokio::io::AsyncReadExt::read_exact(&mut sock, &mut buf)
+                .await
+                .unwrap();
+            assert_eq!(&buf, b"ping");
+            tokio::io::AsyncWriteExt::write_all(&mut sock, b"pong")
+                .await
+                .unwrap();
+        });
+
+        seam::set_client_connector(std::sync::Arc::new(MockConnector));
+
+        let remote = SipAddr {
+            r#type: Some(crate::sip::transport::Transport::Tls),
+            addr: addr.into(),
+        };
+        let conn = TlsConnection::connect(&remote, None, None, None)
+            .await
+            .expect("seam connector should bypass rustls entirely");
+
+        conn.send_raw(b"ping").await.unwrap();
+        echo.await.unwrap();
+
+        seam::clear_client_connector();
     }
 }

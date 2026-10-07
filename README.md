@@ -7,13 +7,43 @@ A RFC 3261/3262 compliant SIP stack written in Rust. The goal of this project is
 ## Features
 
 - **RFC 3261/3262 Compliant**: Full compliance with SIP specification
-- **Multiple Transport Support**: UDP, TCP, TLS, WebSocket (TLS/WebSocket require the `rustls` and `websocket` features, enabled by default)
+- **Multiple Transport Support**: UDP, TCP, TLS, WebSocket (TLS/WebSocket require the `rustls` and `websocket` features, enabled by default). The TLS client goes through a backend seam (`platform::tls`) — host default is the built-in rustls; embedded stacks can register their own connector
 - **Transaction Layer**: Complete SIP transaction state machine
 - **Dialog Layer**: SIP dialog management
 - **Reliable Provisionals**: PRACK (RFC 3262 / 100rel) support
 - **Digest Authentication**: Built-in authentication support
 - **High Performance**: Built with Rust for maximum performance
 - **Easy to Use**: Simple and intuitive API design
+
+## no_std / Embedded Support
+
+rsipstack compiles without `std` (`alloc`-only) for embassy-based targets —
+verified on `xtensa-esp32s3-none-elf` (ESP32-S3):
+
+```bash
+cargo check --no-default-features --features platform-embassy
+```
+
+- Core SIP codec, transaction, dialog, and **UDP transport** layers are
+  `no_std` + `alloc`.
+- The `platform-embassy` backend maps the runtime seams onto
+  `embassy-time` / `embassy-sync` (critical-section based); task spawning is
+  injected once at startup:
+
+  ```rust,ignore
+  rsipstack::platform::set_spawn_fn(|fut| spawner.spawn(fut).ok());
+  ```
+
+- Concurrent waits use the backend-agnostic `select2` / `select3` helpers
+  instead of `tokio::select!`.
+- **SIPS (SIP over TLS, client role)** goes through the
+  `platform::tls::TlsConnector` seam: register a backend with
+  `platform::tls::set_client_connector` and every
+  `TlsConnection::connect` rides it. Host builds without a registered
+  connector keep using the built-in rustls path.
+- TCP / WebSocket transports still require `platform-tokio`; on embedded,
+  use UDP or SIPS today.
+- On no_std, register a `DomainResolver` instead of the tokio DNS resolver.
 
 ## TODO
 - [x] Transport support
@@ -25,6 +55,7 @@ A RFC 3261/3262 compliant SIP stack written in Rust. The goal of this project is
 - [x] Transaction Layer
 - [x] Dialog Layer
 - [ ] WASM target
+- [x] no_std embassy-based targets
 
 ## Use Cases
 
