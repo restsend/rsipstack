@@ -374,6 +374,47 @@ async fn test_multiple_dialogs_management() -> crate::Result<()> {
     Ok(())
 }
 
+/// A B2BUA that keeps the Call-ID has both legs of a call in one dialog layer:
+/// the inbound one as UAS, the outbound one as UAC. Only the UAC one is a
+/// client dialog.
+#[tokio::test]
+async fn test_get_client_dialog_by_call_id_returns_only_uac_dialogs() -> crate::Result<()> {
+    let endpoint = create_test_endpoint().await?;
+    let conn = create_mock_connection().await?;
+    endpoint.inner.transport_layer.add_transport(conn.clone());
+    let dialog_layer = std::sync::Arc::new(DialogLayer::new(endpoint.inner.clone()));
+    let call_id = "b2bua-call-id";
+
+    let invite_req = create_invite_request("caller-tag", "", call_id, "z9hG4bKinbound");
+    let key = TransactionKey::from_request(&invite_req, TransactionRole::Server)?;
+    let tx = Transaction::new_server(key, invite_req, endpoint.inner.clone(), Some(conn));
+    let (state_sender, _) = unbounded_channel();
+    let uas = dialog_layer.get_or_create_server_invite(&tx, state_sender, None, None)?;
+
+    let peer = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
+    let callee = format!("sip:carol@{}", peer.local_addr()?);
+    let (state_sender, _) = unbounded_channel();
+    let (uac, _invite) = dialog_layer.do_invite_async(
+        crate::dialog::invitation::InviteOption {
+            caller: crate::sip::Uri::try_from("sip:alice@example.com")?,
+            callee: crate::sip::Uri::try_from(callee.as_str())?,
+            contact: crate::sip::Uri::try_from("sip:alice@127.0.0.1:5060")?,
+            call_id: Some(call_id.to_string()),
+            ..Default::default()
+        },
+        state_sender,
+    )?;
+
+    let found: Vec<_> = dialog_layer
+        .get_client_dialog_by_call_id(call_id)
+        .iter()
+        .map(|d| (d.role(), d.id()))
+        .collect();
+    assert_eq!(found, vec![(TransactionRole::Client, uac.id())]);
+    assert!(dialog_layer.get_dialog(&uas.id()).is_some());
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_dialog_error_cases() -> crate::Result<()> {
     let endpoint = create_test_endpoint().await?;
