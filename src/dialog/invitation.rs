@@ -187,16 +187,22 @@ pub(super) struct DialogGuardForUnconfirmed<'a> {
     pub dialog_layer_inner: &'a DialogLayerInnerRef,
     pub id: &'a DialogId,
     invite_tx: Option<Transaction>,
+    /// The INVITE's dialog, `None` once `process_invite` returned.
+    dialog: Option<InviteDialog>,
 }
 
 impl<'a> Drop for DialogGuardForUnconfirmed<'a> {
     fn drop(&mut self) {
-        let Some(dlg) = self.dialog_layer_inner.dialogs.remove(&self.id.to_string()) else {
-            return;
-        };
-
-        let Dialog::Invite(client_dialog) = dlg else {
-            return;
+        let client_dialog = match self.dialog_layer_inner.dialogs.remove(&self.id.to_string()) {
+            Some(Dialog::Invite(client_dialog)) => client_dialog,
+            Some(_) => return,
+            // The application already removed the dialog from the layer
+            // (`DialogLayer::remove_dialog`): its INVITE still has to end.
+            None => match self.dialog.take() {
+                Some(client_dialog) => client_dialog,
+                // `process_invite` returned: `do_invite` handles the outcome.
+                None => return,
+            },
         };
 
         match client_dialog.state() {
@@ -688,6 +694,7 @@ impl DialogLayer {
             dialog_layer_inner: &self.inner,
             id: &id,
             invite_tx: Some(tx),
+            dialog: Some(dialog.clone()),
         };
 
         let tx = guard
@@ -696,6 +703,7 @@ impl DialogLayer {
             .expect("transcation should be avaible");
 
         let r = dialog.process_invite(tx).boxed().await;
+        guard.dialog = None;
         self.inner.dialogs.remove(&id.to_string());
 
         match r {
