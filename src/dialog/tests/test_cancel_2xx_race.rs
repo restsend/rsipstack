@@ -5,7 +5,10 @@
 //!
 //! These tests drop the `do_invite` future after a 180 — the documented way to
 //! abandon an outgoing call, which cancels it — and answer the INVITE with a
-//! 200 from a raw UDP peer in each wire ordering.
+//! 200 from a raw UDP peer in each wire ordering. The `removed` variants call
+//! `DialogLayer::remove_dialog` before dropping the future: the INVITE still
+//! has to end (CANCEL, and ACK + BYE for a 2xx) even though the layer entry is
+//! already gone.
 use crate::dialog::{
     dialog::{DialogState, DialogStateReceiver, TerminatedReason},
     dialog_layer::DialogLayer,
@@ -342,10 +345,18 @@ async fn test_removed_dialog_2xx_crossing_the_cancel_is_acked_and_byed() -> crat
     run_crossing_2xx(Order::InviteOkFirst, 100, true).await
 }
 
-/// A CANCEL that wins the race (487 to the INVITE) ends the call as before:
-/// the 487 is ACKed and no BYE is sent.
+/// The same in the other wire ordering (the 200 to the CANCEL arrives before
+/// the 2xx) with the dialog already removed from the layer.
 #[tokio::test]
-async fn test_cancel_answered_487_sends_no_bye() -> crate::Result<()> {
+async fn test_removed_dialog_2xx_after_the_cancel_response_is_acked_and_byed() -> crate::Result<()>
+{
+    run_crossing_2xx(Order::CancelOkFirst, 180, true).await
+}
+
+/// A CANCEL that wins the race (487 to the INVITE) ends the call as before:
+/// the 487 is ACKed and no BYE is sent — also when the application removed
+/// the dialog from the layer before dropping the `do_invite` future.
+async fn run_cancel_answered_487(provisional: u16, remove: bool) -> crate::Result<()> {
     let token = CancellationToken::new();
     let Uac {
         dialog_layer,
@@ -355,13 +366,26 @@ async fn test_cancel_answered_487_sends_no_bye() -> crate::Result<()> {
     let wait = Duration::from_secs(2);
 
     let (state_sender, mut states) = unbounded_channel();
-    let invite = tokio::spawn(async move { dialog_layer.do_invite(option, state_sender).await });
+    let layer = dialog_layer.clone();
+    let invite = tokio::spawn(async move { layer.do_invite(option, state_sender).await });
     let (inv, uac) = recv_request(&peer, Method::Invite, wait).await;
-    reply(&peer, uac, &inv, 180, "Ringing").await;
-    wait_for_state(&mut states, "Early", wait, |s| {
-        matches!(s, DialogState::Early(_, _))
+    let id = calling_id(&mut states).await;
+    let reason = if provisional == 100 {
+        "Trying"
+    } else {
+        "Ringing"
+    };
+    reply(&peer, uac, &inv, provisional, reason).await;
+    wait_for_state(&mut states, "Trying or Early", wait, |s| {
+        matches!(s, DialogState::Trying(_) | DialogState::Early(_, _))
     })
     .await;
+
+    if remove {
+        // The application removes the dialog from the layer first.
+        dialog_layer.remove_dialog(&id);
+        assert!(dialog_layer.is_empty());
+    }
     invite.abort();
     let _ = invite.await;
     let (cancel, _) = recv_request(&peer, Method::Cancel, wait).await;
@@ -381,8 +405,42 @@ async fn test_cancel_answered_487_sends_no_bye() -> crate::Result<()> {
         "a cancelled call must not be BYE'd",
     )
     .await;
+
+    // Exactly one Terminated(UacCancel), never Confirmed.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let seen: Vec<_> = std::iter::from_fn(|| states.try_recv().ok()).collect();
+    assert!(
+        !seen
+            .iter()
+            .any(|s| matches!(s, DialogState::Confirmed(_, _))),
+        "a cancelled call must not report Confirmed, got {seen:?}"
+    );
+    let terminations: Vec<_> = seen
+        .iter()
+        .filter(|s| matches!(s, DialogState::Terminated(_, _)))
+        .collect();
+    assert!(
+        matches!(
+            terminations.as_slice(),
+            [DialogState::Terminated(_, TerminatedReason::UacCancel)]
+        ),
+        "expected exactly one Terminated(UacCancel), got {seen:?}"
+    );
     token.cancel();
     Ok(())
+}
+
+#[tokio::test]
+async fn test_cancel_answered_487_sends_no_bye() -> crate::Result<()> {
+    run_cancel_answered_487(180, false).await
+}
+
+/// The same when the application removed the dialog from the layer before
+/// dropping the `do_invite` future, in Early (180) and in Trying (100).
+#[tokio::test]
+async fn test_removed_cancel_answered_487_sends_no_bye() -> crate::Result<()> {
+    run_cancel_answered_487(180, true).await?;
+    run_cancel_answered_487(100, true).await
 }
 
 /// Dropped before any response: Terminated(UacCancel) is reported at once and
