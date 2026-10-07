@@ -1260,7 +1260,11 @@ impl DialogInner {
                         let state = DialogState::Early(self.id.lock().clone(), resp);
                         if self.can_cancel() {
                             self.transition(state)?;
-                        } else {
+                        } else if !self.is_terminated() {
+                            // Still notify the provisional so the caller sees
+                            // it (e.g. a reliable 183 with SDP to a
+                            // re-INVITE) — but never after the dialog
+                            // terminated, matching `transition`'s contract.
                             self.state_sender.send(state).ok();
                         }
                         continue;

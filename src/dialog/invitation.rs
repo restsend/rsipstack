@@ -722,8 +722,10 @@ impl DialogLayer {
                             let dlg = dialog.clone();
                             let confirmed_tag = new_dialog_id.remote_tag.clone();
                             crate::platform::spawn(async move {
+                                let mut seen_forks: Vec<String> = Vec::new();
                                 while let Some(msg) = tx.receive().await {
-                                    dlg.end_forked_branch(&msg, &confirmed_tag).await;
+                                    dlg.end_forked_branch(&msg, &confirmed_tag, &mut seen_forks)
+                                        .await;
                                 }
                                 debug!(id = %new_dialog_id, "accepted transaction drained (Timer M expired)");
                             });
@@ -802,8 +804,11 @@ impl DialogLayer {
                         let confirmed_tag = new_id.remote_tag.clone();
                         let forked_dlg = dialog_clone.clone();
                         crate::platform::spawn(async move {
+                            let mut seen_forks: Vec<String> = Vec::new();
                             while let Some(msg) = tx.receive().await {
-                                forked_dlg.end_forked_branch(&msg, &confirmed_tag).await;
+                                forked_dlg
+                                    .end_forked_branch(&msg, &confirmed_tag, &mut seen_forks)
+                                    .await;
                             }
                             debug!(id = %confirmed_id, "accepted transaction drained (Timer M expired)");
                         });

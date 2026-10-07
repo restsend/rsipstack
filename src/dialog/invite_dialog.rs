@@ -412,8 +412,14 @@ impl InviteDialog {
     /// tag differs from the confirmed dialog's is a forked branch: the
     /// transaction has already ACKed it, and the UAC — keeping a single
     /// session — terminates it with a BYE. Everything else (retransmitted
-    /// 2xx with the same tag, non-2xx) is ignored.
-    pub(super) async fn end_forked_branch(&self, msg: &SipMessage, confirmed_remote_tag: &str) {
+    /// 2xx with the same tag, non-2xx) is ignored. `seen` holds the forked
+    /// tags already BYE'd, so a retransmitted forked 2xx sends one BYE only.
+    pub(super) async fn end_forked_branch(
+        &self,
+        msg: &SipMessage,
+        confirmed_remote_tag: &str,
+        seen: &mut Vec<String>,
+    ) {
         let SipMessage::Response(resp) = msg else {
             return;
         };
@@ -433,6 +439,10 @@ impl InviteDialog {
         if tag == confirmed_remote_tag {
             return;
         }
+        if seen.iter().any(|seen| seen == &tag) {
+            return;
+        }
+        seen.push(tag.clone());
         let id = self.id();
         info!(
             id = %id,
