@@ -810,7 +810,12 @@ impl InviteDialog {
         self.inner
             .transition(DialogState::Refer(self.id(), tx.original.clone(), handle))?;
 
-        self.inner.process_transaction_handle(tx, rx).await
+        // RFC 3515: the REFER was answered (usually 202) and the dialog must
+        // go back to Confirmed — the implicit subscription's NOTIFYs are
+        // in-dialog requests that need the confirmed dialog.
+        let result = self.inner.process_transaction_handle(tx, rx).await;
+        let confirmed = self.return_to_confirmed(tx);
+        result.and(confirmed)
     }
 
     async fn handle_message(&mut self, tx: &mut Transaction) -> Result<()> {
