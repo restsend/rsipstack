@@ -1312,6 +1312,17 @@ impl DialogInner {
         self.send_dialog_request(request).boxed().await
     }
 
+    /// Send the BYE that ends this dialog. RFC 3261 §15.1.1: the session ends
+    /// once the BYE is handed to its transaction, and a 481, a 408 or no
+    /// response ends the dialog. So whatever the transaction returns, the
+    /// dialog is `Terminated(reason)`; a failure is still returned.
+    pub(super) async fn send_bye(&self, request: Request, reason: TerminatedReason) -> Result<()> {
+        let result = self.do_request(request).await;
+        let id = self.id.lock().clone();
+        self.transition(DialogState::Terminated(id, reason))?;
+        result.map(|_| ())
+    }
+
     /// RFC 3261 §13.3.1.4: the server transaction of an INVITE or re-INVITE
     /// retransmitted our 2xx (`answered_2xx`) for 64*T1 and ended without an
     /// ACK. The dialog is terminated with [`TerminatedReason::Timeout`] and the
