@@ -453,7 +453,10 @@ impl DialogLayer {
         self.inner.dialogs.with(|m| {
             m.values()
                 .filter_map(|d| match d {
-                    Dialog::Invite(client_dlg) if client_dlg.id().call_id == call_id => {
+                    Dialog::Invite(client_dlg)
+                        if client_dlg.role() == TransactionRole::Client
+                            && client_dlg.id().call_id == call_id =>
+                    {
                         Some(client_dlg.clone())
                     }
                     _ => None,
