@@ -14,5 +14,6 @@ mod test_refer;
 mod test_refer_notify;
 mod test_server_dialog;
 mod test_session_id;
+mod test_state_after_terminated;
 mod test_sub_pub;
 mod test_uas_ack_timeout;
