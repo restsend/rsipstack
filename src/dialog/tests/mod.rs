@@ -17,3 +17,4 @@ mod test_session_id;
 mod test_state_after_terminated;
 mod test_sub_pub;
 mod test_uas_ack_timeout;
+mod test_warn_logs;

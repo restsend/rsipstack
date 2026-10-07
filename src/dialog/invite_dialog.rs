@@ -429,11 +429,11 @@ impl InviteDialog {
             if !self.inner.is_terminated() {
                 warn!(
                     dialog_id = %self.id(),
-                    state = ?self.state(),
+                    state = %self.state(),
                     "bye skipped: dialog not confirmed or waiting ack"
                 );
                 return Err(crate::Error::Error(format!(
-                    "dialog {} cannot send BYE in state {:?}",
+                    "dialog {} cannot send BYE in state {}",
                     self.id(),
                     self.state()
                 )));
