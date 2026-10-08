@@ -144,6 +144,7 @@ fn test_via_received_ws() {
 fn test_via_response_not_modified() {
     let response = crate::sip::message::Response {
         status_code: crate::sip::StatusCode::try_from(200).unwrap(),
+        wire_reason: None,
         headers: vec![Via::new("SIP/2.0/UDP 127.0.0.1:5060;branch=z9hG4bK-test").into()].into(),
         version: crate::sip::Version::V2,
         body: Default::default(),

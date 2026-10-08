@@ -311,6 +311,7 @@ async fn test_server_dialog_bye_is_delivered_over_initial_connection() {
     // ── complete the handshake: the browser answers 200 OK for our BYE ─────
     let ok_response = Response {
         status_code: StatusCode::OK,
+        wire_reason: None,
         version: Version::V2,
         headers: vec![
             bye_req.via_header().unwrap().clone().into(),

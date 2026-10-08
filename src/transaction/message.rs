@@ -246,6 +246,7 @@ impl EndpointInner {
         headers.unique_push(Header::UserAgent(self.user_agent.clone().into()));
         Response {
             status_code,
+            wire_reason: None,
             version: *req.version(),
             headers,
             body: body.unwrap_or_default(),

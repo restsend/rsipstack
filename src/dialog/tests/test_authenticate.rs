@@ -49,6 +49,7 @@ fn create_request_with_branch(branch: &str) -> Request {
 fn create_401_response() -> Response {
     Response {
         status_code: StatusCode::Unauthorized,
+        wire_reason: None,
         version: crate::sip::Version::V2,
         headers: vec![
             Via::new("SIP/2.0/UDP alice.example.com:5060;branch=z9hG4bKnashds").into(),
@@ -161,6 +162,7 @@ async fn test_authenticate_via_header_branch_update() -> crate::Result<()> {
 fn create_407_response() -> Response {
     Response {
         status_code: StatusCode::ProxyAuthenticationRequired,
+        wire_reason: None,
         version: crate::sip::Version::V2,
         headers: vec![
             Via::new("SIP/2.0/UDP alice.example.com:5060;branch=z9hG4bKnashds").into(),

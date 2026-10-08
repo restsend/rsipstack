@@ -1055,6 +1055,7 @@ impl DialogInner {
 
         Response {
             status_code: status,
+            wire_reason: None,
             headers: resp_headers,
             body: body.unwrap_or_default(),
             version: *request.version(),

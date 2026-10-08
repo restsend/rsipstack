@@ -169,6 +169,7 @@ async fn test_client_dialog_state_transitions() -> crate::Result<()> {
     // Transition to Early (after receiving 1xx)
     let ringing_resp = Response {
         status_code: StatusCode::Ringing,
+        wire_reason: None,
         version: crate::sip::Version::V2,
         headers: vec![
             Via::new("SIP/2.0/UDP alice.example.com:5060;branch=z9hG4bKnashds").into(),
@@ -422,6 +423,7 @@ async fn test_route_set_updates_from_200_ok_response() -> crate::Result<()> {
 
     let success_resp = Response {
         status_code: StatusCode::OK,
+        wire_reason: None,
         version: crate::sip::Version::V2,
         headers: headers.into(),
         body: vec![],
@@ -517,6 +519,7 @@ async fn test_confirmed_dialog_bye_keeps_contact_uri_with_outbound_route() -> cr
 
     let success_resp = Response {
         status_code: StatusCode::OK,
+        wire_reason: None,
         version: crate::sip::Version::V2,
         headers: headers.into(),
         body: vec![],
@@ -1038,6 +1041,7 @@ async fn test_ack_sent_to_websocket_channel_via_locator() -> crate::Result<()> {
 
     let ok_response = Response {
         status_code: StatusCode::OK,
+        wire_reason: None,
         version: crate::sip::Version::V2,
         headers: vec![
             invite_req.via_header()?.clone().into(),

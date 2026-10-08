@@ -179,6 +179,7 @@ async fn client_learns_remote_uuid_from_response() -> crate::Result<()> {
     let resp_header = make_header("Session-ID", format!("{};remote={}", UUID_B, UUID_A));
     let mut resp = crate::sip::Response {
         status_code: StatusCode::OK,
+        wire_reason: None,
         version: crate::sip::Version::V2,
         headers: Default::default(),
         body: vec![],
@@ -268,6 +269,7 @@ async fn make_ack_swaps_remote_uuid_from_response() -> crate::Result<()> {
 
     let resp = crate::sip::Response {
         status_code: StatusCode::OK,
+        wire_reason: None,
         version: crate::sip::Version::V2,
         headers: vec![
             make_header("Session-ID", format!("{};remote={}", UUID_B, UUID_A)),
@@ -298,6 +300,7 @@ async fn make_ack_without_session_id_untouched() -> crate::Result<()> {
     let invite = create_invite_request("alice-tag", "", "ack-test");
     let resp = crate::sip::Response {
         status_code: StatusCode::OK,
+        wire_reason: None,
         version: crate::sip::Version::V2,
         headers: vec![crate::sip::headers::Contact::new("<sip:bob@bob.example.com:5060>").into()]
             .into(),
@@ -317,6 +320,7 @@ async fn session_id_survives_snapshot_restore() -> crate::Result<()> {
     let peer = make_header("Session-ID", format!("{};remote={}", UUID_B, UUID_A));
     let mut resp = crate::sip::Response {
         status_code: StatusCode::OK,
+        wire_reason: None,
         version: crate::sip::Version::V2,
         headers: Default::default(),
         body: vec![],
@@ -591,6 +595,7 @@ fn ok_response_with(headers: Vec<Header>) -> crate::sip::Response {
     headers.push(crate::sip::headers::Contact::new("<sip:bob@bob.example.com:5060>").into());
     crate::sip::Response {
         status_code: StatusCode::OK,
+        wire_reason: None,
         version: crate::sip::Version::V2,
         headers: headers.into(),
         body: vec![],

@@ -115,13 +115,27 @@ fn parse_response_line(line: &str, headers: Headers, body: Vec<u8>) -> Result<Si
         .parse()
         .map_err(|_| Error::ParseError(format!("Status-Line: invalid code {:?}", code_str)))?;
     let status_code = StatusCode::try_from((code, reason))?;
+    let wire_reason = wire_reason(&status_code, reason);
 
     Ok(SipMessage::Response(Response {
         status_code,
+        wire_reason,
         version,
         headers,
         body,
     }))
+}
+
+/// The Status-Line phrase when it is not the standard text for a known code.
+/// An unknown code already keeps its phrase in [`StatusCode::Other`].
+fn wire_reason(status_code: &StatusCode, reason: &str) -> Option<String> {
+    if reason.is_empty()
+        || matches!(status_code, StatusCode::Other(..))
+        || reason.eq_ignore_ascii_case(status_code.text())
+    {
+        return None;
+    }
+    Some(reason.to_string())
 }
 
 fn find_double_crlf(data: &[u8]) -> Option<usize> {
@@ -194,5 +208,46 @@ mod tests {
             }
             SipMessage::Response(_) => panic!("expected request"),
         }
+    }
+
+    fn response(status_line: &str) -> crate::sip::Response {
+        let raw = format!(
+            "{status_line}\r\nVia: SIP/2.0/UDP a.example:5060;branch=z9hG4bK-1\r\n\
+             From: <sip:a@a.example>;tag=1\r\nTo: <sip:b@b.example>;tag=2\r\n\
+             Call-ID: c1\r\nCSeq: 1 INVITE\r\nContent-Length: 0\r\n\r\n"
+        );
+        match SipMessage::try_from(raw.as_str()).unwrap() {
+            SipMessage::Response(r) => r,
+            SipMessage::Request(_) => panic!("expected response"),
+        }
+    }
+
+    #[test]
+    fn a_custom_reason_phrase_is_kept_beside_the_standard_code() {
+        let r = response("SIP/2.0 403 Caller Origination Number is Invalid");
+        assert_eq!(r.status_code, crate::sip::StatusCode::Forbidden);
+        assert_eq!(
+            r.wire_reason.as_deref(),
+            Some("Caller Origination Number is Invalid")
+        );
+        // The wire form is unchanged: the standard phrase is still written.
+        assert!(r.to_string().starts_with("SIP/2.0 403 Forbidden\r\n"));
+        assert!(r.to_bytes().starts_with(b"SIP/2.0 403 Forbidden\r\n"));
+        // Surrounding whitespace is trimmed.
+        let r = response("SIP/2.0 503 \tOverloaded Try Later  ");
+        assert_eq!(r.wire_reason.as_deref(), Some("Overloaded Try Later"));
+    }
+
+    #[test]
+    fn the_standard_phrase_or_none_keeps_no_wire_reason() {
+        assert_eq!(response("SIP/2.0 403 Forbidden").wire_reason, None);
+        assert_eq!(response("SIP/2.0 486 busy here").wire_reason, None);
+        assert_eq!(response("SIP/2.0 404").wire_reason, None);
+        assert_eq!(response("SIP/2.0 404 ").wire_reason, None);
+        // An unknown code keeps its phrase in StatusCode::Other instead.
+        let r = response("SIP/2.0 499 Odd Thing");
+        assert_eq!(r.wire_reason, None);
+        assert_eq!(r.status_code.text(), "Odd Thing");
+        assert_eq!(crate::sip::Response::default().wire_reason, None);
     }
 }
