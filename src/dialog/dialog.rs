@@ -1134,6 +1134,7 @@ impl DialogInner {
             }
         }
         let need_fallback_retry;
+        let mut send_error = None;
         match tx.send().await {
             Ok(_) => {
                 debug!(
@@ -1161,6 +1162,7 @@ impl DialogInner {
                     debug!(id = self.id.lock().to_string(), req = %tx.original, "request that failed to send");
                     return Err(e);
                 }
+                send_error = Some(e);
             }
         }
 
@@ -1232,6 +1234,11 @@ impl DialogInner {
                     method = %method,
                     "no usable connection and no dial-back target; giving up after first send"
                 );
+                // The failed send never started the transaction: no response
+                // or timer will ever end it, so report the error now.
+                if let Some(e) = send_error {
+                    return Err(e);
+                }
             }
         }
 

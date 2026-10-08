@@ -527,6 +527,69 @@ async fn test_restored_dialog_falls_back_to_initial_via_dialback() {
     }
 }
 
+/// Fails every lookup, as a registrar-backed locator does once the target is gone.
+struct NoRoute;
+
+#[async_trait::async_trait]
+impl crate::transaction::endpoint::TargetLocator for NoRoute {
+    async fn locate(&self, _: &crate::sip::Uri) -> crate::Result<SipAddr> {
+        Err(crate::Error::Error("no route".to_string()))
+    }
+}
+
+#[tokio::test]
+async fn test_server_request_without_route_fails_unless_dialed_back() -> crate::Result<()> {
+    // The locator error fails the send before the transaction starts. With no
+    // dial-back address nothing will ever end that transaction, so the request
+    // must return the error at once; with one, it is dialed back as before.
+    let tl = TransportLayer::new(CancellationToken::new());
+    let udp = UdpConnection::create_connection("127.0.0.1:0".parse()?, None, None).await?;
+    tl.add_transport(udp.into());
+    let endpoint = EndpointBuilder::new()
+        .with_transport_layer(tl)
+        .with_target_locator(Box::new(NoRoute))
+        .build();
+    let confirmed = |call_id: &str, via: &str| {
+        let invite = plain_udp_invite("alice-tag", call_id, via);
+        let (ep, role) = (endpoint.inner.clone(), TransactionRole::Server);
+        let inner = server_dialog(ep, role, invite, "sip:bob@127.0.0.1:5060");
+        let id = inner.id.lock().clone();
+        inner
+            .transition(DialogState::Confirmed(id, Response::default()))
+            .unwrap();
+        InviteDialog::from_inner(Arc::new(inner))
+    };
+
+    let dialog = confirmed("no-route", "SIP/2.0/UDP a.invalid;branch=z9hG4bKnoroute");
+    for method in ["INFO", "re-INVITE", "BYE"] {
+        let request = async {
+            match method {
+                "INFO" => dialog.info(None, None).await.map(|_| ()),
+                "re-INVITE" => dialog.reinvite(None, None).await.map(|_| ()),
+                _ => dialog.bye().await,
+            }
+        };
+        let result = tokio::time::timeout(Duration::from_secs(5), request).await;
+        let err = result.unwrap_or_else(|_| panic!("{method} must fail at once, not hang"));
+        let err = err.expect_err(method).to_string();
+        assert!(err.contains("no route"), "{method}: {err}");
+    }
+
+    let probe = UdpSocket::bind("127.0.0.1:0").await?;
+    let via = format!(
+        "SIP/2.0/UDP alice.invalid:5060;branch=z9hG4bKdialback;received=127.0.0.1;rport={}",
+        probe.local_addr()?.port()
+    );
+    let dialog = confirmed("dialback", &via);
+    tokio::spawn(async move { dialog.bye().await });
+    let mut buf = [0u8; 2048];
+    let (len, _) = tokio::time::timeout(Duration::from_secs(3), probe.recv_from(&mut buf))
+        .await
+        .expect("the BYE must be dialed back to the Via's received/rport")?;
+    assert!(buf[..len].starts_with(b"BYE "));
+    Ok(())
+}
+
 /// A cancelled (dead) WebSocket flow must not cause affinity retransmissions
 /// into a dead socket, and the dial-back ladder must still deliver the BYE
 /// through tier 1 — the address captured from the connection at creation —
