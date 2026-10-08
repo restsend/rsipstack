@@ -1161,7 +1161,12 @@ impl Transaction {
                 }
             }
             TransactionState::Proceeding => {
-                if let TransactionTimer::TimerC(_) = timer {
+                // Timer C (client INVITE), or Timer F, run as Timer B, for a
+                // non-INVITE client (RFC 3261 §17.1.2.2).
+                if matches!(timer, TransactionTimer::TimerC(_))
+                    || (matches!(timer, TransactionTimer::TimerB(_))
+                        && self.transaction_type == TransactionType::ClientNonInvite)
+                {
                     // Inform TU about timeout
                     let timeout_response = self.endpoint_inner.make_response(
                         &self.original,
