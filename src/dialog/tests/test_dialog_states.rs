@@ -45,6 +45,7 @@ fn create_response(status: StatusCode, from_tag: &str, to_tag: &str, call_id: &s
 
     Response {
         status_code: status,
+        wire_reason: None,
         version: crate::sip::Version::V2,
         headers: vec![
             Via::new("SIP/2.0/UDP alice.example.com:5060;branch=z9hG4bKnashds").into(),

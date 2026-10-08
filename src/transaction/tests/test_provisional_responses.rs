@@ -39,6 +39,7 @@ async fn test_multiple_provisional_responses() -> crate::Result<()> {
     let resp1 = Response {
         version: crate::sip::Version::V2,
         status_code: StatusCode::SessionProgress, // 183
+        wire_reason: None,
         headers: vec![
             Via::new("SIP/2.0/UDP test.example.com:5060;branch=z9hG4bKnashds").into(),
             CSeq::new("1 INVITE").into(),
@@ -73,6 +74,7 @@ async fn test_multiple_provisional_responses() -> crate::Result<()> {
     let resp2 = Response {
         version: crate::sip::Version::V2,
         status_code: StatusCode::SessionProgress, // 183
+        wire_reason: None,
         headers: vec![
             Via::new("SIP/2.0/UDP test.example.com:5060;branch=z9hG4bKnashds").into(),
             CSeq::new("1 INVITE").into(),

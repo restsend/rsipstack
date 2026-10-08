@@ -125,6 +125,7 @@ fn test_transaction_key() -> Result<()> {
     );
     let register_resp = Response {
         status_code: StatusCode::OK,
+        wire_reason: None,
         version: Version::V2,
         headers: vec![
             Via::new("SIP/2.0/TLS client.sip.restsend.com:5061;branch=z9hG4bKnashd92").into(),

@@ -514,6 +514,13 @@ impl core::convert::From<Request> for Vec<u8> {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Response {
     pub status_code: StatusCode,
+    /// The reason phrase a parsed Status-Line carried (trimmed) when it
+    /// differs from the standard text for its code (e.g. `403 Caller
+    /// Origination Number is Invalid`); `None` for the standard phrase, an
+    /// unknown code (kept in [`StatusCode::Other`]) and every locally built
+    /// response. Never serialized: `Display` and `to_bytes` still write the
+    /// standard phrase.
+    pub wire_reason: Option<String>,
     pub version: Version,
     pub headers: Headers,
     pub body: Vec<u8>,
@@ -587,6 +594,7 @@ impl Default for Response {
     fn default() -> Self {
         Response {
             status_code: StatusCode::OK,
+            wire_reason: None,
             version: Version::V2,
             headers: Headers::default(),
             body: Vec::new(),

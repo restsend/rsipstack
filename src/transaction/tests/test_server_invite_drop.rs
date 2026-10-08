@@ -105,6 +105,7 @@ async fn test_cleanup_server_invite_completed_keeps_waiting_ack() -> crate::Resu
     // Manually set the fields that would be set during respond() + transition(Completed)
     let resp = crate::sip::Response {
         status_code: StatusCode::ServiceUnavailable,
+        wire_reason: None,
         version: Version::V2,
         headers: invite.headers.clone(),
         body: Default::default(),
@@ -158,6 +159,7 @@ async fn test_cleanup_server_invite_terminated_removes_waiting_ack() -> crate::R
 
     let resp = crate::sip::Response {
         status_code: StatusCode::BusyHere,
+        wire_reason: None,
         version: Version::V2,
         headers: invite.headers.clone(),
         body: Default::default(),
@@ -638,6 +640,7 @@ async fn test_cleanup_server_invite_confirmed_drop_removes_waiting_ack() -> crat
 
     let resp = crate::sip::Response {
         status_code: StatusCode::ServiceUnavailable,
+        wire_reason: None,
         version: Version::V2,
         headers: invite.headers.clone(),
         body: Default::default(),
@@ -699,6 +702,7 @@ async fn test_timer_cleanup_removes_orphaned_waiting_ack() -> crate::Result<()> 
 
     let resp = crate::sip::Response {
         status_code: StatusCode::ServiceUnavailable,
+        wire_reason: None,
         version: Version::V2,
         headers: invite.headers.clone(),
         body: Default::default(),
