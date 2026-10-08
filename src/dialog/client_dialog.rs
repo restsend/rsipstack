@@ -668,6 +668,11 @@ impl ClientInviteDialog {
             .transition(DialogState::Updated(self.id(), tx.original.clone(), handle))?;
 
         self.inner.process_transaction_handle(tx, rx).await?;
+        let answered_2xx = tx
+            .last_response
+            .as_ref()
+            .is_some_and(|resp| resp.status_code.kind() == crate::sip::StatusCodeKind::Successful);
+        let mut acked = false;
 
         // wait for ACK
         while let Some(msg) = tx.receive().await {
@@ -675,11 +680,15 @@ impl ClientInviteDialog {
                 SipMessage::Request(req) if req.method == crate::sip::Method::Ack => {
                     debug!(id = %self.id(), "received ACK for re-INVITE");
                     self.inner.remote_ack.lock().replace(req);
+                    acked = true;
                     break;
                 }
                 _ => {}
             }
         }
+        self.inner
+            .end_session_without_ack(tx, answered_2xx && !acked)
+            .await;
         Ok(())
     }
 
