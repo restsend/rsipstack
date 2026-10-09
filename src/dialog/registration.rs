@@ -121,7 +121,9 @@ pub struct Registration {
     pub call_id: crate::sip::headers::CallId,
     /// Outbound proxy — override transport destination while keeping the
     /// domain in SIP headers. Used for NAT traversal with load-balanced
-    /// proxy clusters where DNS may resolve to different IPs.
+    /// proxy clusters where DNS may resolve to different IPs, and for
+    /// registrars only reachable through an SBC. The registrar domain is
+    /// not resolved when this is set. The transport follows the Request-URI.
     pub outbound_proxy: Option<core::net::SocketAddr>,
     /// Service-Route set (RFC 3608) learned from the last successful
     /// registration `200 OK`. These entries are the proxies the registrar
@@ -282,6 +284,17 @@ impl Registration {
         self.granted_expires.unwrap_or(50)
     }
 
+    /// The outbound proxy to send to, with the Request-URI's transport
+    /// (e.g. TCP).
+    fn outbound_proxy_target(&self, server: &crate::sip::Uri) -> Option<SipAddr> {
+        let mut proxy = SipAddr::from(self.outbound_proxy?);
+        proxy.r#type = server.params.iter().find_map(|p| match p {
+            Param::Transport(t) => Some(*t),
+            _ => None,
+        });
+        Some(proxy)
+    }
+
     /// Perform SIP registration with the server
     ///
     /// Sends a REGISTER request to the specified SIP server to register
@@ -435,7 +448,15 @@ impl Registration {
         // UDP listener for a target with no explicit `;transport=` param
         // (see `TransportLayerInner::lookup`'s `first_udp` fallback), so
         // this is safe to do unconditionally rather than only for TCP/TLS.
-        let via = match SipAddr::try_from(&server) {
+        //
+        // With an outbound proxy the packets go to the proxy, so look that up
+        // instead: the registrar domain may not even resolve from here.
+        let proxy_target = self.outbound_proxy_target(&server);
+        let via_target = match &proxy_target {
+            Some(proxy) => Ok(proxy.clone()),
+            None => SipAddr::try_from(&server),
+        };
+        let via = match via_target {
             Ok(target_addr) => {
                 match self
                     .endpoint
@@ -517,19 +538,8 @@ impl Registration {
         // Override transport destination if outbound proxy is configured.
         // This keeps the domain in SIP headers (Request-URI, From, To) while
         // sending all packets to the pinned proxy IP for NAT consistency.
-        if let Some(proxy) = &self.outbound_proxy {
-            let mut dest = SipAddr::from(*proxy);
-            // Inherit transport type from the request URI (e.g., TCP)
-            if let Some(Param::Transport(t)) = tx
-                .original
-                .uri()
-                .params
-                .iter()
-                .find(|p| matches!(p, Param::Transport(_)))
-            {
-                dest.r#type = Some(*t);
-            }
-            tx.destination = Some(dest);
+        if proxy_target.is_some() {
+            tx.destination = proxy_target;
         }
 
         tx.send().await?;
