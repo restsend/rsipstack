@@ -1,5 +1,5 @@
 use super::create_test_endpoint;
-use crate::sip::{headers::*, Response, SipMessage, StatusCode};
+use crate::sip::{headers::*, prelude::HeadersExt, Response, SipMessage, StatusCode};
 use crate::transaction::{
     key::{TransactionKey, TransactionRole},
     transaction::{Transaction, TransactionEvent},
@@ -123,6 +123,37 @@ async fn test_multiple_provisional_responses() -> crate::Result<()> {
 
     let result = tokio::time::timeout(std::time::Duration::from_millis(100), tx.receive()).await;
     assert!(result.is_err(), "Should have timed out (response ignored)");
+
+    // 4. Reliable 183s (RFC 3262) with the same body: each new RSeq must reach
+    //    the TU so it can be PRACKed; an exact retransmission is still ignored.
+    let reliable = |rseq: &str| {
+        let mut resp = resp2.clone();
+        resp.headers.push(Require::new("100rel").into());
+        resp.headers.push(RSeq::new(rseq).into());
+        resp
+    };
+    for rseq in ["1", "2"] {
+        let resp = reliable(rseq);
+        for _ in 0..2 {
+            tx.tu_sender
+                .send(TransactionEvent::Received(
+                    SipMessage::Response(resp.clone()),
+                    None,
+                ))
+                .unwrap();
+        }
+        let received = tokio::time::timeout(std::time::Duration::from_millis(100), tx.receive())
+            .await
+            .unwrap_or_else(|_| panic!("183 with RSeq {rseq} must reach the TU"));
+        match received {
+            Some(SipMessage::Response(r)) => assert_eq!(r.rseq_value(), resp.rseq_value()),
+            other => panic!("Expected response, got {other:?}"),
+        }
+        let result =
+            tokio::time::timeout(std::time::Duration::from_millis(100), tx.receive()).await;
+        assert!(result.is_err(), "retransmitted RSeq {rseq} must be ignored");
+    }
+    assert_eq!(tx.state, TransactionState::Proceeding);
 
     Ok(())
 }

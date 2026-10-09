@@ -1052,7 +1052,13 @@ impl Transaction {
 
         if !is_client_invite_2xx_in_accepted && self.state == new_state {
             if let Some(last) = self.last_response.as_ref() {
-                if last.status_code == resp.status_code && last.body == resp.body {
+                // A reliable provisional (RFC 3262) with a new RSeq is a new
+                // response even when status and body repeat; the TU must
+                // see it to send the PRACK (RFC 3261 section 17.1.1.2).
+                if last.status_code == resp.status_code
+                    && last.body == resp.body
+                    && last.rseq_value() == resp.rseq_value()
+                {
                     // ignore duplicate response
                     return None;
                 }
