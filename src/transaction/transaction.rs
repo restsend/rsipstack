@@ -428,8 +428,10 @@ impl Transaction {
     /// # Cancel safety
     ///
     /// **NOT cancel-safe.** The mutation order is: store `last_response`
-    /// → `await` the transport send → transition the state machine. If the
-    /// future is dropped during the `await`, `last_response` will already
+    /// (and, for a server INVITE 2xx, add its ACK route) → `await` the
+    /// transport send → transition the state machine. If the
+    /// future is dropped during the `await`, the ACK route is removed
+    /// again but `last_response` will already
     /// be updated while the response may have been only partially
     /// transmitted (or not at all) and the state did not advance. If it
     /// is dropped between the send completing and the transition, the
@@ -496,8 +498,33 @@ impl Transaction {
             SipMessage::Response(resp) => self.last_response.replace(resp),
             _ => None,
         };
+        // The peer can ACK the 2xx before the transition below runs: add
+        // the route the ACK takes (new branch, matched by dialog and CSeq)
+        // before sending, so that ACK waits in this transaction's queue.
+        // The guard removes it again if the send fails or is cancelled.
+        let ack_route = self
+            .last_response
+            .as_ref()
+            .filter(|_| {
+                new_state == TransactionState::Accepted && self.state != TransactionState::Accepted
+            })
+            .and_then(|resp| DialogId::try_from((resp, TransactionRole::Server)).ok())
+            .and_then(|dialog_id| self.add_ack_cseq_route(&dialog_id));
+        let mut guard = AckRouteGuard(
+            ack_route.map(|route| (self.endpoint_inner.clone(), route, self.key.clone())),
+        );
         connection.send(response, self.destination.as_ref()).await?;
+        guard.0 = None;
         self.transition(new_state).map(|_| ())
+    }
+
+    fn add_ack_cseq_route(&self, dialog_id: &DialogId) -> Option<(DialogId, u32)> {
+        let seq = self.original.cseq_header().and_then(|c| c.seq()).ok()?;
+        let route = (dialog_id.clone(), seq);
+        self.endpoint_inner
+            .waiting_ack_cseq
+            .insert(route.clone(), self.key.clone());
+        Some(route)
     }
 
     fn can_transition(&self, target: &TransactionState) -> Result<()> {
@@ -1361,13 +1388,10 @@ impl Transaction {
                             // one was answered, and must reach its own
                             // transaction (RFC 3261 §13.2.2.4). A non-2xx ACK
                             // matches by branch (§17.2.3) — unreachable here,
-                            // Accepted only carries 2xx.
-                            let seq = self.original.cseq_header().and_then(|c| c.seq()).ok();
-                            if let Some(seq) = seq {
-                                self.endpoint_inner
-                                    .waiting_ack_cseq
-                                    .insert((dialog_id.clone(), seq), self.key.clone());
-                            }
+                            // Accepted only carries 2xx. `respond` adds the
+                            // CSeq route before sending the 2xx (an ACK can
+                            // arrive before this transition).
+                            self.add_ack_cseq_route(&dialog_id);
                             self.endpoint_inner
                                 .waiting_ack
                                 .insert(dialog_id, self.key.clone());
@@ -1631,6 +1655,22 @@ impl Transaction {
         };
         self.endpoint_inner
             .detach_transaction(&self.key, last_message);
+    }
+}
+
+/// A 2xx ACK route added by `respond` before the send; removed on drop
+/// unless disarmed once the send completed.
+struct AckRouteGuard(Option<(EndpointInnerRef, (DialogId, u32), TransactionKey)>);
+
+impl Drop for AckRouteGuard {
+    fn drop(&mut self) {
+        if let Some((endpoint_inner, route, key)) = self.0.take() {
+            endpoint_inner.waiting_ack_cseq.with_mut(|m| {
+                if m.get(&route) == Some(&key) {
+                    m.remove(&route);
+                }
+            });
+        }
     }
 }
 
