@@ -135,6 +135,9 @@ pub struct Registration {
     /// `200 OK`, see [`Registration::expires`]. `None` until a REGISTER
     /// succeeds.
     pub granted_expires: Option<u32>,
+    /// Extra headers added to every REGISTER (including the authenticated
+    /// retry). Each replaces any header of the same name already present.
+    pub extra_headers: Vec<Header>,
 }
 
 impl Registration {
@@ -190,6 +193,7 @@ impl Registration {
             outbound_proxy: None,
             service_route: Vec::new(),
             granted_expires: None,
+            extra_headers: Vec::new(),
         }
     }
 
@@ -530,6 +534,12 @@ impl Registration {
             request
                 .headers
                 .unique_push(crate::sip::headers::Expires::from(expires).into());
+        }
+        for extra in &self.extra_headers {
+            request
+                .headers
+                .retain(|h| !h.name().eq_ignore_ascii_case(extra.name()));
+            request.headers.push(extra.clone());
         }
 
         let key = TransactionKey::from_request(&request, TransactionRole::Client)?;
