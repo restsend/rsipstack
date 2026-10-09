@@ -129,6 +129,10 @@ pub struct Registration {
     /// preloads them as `Route` headers on later out-of-dialog requests.
     /// Populated on each `200 OK`; empty when the response carried none.
     pub service_route: Vec<crate::sip::typed::ServiceRoute>,
+    /// Registration lifetime granted by the registrar in the last successful
+    /// `200 OK`, see [`Registration::expires`]. `None` until a REGISTER
+    /// succeeds.
+    pub granted_expires: Option<u32>,
 }
 
 impl Registration {
@@ -183,6 +187,7 @@ impl Registration {
             call_id,
             outbound_proxy: None,
             service_route: Vec::new(),
+            granted_expires: None,
         }
     }
 
@@ -255,7 +260,8 @@ impl Registration {
     ///
     /// # Returns
     ///
-    /// Expiration time in seconds (default: 50 if not set)
+    /// The lifetime the registrar granted in the last successful `200 OK`
+    /// (RFC 3261 Section 10.2.4), or 50 before any registration succeeded.
     ///
     /// # Examples
     ///
@@ -273,10 +279,7 @@ impl Registration {
     /// # }
     /// ```
     pub fn expires(&self) -> u32 {
-        self.contact
-            .as_ref()
-            .and_then(|c| c.expires())
-            .unwrap_or(50)
+        self.granted_expires.unwrap_or(50)
     }
 
     /// Perform SIP registration with the server
@@ -488,6 +491,9 @@ impl Registration {
 
         // Thanks to https://github.com/restsend/rsipstack/issues/32
         let contact_for_retry = contact.clone();
+        // The Contact of the request that finally gets the 200 OK; matched
+        // against the response bindings to find the granted expiration.
+        let mut sent_contact = contact.clone();
         request.headers.unique_push(self.call_id.clone().into());
         request.headers.unique_push(contact.into());
         if let Some(allow) = &self.allow {
@@ -587,6 +593,7 @@ impl Registration {
                                 tx.original
                                     .headers
                                     .retain(|h| !matches!(h, crate::sip::Header::Contact(_)));
+                                sent_contact = new_contact.clone();
                                 tx.original.headers.unique_push(new_contact.into());
                             }
 
@@ -628,6 +635,8 @@ impl Registration {
                         // out-of-dialog requests. Malformed values are ignored
                         // rather than failing the registration.
                         self.service_route = resp.typed_service_route_headers().unwrap_or_default();
+                        self.granted_expires =
+                            Some(granted_expiration(&resp, &sent_contact, expires));
 
                         debug!(
                             status = %resp.status_code,
@@ -714,5 +723,158 @@ impl Registration {
             },
             params: vec![],
         }
+    }
+}
+
+/// Lifetime the registrar granted for our binding (RFC 3261 Section 10.2.4),
+/// mirroring pjsip's `calculate_response_expiration`:
+///
+/// 1. the lowest `expires` param among the response Contacts matching ours;
+/// 2. our Contact matched without `expires`: the `Expires` header, then the
+///    requested value;
+/// 3. nothing matched (a registrar rewriting URIs): a lone response Contact is
+///    taken as ours, otherwise the `Expires` header, then the requested value.
+///
+/// 3600 is the last resort when neither side specified a lifetime.
+pub(crate) fn granted_expiration(
+    resp: &Response,
+    ours: &crate::sip::typed::Contact,
+    requested: Option<u32>,
+) -> u32 {
+    if requested == Some(0) {
+        return 0;
+    }
+    let header_or_requested = || {
+        resp.expires_header()
+            .and_then(|h| h.value().trim().parse::<u32>().ok())
+            .or(requested)
+            .unwrap_or(3600)
+    };
+    let contacts = resp.typed_contact_headers().unwrap_or_default();
+    let matched: Vec<_> = contacts
+        .iter()
+        .filter(|c| contact_uri_matches(&c.uri, &ours.uri))
+        .collect();
+    if !matched.is_empty() {
+        return matched
+            .iter()
+            .filter_map(|c| c.expires())
+            .min()
+            .unwrap_or_else(header_or_requested);
+    }
+    if let [only] = contacts.as_slice() {
+        if let Some(expires) = only.expires() {
+            return expires;
+        }
+    }
+    header_or_requested()
+}
+
+/// Whether two Contact URIs denote the same binding: scheme, user, host
+/// (case-insensitive), port (default port filled in) and transport (UDP
+/// when absent). Other URI params are ignored; registrars may add some.
+fn contact_uri_matches(a: &crate::sip::Uri, b: &crate::sip::Uri) -> bool {
+    use crate::sip::uri::Scheme;
+    let scheme = |u: &crate::sip::Uri| u.scheme.clone().unwrap_or(Scheme::Sip);
+    let user = |u: &crate::sip::Uri| u.auth.as_ref().map(|a| a.user.clone());
+    let port = |u: &crate::sip::Uri| {
+        u.host_with_port
+            .port
+            .as_ref()
+            .map(|p| p.value().to_owned())
+            .unwrap_or(if scheme(u) == Scheme::Sips {
+                5061
+            } else {
+                5060
+            })
+    };
+    let transport = |u: &crate::sip::Uri| {
+        u.params
+            .iter()
+            .find_map(|p| match p {
+                Param::Transport(t) => Some(*t),
+                _ => None,
+            })
+            .unwrap_or(crate::sip::Transport::Udp)
+    };
+    scheme(a) == scheme(b)
+        && user(a) == user(b)
+        && a.host_with_port
+            .host
+            .to_string()
+            .eq_ignore_ascii_case(&b.host_with_port.host.to_string())
+        && port(a) == port(b)
+        && transport(a) == transport(b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::granted_expiration;
+    use crate::sip::{typed::Contact, Response};
+
+    fn ok(extra: &str) -> Response {
+        format!(
+            "SIP/2.0 200 OK\r\n\
+             Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-test\r\n\
+             From: <sip:1001@example.com>;tag=a\r\n\
+             To: <sip:1001@example.com>;tag=b\r\n\
+             CSeq: 2 REGISTER\r\n\
+             Call-ID: reg-test\r\n\
+             {extra}\
+             Content-Length: 0\r\n\r\n"
+        )
+        .as_str()
+        .try_into()
+        .unwrap()
+    }
+
+    fn ours() -> Contact {
+        Contact::parse("<sip:1001@198.51.100.20:5060>").unwrap()
+    }
+
+    #[test]
+    fn picks_our_binding_among_other_devices() {
+        let resp = ok("Contact: <sip:1001@203.0.113.7:5080>;expires=60, \
+             <sip:1001@198.51.100.20:5060>;expires=1800\r\nExpires: 3600\r\n");
+        assert_eq!(granted_expiration(&resp, &ours(), Some(300)), 1800);
+    }
+
+    #[test]
+    fn matching_tolerates_default_port_transport_and_host_case() {
+        let ours = Contact::parse("<sip:1001@Host.Example.com;transport=udp>").unwrap();
+        let resp = ok("Contact: <sip:1001@host.example.com:5060;ob>;expires=900, \
+             <sip:1001@host.example.com:5060;transport=tcp>;expires=60\r\n");
+        assert_eq!(granted_expiration(&resp, &ours, Some(300)), 900);
+    }
+
+    #[test]
+    fn our_binding_without_param_uses_expires_header_then_requested() {
+        let resp = ok("Contact: <sip:1001@198.51.100.20:5060>\r\nExpires: 1200\r\n");
+        assert_eq!(granted_expiration(&resp, &ours(), Some(300)), 1200);
+        let resp = ok("Contact: <sip:1001@198.51.100.20:5060>\r\n");
+        assert_eq!(granted_expiration(&resp, &ours(), Some(300)), 300);
+    }
+
+    #[test]
+    fn unmatched_lone_contact_is_taken_as_ours() {
+        // Registrar rewrote our Contact (e.g. NAT/ALG): one binding left.
+        let resp = ok("Contact: <sip:1001@10.0.0.9:5062>;expires=600\r\nExpires: 3600\r\n");
+        assert_eq!(granted_expiration(&resp, &ours(), Some(300)), 600);
+    }
+
+    #[test]
+    fn unmatched_multiple_contacts_fall_back_to_header_then_requested() {
+        let contacts = "Contact: <sip:1001@10.0.0.9:5062>;expires=600, \
+             <sip:1001@10.0.0.8:5062>;expires=60\r\n";
+        let resp = ok(&format!("{contacts}Expires: 1500\r\n"));
+        assert_eq!(granted_expiration(&resp, &ours(), Some(300)), 1500);
+        assert_eq!(granted_expiration(&ok(contacts), &ours(), Some(300)), 300);
+    }
+
+    #[test]
+    fn nothing_specified_defaults_to_3600_and_unregister_is_zero() {
+        assert_eq!(granted_expiration(&ok(""), &ours(), None), 3600);
+        let resp = ok("Contact: <sip:1001@198.51.100.20:5060>;expires=1800\r\n");
+        assert_eq!(granted_expiration(&resp, &ours(), Some(0)), 0);
     }
 }
