@@ -776,7 +776,7 @@ impl DialogLayer {
         opt: InviteOption,
         state_sender: DialogStateSender,
     ) -> Result<(InviteDialog, crate::platform::JoinHandle<InviteAsyncResult>)> {
-        let (dialog, mut tx) = self.create_client_invite_dialog(opt, state_sender)?;
+        let (dialog, tx) = self.create_client_invite_dialog(opt, state_sender)?;
         let id0 = dialog.id();
 
         // 1) register early key (so in-dialog requests can be matched)
@@ -789,7 +789,24 @@ impl DialogLayer {
 
         // 2) run invite in background, keep registry updated like do_invite()
         let handle = crate::platform::spawn_with_result(async move {
-            let r = dialog_clone.process_invite(&mut tx).boxed().await;
+            // As in do_invite: a task aborted before the final response
+            // still ends the INVITE (CANCEL, or ACK + BYE for a 2xx).
+            let mut guard = DialogGuardForUnconfirmed {
+                dialog_layer_inner: &inner,
+                id: &id0,
+                invite_tx: Some(tx),
+                dialog: Some(dialog_clone.clone()),
+            };
+            let invite_tx = guard
+                .invite_tx
+                .as_mut()
+                .expect("transaction should be available");
+            let r = dialog_clone.process_invite(invite_tx).boxed().await;
+            guard.dialog = None;
+            let mut tx = guard
+                .invite_tx
+                .take()
+                .expect("transaction should be available");
 
             // remove early key
             inner.dialogs.remove(&id0.to_string());
