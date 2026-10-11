@@ -863,7 +863,10 @@ impl Transaction {
                 TransactionState::Proceeding | TransactionState::Trying => true,
                 // RFC 3261 Section 9.2: after a final response, CANCEL has no
                 // effect on the original request, its responses, or session state.
-                TransactionState::Completed => false,
+                // A 2xx keeps the transaction in Accepted (RFC 6026 §7.1).
+                TransactionState::Completed
+                | TransactionState::Confirmed
+                | TransactionState::Accepted => false,
                 _ => {
                     if let Some(connection) = &self.connection {
                         let resp = self.endpoint_inner.make_response(
@@ -885,9 +888,11 @@ impl Transaction {
             };
 
             if let Some(connection) = &self.connection {
-                let resp = self
-                    .endpoint_inner
-                    .make_response(&req, StatusCode::OK, None);
+                let resp = self.endpoint_inner.make_cancel_response(
+                    &req,
+                    StatusCode::OK,
+                    self.last_response.as_ref(),
+                );
                 let resp = if let Some(ref inspector) = self.endpoint_inner.message_inspector {
                     inspector.before_send(resp.into(), self.destination.as_ref())
                 } else {

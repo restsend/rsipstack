@@ -398,7 +398,17 @@ impl EndpointInner {
                 // check is the termination of an existing transaction
                 let last_message = self.finished_transactions.get(&key).and_then(|v| v.clone());
 
-                if let Some(last_message) = last_message {
+                // A CANCEL shares the INVITE's key but is answered on its own
+                // (RFC 3261 §9.2): 200 once the INVITE had a final response,
+                // else 481 below (dropped unanswered by its TU).
+                if req.method() == &crate::sip::Method::Cancel {
+                    if let Some(SipMessage::Response(r)) = &last_message {
+                        if r.status_code.kind() != crate::sip::StatusCodeKind::Provisional {
+                            let status = crate::sip::StatusCode::OK;
+                            return self.reply_cancel(req, status, Some(r), &connection).await;
+                        }
+                    }
+                } else if let Some(last_message) = last_message {
                     // ACK for a completed ServerInvite transaction: absorb it silently
                     // and clean up the waiting_ack entry.
                     if req.method() == &crate::sip::Method::Ack {
@@ -506,24 +516,8 @@ impl EndpointInner {
 
         match request.method {
             crate::sip::Method::Cancel => {
-                let resp = self.make_response(
-                    &request,
-                    crate::sip::StatusCode::CallTransactionDoesNotExist,
-                    None,
-                );
-                let resp = if let Some(ref inspector) = self.message_inspector {
-                    inspector.before_send(resp.into(), None)
-                } else {
-                    resp.into()
-                };
-
-                let dest = if !connection.is_reliable() {
-                    self.get_destination_from_request(&request).await
-                } else {
-                    None
-                };
-                connection.send(resp, dest.as_ref()).await?;
-                return Ok(());
+                let status = crate::sip::StatusCode::CallTransactionDoesNotExist;
+                return self.reply_cancel(&request, status, None, &connection).await;
             }
             crate::sip::Method::Ack => return Ok(()),
             _ => {}
@@ -534,6 +528,28 @@ impl EndpointInner {
 
         self.incoming_sender.send(tx).ok();
         Ok(())
+    }
+
+    /// Answer a CANCEL that no live transaction handles.
+    async fn reply_cancel(
+        &self,
+        req: &crate::sip::Request,
+        status: crate::sip::StatusCode,
+        invite_response: Option<&crate::sip::Response>,
+        connection: &SipConnection,
+    ) -> Result<()> {
+        let resp = self.make_cancel_response(req, status, invite_response);
+        let resp = if let Some(ref inspector) = self.message_inspector {
+            inspector.before_send(resp.into(), None)
+        } else {
+            resp.into()
+        };
+        let dest = if !connection.is_reliable() {
+            self.get_destination_from_request(req).await
+        } else {
+            None
+        };
+        connection.send(resp, dest.as_ref()).await
     }
 
     pub fn attach_transaction(&self, key: &TransactionKey, tu_sender: TransactionEventSender) {

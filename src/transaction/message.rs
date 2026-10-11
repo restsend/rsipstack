@@ -253,6 +253,25 @@ impl EndpointInner {
         }
     }
 
+    /// A response to a CANCEL, with the To header (and tag) of the INVITE's
+    /// last response when there is one (RFC 3261 §9.2).
+    pub(crate) fn make_cancel_response(
+        &self,
+        cancel: &Request,
+        status_code: StatusCode,
+        invite_response: Option<&Response>,
+    ) -> Response {
+        let mut resp = self.make_response(cancel, status_code, None);
+        if let Some(to) = invite_response.and_then(|r| r.to_header().ok()) {
+            for header in resp.headers.iter_mut() {
+                if let Header::To(t) = header {
+                    *t = to.clone();
+                }
+            }
+        }
+        resp
+    }
+
     // make ack from response, for ack to non-200 reponse, should pass the original invite
     pub fn make_ack(&self, invite: &Request, resp: &Response) -> Result<Request> {
         let mut headers = resp.headers.clone();

@@ -14,6 +14,7 @@ mod test_endpoint;
 mod test_forked_2xx_ack;
 mod test_provisional_responses;
 mod test_server;
+mod test_server_cancel;
 mod test_server_invite_ack;
 mod test_server_invite_drop;
 mod test_stream_reconnect;
