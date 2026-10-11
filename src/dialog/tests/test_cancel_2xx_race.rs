@@ -455,6 +455,68 @@ async fn test_removed_cancel_answered_487_sends_no_bye() -> crate::Result<()> {
     run_cancel_answered_487(100, true).await
 }
 
+/// Aborting a `do_invite_async` task abandons the call like dropping the
+/// `do_invite` future. Aborted in Calling, the first response gets a CANCEL
+/// (180) or an ACK and a BYE (200); aborted in Early, the CANCEL goes out at
+/// once. Nothing stays registered in the layer.
+async fn run_aborted_invite_task(in_calling: bool, first: u16) -> crate::Result<()> {
+    let token = CancellationToken::new();
+    let Uac {
+        dialog_layer,
+        option,
+        peer,
+    } = setup(&token).await?;
+    let wait = Duration::from_secs(2);
+
+    let (state_sender, mut states) = unbounded_channel();
+    let (_dialog, join) = dialog_layer.do_invite_async(option, state_sender)?;
+    let (inv, uac) = recv_request(&peer, Method::Invite, wait).await;
+    calling_id(&mut states).await;
+    if !in_calling {
+        reply(&peer, uac, &inv, 180, "Ringing").await;
+        wait_for_state(&mut states, "Early", wait, |s| {
+            matches!(s, DialogState::Early(_, _))
+        })
+        .await;
+    }
+    join.abort();
+    let _ = join.await;
+    if in_calling {
+        reply(&peer, uac, &inv, first, "Response").await;
+    }
+    if first == 180 {
+        let (cancel, _) = recv_request(&peer, Method::Cancel, wait).await;
+        reply(&peer, uac, &cancel, 200, "OK").await;
+        reply(&peer, uac, &inv, 487, "Request Terminated").await;
+    }
+    let (ack, _) = recv_request(&peer, Method::Ack, wait).await;
+    assert_in_dialog(&ack, &inv, "ACK");
+    if first == 200 {
+        let (bye, _) = recv_request(&peer, Method::Bye, wait).await;
+        assert_in_dialog(&bye, &inv, "BYE");
+        reply(&peer, uac, &bye, 200, "OK").await;
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(dialog_layer.is_empty(), "an aborted call is not registered");
+    token.cancel();
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_aborted_invite_task_in_calling_is_cancelled_after_the_180() -> crate::Result<()> {
+    run_aborted_invite_task(true, 180).await
+}
+
+#[tokio::test]
+async fn test_aborted_invite_task_in_calling_2xx_is_acked_and_byed() -> crate::Result<()> {
+    run_aborted_invite_task(true, 200).await
+}
+
+#[tokio::test]
+async fn test_aborted_invite_task_in_early_is_cancelled() -> crate::Result<()> {
+    run_aborted_invite_task(false, 180).await
+}
+
 /// Dropped before any response: Terminated(UacCancel) is reported at once and
 /// nothing is sent while no provisional has arrived (RFC 3261 §9.1). The first
 /// response then gets a CANCEL (180), or an ACK and a BYE (200).
