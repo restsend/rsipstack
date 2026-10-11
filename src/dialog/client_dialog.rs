@@ -250,8 +250,11 @@ impl ClientInviteDialog {
     ///
     /// # Returns
     ///
-    /// * `Ok(())` - CANCEL was sent successfully
+    /// * `Ok(())` - CANCEL was sent successfully, or deferred until the
+    ///   first provisional response when none has arrived yet (RFC 3261 §9.1)
     /// * `Err(Error)` - Failed to send CANCEL request
+    ///
+    /// See [`InviteDialog::cancel`](super::invite_dialog::InviteDialog::cancel).
     ///
     /// # Examples
     ///
@@ -746,21 +749,27 @@ impl ClientInviteDialog {
                     let peer_uuid = resp.session_id_header().and_then(|s| s.local_uuid());
                     self.inner.observe_peer_session_uuid(peer_uuid);
 
+                    let unified =
+                        super::invite_dialog::InviteDialog::from_inner(self.inner.clone());
                     if status == StatusCode::Trying {
                         self.inner.transition(DialogState::Trying(self.id()))?;
+                        unified.send_deferred_cancel();
                         continue;
                     }
 
                     if matches!(status.kind(), crate::sip::StatusCodeKind::Provisional) {
+                        unified.send_deferred_cancel();
                         self.inner.handle_provisional_response(&resp).await?;
                         self.inner.transition(DialogState::Early(self.id(), resp))?;
+                        unified.send_deferred_cancel();
                         continue;
                     }
 
                     if matches!(
                         status,
                         StatusCode::ProxyAuthenticationRequired | StatusCode::Unauthorized
-                    ) {
+                    ) && !self.inner.cancel_requested.load(Ordering::SeqCst)
+                    {
                         if auth_sent {
                             final_response = Some(resp.clone());
                             debug!(id = %self.id(), ?status, "received auth response after auth sent");
@@ -831,8 +840,10 @@ impl ClientInviteDialog {
                                     crate::Error::Error("missing Contact header".to_string())
                                 })?;
                             *self.inner.remote_uri.lock() = contact_uri;
-                            self.inner
-                                .transition(DialogState::Confirmed(dialog_id.clone(), resp))?;
+                            let confirmed = DialogState::Confirmed(dialog_id.clone(), resp.clone());
+                            if self.inner.confirm_unless_cancelled(confirmed)? {
+                                unified.bye_2xx_of_cancelled(resp);
+                            }
                         }
                         _ => {
                             self.inner.transition(DialogState::Terminated(

@@ -10,12 +10,14 @@
 //! has to end (CANCEL, and ACK + BYE for a 2xx) even though the layer entry is
 //! already gone.
 use crate::dialog::{
+    client_dialog::ClientInviteDialog,
     dialog::{DialogState, DialogStateReceiver, TerminatedReason},
     dialog_layer::DialogLayer,
     invitation::InviteOption,
     DialogId,
 };
-use crate::sip::{prelude::HeadersExt, Method, Request, SipMessage, Uri};
+use crate::sip::{prelude::HeadersExt, Method, Request, SipMessage, StatusCode, Uri};
+use crate::transaction::endpoint::EndpointOption;
 use crate::transport::{udp::UdpConnection, TransportLayer};
 use crate::EndpointBuilder;
 use std::net::SocketAddr;
@@ -48,13 +50,18 @@ async fn recv_request(socket: &UdpSocket, method: Method, wait: Duration) -> (Re
 
 /// Fail if the peer receives a BYE within `wait`.
 async fn assert_no_bye(socket: &UdpSocket, wait: Duration, what: &str) {
+    assert_no_request(socket, Method::Bye, wait, what).await
+}
+
+/// Fail if the peer receives a `method` request within `wait`.
+async fn assert_no_request(socket: &UdpSocket, method: Method, wait: Duration, what: &str) {
     let mut buf = vec![0u8; 4096];
     let deadline = tokio::time::Instant::now() + wait;
     while let Ok(Ok((len, _))) = tokio::time::timeout_at(deadline, socket.recv_from(&mut buf)).await
     {
         let text = std::str::from_utf8(&buf[..len]).unwrap();
         if let Ok(SipMessage::Request(req)) = SipMessage::try_from(text) {
-            assert_ne!(req.method, Method::Bye, "{what}");
+            assert_ne!(req.method, method, "{what}");
         }
     }
 }
@@ -98,6 +105,10 @@ struct Uac {
 }
 
 async fn setup(token: &CancellationToken) -> crate::Result<Uac> {
+    setup_with(token, EndpointOption::default()).await
+}
+
+async fn setup_with(token: &CancellationToken, option: EndpointOption) -> crate::Result<Uac> {
     let peer = UdpSocket::bind("127.0.0.1:0").await?;
     let peer_port = peer.local_addr()?.port();
 
@@ -114,6 +125,7 @@ async fn setup(token: &CancellationToken) -> crate::Result<Uac> {
         .with_user_agent("rsipstack-test")
         .with_transport_layer(transport_layer)
         .with_cancel_token(token.child_token())
+        .with_option(option)
         .build();
     let endpoint_inner = endpoint.inner.clone();
     tokio::spawn(async move {
@@ -542,4 +554,248 @@ async fn test_dropped_before_provisional_final_failure_is_acked_only() -> crate:
 #[tokio::test]
 async fn test_removed_before_provisional_final_failure_is_acked_only() -> crate::Result<()> {
     run_dropped_before_provisional(486, true).await
+}
+
+/// `cancel()` on a `do_invite_async` call, in Calling (no response yet) or
+/// in Early (after the 180). In Calling the CANCEL is deferred to the first
+/// provisional (RFC 3261 §9.1). `first` is the peer's first response (100,
+/// 180, 200 or 486); after a provisional the peer answers the CANCEL and
+/// ends the INVITE with `last` (487, or a 200 that crosses the CANCEL).
+async fn run_cancel_called(in_calling: bool, first: u16, last: u16) -> crate::Result<()> {
+    run_cancel_called_via(false, in_calling, first, last).await
+}
+
+/// The same, with `legacy` driving the INVITE through the legacy
+/// `ClientInviteDialog::process_invite` instead of `do_invite_async`.
+async fn run_cancel_called_via(
+    legacy: bool,
+    in_calling: bool,
+    first: u16,
+    last: u16,
+) -> crate::Result<()> {
+    let token = CancellationToken::new();
+    let Uac {
+        dialog_layer,
+        option,
+        peer,
+    } = setup(&token).await?;
+    let wait = Duration::from_secs(2);
+
+    let (state_sender, mut states) = unbounded_channel();
+    let (dialog, join) = if legacy {
+        let (dialog, mut tx) = dialog_layer.create_client_invite_dialog(option, state_sender)?;
+        let legacy = ClientInviteDialog {
+            inner: dialog.inner.clone(),
+        };
+        let join = tokio::spawn(async move { legacy.process_invite(&mut tx).await });
+        (dialog, join)
+    } else {
+        dialog_layer.do_invite_async(option, state_sender)?
+    };
+    let (inv, uac) = recv_request(&peer, Method::Invite, wait).await;
+    calling_id(&mut states).await;
+    if in_calling {
+        dialog.cancel().await?;
+        assert_no_request(
+            &peer,
+            Method::Cancel,
+            Duration::from_millis(1100),
+            "no CANCEL before a provisional",
+        )
+        .await;
+    }
+    let provisional = matches!(first, 100 | 180);
+    reply(&peer, uac, &inv, first, "Response").await;
+    if !in_calling {
+        wait_for_state(&mut states, "Early", wait, |s| {
+            matches!(s, DialogState::Early(_, _))
+        })
+        .await;
+        // In Early cancel() waits for the CANCEL's response.
+        let dialog = dialog.clone();
+        tokio::spawn(async move { dialog.cancel().await });
+    }
+    if provisional {
+        let (cancel, _) = recv_request(&peer, Method::Cancel, wait).await;
+        assert_eq!(cancel.cseq_header()?.seq()?, inv.cseq_header()?.seq()?);
+        if last == 200 {
+            // The callee answered while the CANCEL was in flight.
+            reply(&peer, uac, &inv, 200, "OK").await;
+            reply(&peer, uac, &cancel, 200, "OK").await;
+        } else {
+            reply(&peer, uac, &cancel, 200, "OK").await;
+            reply(&peer, uac, &inv, last, "Request Terminated").await;
+        }
+    }
+    let answered = if provisional { last } else { first };
+    let (ack, _) = recv_request(&peer, Method::Ack, wait).await;
+    assert_in_dialog(&ack, &inv, "ACK");
+    if answered == 200 {
+        let (bye, _) = recv_request(&peer, Method::Bye, wait).await;
+        assert_in_dialog(&bye, &inv, "BYE");
+        reply(&peer, uac, &bye, 200, "OK").await;
+    } else {
+        assert_no_bye(&peer, Duration::from_millis(500), "an unanswered call").await;
+    }
+    // Nothing left to cancel after a final response.
+    assert_no_request(
+        &peer,
+        Method::Cancel,
+        Duration::from_millis(300),
+        "a late CANCEL",
+    )
+    .await;
+
+    let (_, resp) = tokio::time::timeout(wait, join)
+        .await
+        .expect("join")
+        .expect("invite task")?;
+    assert_eq!(resp.map(|r| u16::from(r.status_code)), Some(answered));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let seen: Vec<_> = std::iter::from_fn(|| states.try_recv().ok()).collect();
+    assert!(
+        !seen.iter().any(|s| matches!(s, DialogState::Confirmed(..))),
+        "a cancelled call must not report Confirmed, got {seen:?}"
+    );
+    let terminations: Vec<_> = seen
+        .iter()
+        .filter(|s| matches!(s, DialogState::Terminated(..)))
+        .collect();
+    assert_eq!(terminations.len(), 1, "one Terminated, got {seen:?}");
+    if answered == 200 {
+        assert!(matches!(
+            terminations[0],
+            DialogState::Terminated(_, TerminatedReason::UacCancel)
+        ));
+    }
+    assert!(dialog.state().is_terminated());
+    assert!(
+        dialog_layer.is_empty(),
+        "a cancelled call is not registered"
+    );
+    token.cancel();
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_cancel_in_calling_is_sent_after_the_180() -> crate::Result<()> {
+    run_cancel_called(true, 180, 487).await
+}
+
+#[tokio::test]
+async fn test_cancel_in_calling_is_sent_after_the_100() -> crate::Result<()> {
+    run_cancel_called(true, 100, 487).await
+}
+
+#[tokio::test]
+async fn test_cancel_in_calling_2xx_crossing_the_cancel_is_acked_and_byed() -> crate::Result<()> {
+    run_cancel_called(true, 180, 200).await
+}
+
+#[tokio::test]
+async fn test_cancel_in_calling_2xx_without_provisional_is_acked_and_byed() -> crate::Result<()> {
+    run_cancel_called(true, 200, 200).await
+}
+
+#[tokio::test]
+async fn test_cancel_in_calling_final_failure_is_acked_only() -> crate::Result<()> {
+    run_cancel_called(true, 486, 486).await
+}
+
+/// The same `cancel()` in Early: a 2xx that crosses the CANCEL is ACKed and
+/// BYE'd, as for a dropped `do_invite` future.
+#[tokio::test]
+async fn test_cancel_in_early_2xx_crossing_the_cancel_is_acked_and_byed() -> crate::Result<()> {
+    run_cancel_called(false, 180, 200).await?;
+    run_cancel_called(false, 180, 487).await
+}
+
+/// The legacy `ClientInviteDialog::process_invite` sends the deferred
+/// CANCEL and BYEs the 2xx alike.
+#[tokio::test]
+async fn test_cancel_in_calling_with_the_legacy_client_dialog() -> crate::Result<()> {
+    run_cancel_called_via(true, true, 180, 487).await?;
+    run_cancel_called_via(true, true, 200, 200).await
+}
+
+/// A reliable 183 (RFC 3262) after `cancel()` in Calling: the CANCEL is not
+/// held back until the PRACK, which the peer never answers, completes.
+#[tokio::test]
+async fn test_cancel_in_calling_is_not_held_back_by_the_prack() -> crate::Result<()> {
+    let token = CancellationToken::new();
+    let Uac {
+        dialog_layer,
+        mut option,
+        peer,
+    } = setup(&token).await?;
+    option.support_prack = true;
+    let (state_sender, mut states) = unbounded_channel();
+    let (dialog, _join) = dialog_layer.do_invite_async(option, state_sender)?;
+    let (inv, uac) = recv_request(&peer, Method::Invite, Duration::from_secs(2)).await;
+    calling_id(&mut states).await;
+    dialog.cancel().await?;
+    let contact = format!("sip:bob@{}", peer.local_addr()?);
+    let reliable = response(&inv, 183, "Session Progress", &contact).replace(
+        "Content-Length: 0",
+        "Require: 100rel\r\nRSeq: 1\r\nContent-Length: 0",
+    );
+    peer.send_to(reliable.as_bytes(), uac).await?;
+    // The PRACK goes out and is never answered; the CANCEL arrives well
+    // before the PRACK's own timeout (64*T1).
+    let mut buf = vec![0u8; 4096];
+    let (mut prack, mut cancel) = (false, false);
+    while !(prack && cancel) {
+        let (len, _) = tokio::time::timeout(Duration::from_secs(1), peer.recv_from(&mut buf))
+            .await
+            .unwrap_or_else(|_| panic!("PRACK seen: {prack}, CANCEL seen: {cancel}"))?;
+        if let Ok(SipMessage::Request(req)) = SipMessage::try_from(&buf[..len]) {
+            prack |= req.method == Method::PRack;
+            cancel |= req.method == Method::Cancel
+                && req.cseq_header()?.seq()? == inv.cseq_header()?.seq()?;
+        }
+    }
+    token.cancel();
+    Ok(())
+}
+
+/// `cancel()` in Calling and no response at all: nothing but INVITE
+/// retransmissions is sent, and Timer B ends the INVITE (408).
+#[tokio::test]
+async fn test_cancel_in_calling_without_response_times_out() -> crate::Result<()> {
+    let token = CancellationToken::new();
+    let t1 = Duration::from_millis(20);
+    let option = EndpointOption {
+        t1,
+        t1x64: t1 * 64,
+        ..Default::default()
+    };
+    let Uac {
+        dialog_layer,
+        option,
+        peer,
+    } = setup_with(&token, option).await?;
+    let (state_sender, mut states) = unbounded_channel();
+    let (dialog, join) = dialog_layer.do_invite_async(option, state_sender)?;
+    recv_request(&peer, Method::Invite, Duration::from_secs(2)).await;
+    calling_id(&mut states).await;
+    dialog.cancel().await?;
+    assert_no_request(
+        &peer,
+        Method::Cancel,
+        t1 * 64 + Duration::from_millis(500),
+        "no CANCEL without a provisional",
+    )
+    .await;
+    let (_, resp) = tokio::time::timeout(Duration::from_secs(2), join)
+        .await
+        .expect("join")
+        .expect("invite task")?;
+    assert_eq!(
+        resp.map(|r| r.status_code),
+        Some(StatusCode::RequestTimeout)
+    );
+    assert!(dialog.state().is_terminated());
+    assert!(dialog_layer.is_empty());
+    token.cancel();
+    Ok(())
 }

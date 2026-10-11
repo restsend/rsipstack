@@ -25,7 +25,7 @@ use crate::{
     transport::{SipAddr, SipConnection},
     Result,
 };
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use futures::FutureExt;
 use tracing::{debug, info, warn};
 
@@ -340,6 +340,10 @@ pub struct DialogInner {
     /// connection is unavailable: immune to missing received/rport params and
     /// valid even after the socket object died.
     pub(super) dialback_target: Mutex<Option<SipAddr>>,
+    /// `cancel()` was called on this UAC dialog's INVITE.
+    pub(super) cancel_requested: AtomicBool,
+    /// That CANCEL waits for a provisional response (RFC 3261 §9.1).
+    pub(super) cancel_deferred: AtomicBool,
 }
 
 pub type DialogStateReceiver = UnboundedReceiver<DialogState>;
@@ -501,6 +505,8 @@ impl DialogInner {
             remote_ack: Mutex::new(None),
             server_connection: Mutex::new(None),
             dialback_target: Mutex::new(None),
+            cancel_requested: AtomicBool::new(false),
+            cancel_deferred: AtomicBool::new(false),
         })
     }
     /// Extract RFC 7989 Session-ID state from the initial request.
@@ -1567,6 +1573,8 @@ impl DialogInner {
             remote_ack: Mutex::new(None),
             server_connection: Mutex::new(None),
             dialback_target: Mutex::new(None),
+            cancel_requested: AtomicBool::new(false),
+            cancel_deferred: AtomicBool::new(false),
         }))
     }
     fn build_restored_initial_request(
@@ -1645,7 +1653,26 @@ impl DialogInner {
         // Decide under the state lock and notify only transitions that are
         // applied, while still holding it, so notifications follow the order
         // in which the state changed.
-        let mut old_state = self.state.lock();
+        self.transition_locked(&mut self.state.lock(), state)
+    }
+
+    /// The 2xx to the INVITE: `confirmed`, or `Terminated(UacCancel)` once
+    /// `cancel()` was called. Decided under the state lock `cancel()` takes,
+    /// so a racing `cancel()` is either seen here or sees `Confirmed`.
+    /// Returns whether the INVITE was cancelled.
+    pub(super) fn confirm_unless_cancelled(&self, confirmed: DialogState) -> Result<bool> {
+        let id = self.id.lock().clone();
+        let mut state = self.state.lock();
+        if self.cancel_requested.load(Ordering::SeqCst) {
+            let cancelled = DialogState::Terminated(id, TerminatedReason::UacCancel);
+            self.transition_locked(&mut state, cancelled)?;
+            return Ok(true);
+        }
+        self.transition_locked(&mut state, confirmed)?;
+        Ok(false)
+    }
+
+    fn transition_locked(&self, old_state: &mut DialogState, state: DialogState) -> Result<()> {
         // Late updates after termination (e.g. CANCEL's 200 arriving after
         // the INVITE's 487, or a second Terminated from a racing teardown)
         // are neither applied nor broadcast: observers already saw Terminated.
