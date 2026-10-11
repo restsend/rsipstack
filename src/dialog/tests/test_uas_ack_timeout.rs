@@ -1073,3 +1073,32 @@ async fn test_unacked_reinvite_2xx_ends_the_session_on_a_legacy_client_dialog() 
 async fn test_acked_reinvite_keeps_a_legacy_client_dialog() -> crate::Result<()> {
     legacy_client_dialog_reinvite(true).await
 }
+
+/// CANCEL is a UAC request (RFC 3261 §9): `cancel()` on a server dialog
+/// fails and sends nothing; an unanswered INVITE is ended with `reject()`.
+#[tokio::test]
+async fn test_cancel_on_a_server_dialog_fails() -> crate::Result<()> {
+    let token = CancellationToken::new();
+    let (mut states, mut dialogs, peer) = setup(&token, short_timers()).await?;
+
+    peer.send_request(Method::Invite, 1, None).await;
+    let dialog = tokio::time::timeout(Duration::from_secs(2), dialogs.recv())
+        .await
+        .expect("timeout waiting for the server dialog")
+        .unwrap();
+    let error = dialog.cancel().await.expect_err("cancel() on a UAS");
+    assert!(error.to_string().contains("reject()"), "{error}");
+    let sent = peer.collect(Instant::now() + T1 * 4).await;
+    assert!(
+        sent.iter()
+            .all(|(_, m)| matches!(m, SipMessage::Response(r) if r.status_code.code() == 100)),
+        "nothing but 100 Trying, got {sent:?}"
+    );
+    assert!(!dialog.state().is_terminated());
+    // hangup() on the unanswered server dialog keeps its behavior.
+    dialog.hangup().await?;
+    assert!(!dialog.state().is_terminated());
+    assert!(!std::iter::from_fn(|| states.try_recv().ok()).any(|s| s.is_terminated()));
+    token.cancel();
+    Ok(())
+}

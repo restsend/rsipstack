@@ -282,3 +282,28 @@ async fn test_invite_challenge_after_authenticated_retry_is_final_response() -> 
     p.token.cancel();
     Ok(())
 }
+
+/// `cancel()` before the challenge: a cancelled INVITE is not resent with
+/// credentials, the challenge is its final response.
+#[tokio::test]
+async fn test_cancelled_invite_is_not_retried_with_credential() -> crate::Result<()> {
+    let (p, uas_incoming) = peers().await?;
+    let mut seen = spawn_uas(uas_incoming, StatusCode::Unauthorized, p.uas_port, true);
+    let (state_tx, _state_rx) = unbounded_channel();
+    let opt = invite_option(&p, Some(credential()));
+    let layer = std::sync::Arc::new(p.uac_layer);
+    let (dialog, join) = layer.do_invite_async(opt, state_tx)?;
+    dialog.cancel().await?;
+
+    let (_, resp) = tokio::time::timeout(PROMPT, join)
+        .await
+        .expect("cancelled INVITE did not complete")
+        .expect("invite task")?;
+    assert_eq!(resp.map(|r| r.status_code), Some(StatusCode::Unauthorized));
+    assert!(dialog.state().is_terminated());
+    assert_eq!(seen.recv().await, Some(false));
+    assert_no_more_invites(&mut seen).await;
+
+    p.token.cancel();
+    Ok(())
+}

@@ -359,7 +359,7 @@ async fn wait_response(
 }
 
 /// End the session a 2xx to an abandoned INVITE established.
-async fn bye_if_2xx(client_dialog: &InviteDialog, resp: Option<Response>) {
+pub(super) async fn bye_if_2xx(client_dialog: &InviteDialog, resp: Option<Response>) {
     if let Some(resp) = resp.filter(|r| r.status_code.kind() == StatusCodeKind::Successful) {
         info!(id = %client_dialog.id(), "2xx after CANCEL, sending BYE");
         if let Err(e) = client_dialog.bye_2xx_after_cancel(&resp).await {
@@ -661,7 +661,8 @@ impl DialogLayer {
     /// # Important: Cleanup Required
     ///
     /// When a 2xx response is received, the confirmed dialog is registered in
-    /// the internal dialog registry. **The caller is responsible for removing it**
+    /// the internal dialog registry (not when [`InviteDialog::cancel`] was
+    /// called: that 2xx is ended with a BYE). **The caller is responsible for removing it**
     /// after the dialog terminates by calling [`DialogLayer::remove_dialog`]
     /// with the dialog's [`DialogId`].
     ///
@@ -712,13 +713,16 @@ impl DialogLayer {
                     Some(ref r)
                         if r.status_code.kind() == crate::sip::StatusCodeKind::Successful =>
                     {
-                        debug!(
-                            "client invite dialog confirmed: {} => {}",
-                            id, new_dialog_id
-                        );
-                        self.inner
-                            .dialogs
-                            .insert(new_dialog_id.to_string(), Dialog::Invite(dialog.clone()));
+                        // A cancelled INVITE's 2xx was BYE'd: nothing to register.
+                        if !dialog.inner.is_terminated() {
+                            debug!(
+                                "client invite dialog confirmed: {} => {}",
+                                id, new_dialog_id
+                            );
+                            self.inner
+                                .dialogs
+                                .insert(new_dialog_id.to_string(), Dialog::Invite(dialog.clone()));
+                        }
 
                         // RFC 6026 §7.2: the client transaction is in Accepted
                         // with Timer M (64*T1) armed. Keep receiving until it
@@ -757,7 +761,8 @@ impl DialogLayer {
     /// # Important: Cleanup Required
     ///
     /// On a successful (2xx) response the confirmed dialog is registered in
-    /// the internal dialog registry. **The caller must remove it** after the
+    /// the internal dialog registry (not when [`InviteDialog::cancel`] was
+    /// called: that 2xx is ended with a BYE). **The caller must remove it** after the
     /// dialog terminates by calling [`DialogLayer::remove_dialog`] with the
     /// confirmed dialog's [`DialogId`].
     ///
@@ -799,10 +804,13 @@ impl DialogLayer {
                         .unwrap_or(false);
 
                     if is_2xx {
-                        debug!("client invite dialog confirmed: {} => {}", id0, new_id);
-                        inner
-                            .dialogs
-                            .insert(new_id.to_string(), Dialog::Invite(dialog_clone.clone()));
+                        // A cancelled INVITE's 2xx was BYE'd: nothing to register.
+                        if !dialog_clone.inner.is_terminated() {
+                            debug!("client invite dialog confirmed: {} => {}", id0, new_id);
+                            inner
+                                .dialogs
+                                .insert(new_id.to_string(), Dialog::Invite(dialog_clone.clone()));
+                        }
 
                         // RFC 6026 §7.2: keep draining the Accepted transaction
                         // until Timer M ends it (re-ACKs retransmitted 2xx,

@@ -28,7 +28,8 @@ use tracing::{debug, info, trace, warn};
 ///
 /// Role-specific methods (e.g. `ringing`/`accept`/`reject` for UAS, or
 /// `cancel`/`hangup`/`options`/`process_invite` for UAC) are no-ops when
-/// invoked on the "wrong" role.
+/// invoked on the "wrong" role, except `cancel` and `process_invite`, which
+/// return an error for a UAS.
 #[derive(Clone)]
 pub struct InviteDialog {
     pub(super) inner: DialogInnerRef,
@@ -184,10 +185,14 @@ impl InviteDialog {
     }
 
     /// Terminate the dialog: send BYE when confirmed, CANCEL when still early.
-    /// Role-agnostic — `cancel()` internally guards against non-UAC dialogs,
-    /// and `bye_with_headers()` handles the confirmed UAS/UAC case uniformly.
+    /// Role-agnostic: an unanswered UAS dialog is left alone (it ends with
+    /// `reject()`), and `bye_with_headers()` handles the confirmed UAS/UAC
+    /// case uniformly.
     pub async fn hangup_with_headers(&self, headers: Option<Vec<Header>>) -> Result<()> {
         if self.inner.can_cancel() {
+            if self.role() != TransactionRole::Client {
+                return Ok(());
+            }
             self.cancel().await
         } else {
             self.bye_with_headers(headers).await
@@ -202,17 +207,71 @@ impl InviteDialog {
     }
 
     /// Send a CANCEL request to abort an unanswered INVITE.
-    /// No-op for UAS dialogs.
+    ///
+    /// * `Calling` (no response yet): returns `Ok(())` at once. The CANCEL
+    ///   is sent when the first provisional response arrives (RFC 3261
+    ///   §9.1); `process_invite` (`do_invite`, `do_invite_async`) sends it.
+    /// * `Trying` / `Early`: sends the CANCEL and returns its outcome.
+    ///
+    /// In both cases a 2xx to the INVITE is ACKed and then ended with a BYE
+    /// (with `auto_ack_2xx` off the ACK stays the caller's), the dialog
+    /// reports `Terminated(UacCancel)`, never `Confirmed`, and is not
+    /// registered in the dialog layer. A challenge (401/407) is final.
+    /// Once a final response arrived there is nothing to cancel: `Ok(())`.
+    /// A UAS cannot send CANCEL: an error; end the INVITE with `reject()`.
     pub async fn cancel(&self) -> Result<()> {
-        if self.role() != TransactionRole::Client
-            || !matches!(
-                self.state(),
-                DialogState::Trying(_) | DialogState::Early(_, _)
-            )
+        if self.role() != TransactionRole::Client {
+            return Err(crate::Error::DialogError(
+                "cancel is a UAC operation; use reject()".to_string(),
+                self.id(),
+                StatusCode::ServerInternalError,
+            ));
+        }
         {
-            return Ok(());
+            // Decided under the state lock, so `process_invite` either sees
+            // the deferred CANCEL after leaving Calling or we see it left.
+            let state = self.inner.state.lock();
+            match *state {
+                DialogState::Calling(_) => {
+                    self.inner.cancel_requested.store(true, Ordering::SeqCst);
+                    self.inner.cancel_deferred.store(true, Ordering::SeqCst);
+                    return Ok(());
+                }
+                DialogState::Trying(_) | DialogState::Early(_, _) => {
+                    self.inner.cancel_requested.store(true, Ordering::SeqCst);
+                }
+                _ => return Ok(()),
+            }
         }
         self.send_cancel().await
+    }
+
+    /// Send the CANCEL `cancel()` deferred in Calling, once the INVITE got a
+    /// provisional response. Skipped when a final response was processed
+    /// before the task ran.
+    pub(super) fn send_deferred_cancel(&self) {
+        if !self.inner.cancel_deferred.swap(false, Ordering::SeqCst) {
+            return;
+        }
+        let dialog = self.clone();
+        let _handle = crate::platform::spawn(async move {
+            if !dialog.inner.can_cancel() {
+                return;
+            }
+            if let Err(e) = dialog.send_cancel().await {
+                warn!(id = %dialog.id(), error = %e, "deferred cancel failed");
+            }
+        });
+    }
+
+    /// End the session a 2xx to a cancelled INVITE established: the CANCEL
+    /// had no effect on it (RFC 3261 §9.1, §15). The transaction ACKs the
+    /// 2xx (unless `auto_ack_2xx` is off), then a BYE follows.
+    pub(super) fn bye_2xx_of_cancelled(&self, resp: Response) {
+        let dialog = self.clone();
+        let _handle = crate::platform::spawn(async move {
+            super::invitation::bye_if_2xx(&dialog, Some(resp)).await;
+        });
     }
 
     /// Send the CANCEL for the initial INVITE, whatever the dialog state.
@@ -285,19 +344,26 @@ impl InviteDialog {
 
                     if status == StatusCode::Trying {
                         self.inner.transition(DialogState::Trying(self.id()))?;
+                        self.send_deferred_cancel();
                         continue;
                     }
 
                     if matches!(status.kind(), crate::sip::StatusCodeKind::Provisional) {
+                        // Not held back by a PRACK (RFC 3262); again after
+                        // the transition for a cancel() racing this one.
+                        self.send_deferred_cancel();
                         self.inner.handle_provisional_response(&resp).await?;
                         self.inner.transition(DialogState::Early(self.id(), resp))?;
+                        self.send_deferred_cancel();
                         continue;
                     }
 
+                    // A challenge to a cancelled INVITE is its final response.
                     if matches!(
                         status,
                         StatusCode::ProxyAuthenticationRequired | StatusCode::Unauthorized
-                    ) {
+                    ) && !self.inner.cancel_requested.load(Ordering::SeqCst)
+                    {
                         if auth_sent {
                             final_response = Some(resp.clone());
                             debug!(id = %self.id(), ?status, "received auth response after auth sent");
@@ -356,8 +422,10 @@ impl InviteDialog {
                         }
                         StatusCode::OK => {
                             self.update_remote_target_from_2xx(&resp)?;
-                            self.inner
-                                .transition(DialogState::Confirmed(dialog_id.clone(), resp))?;
+                            let confirmed = DialogState::Confirmed(dialog_id.clone(), resp.clone());
+                            if self.inner.confirm_unless_cancelled(confirmed)? {
+                                self.bye_2xx_of_cancelled(resp);
+                            }
                         }
                         _ => {
                             self.inner.transition(DialogState::Terminated(
