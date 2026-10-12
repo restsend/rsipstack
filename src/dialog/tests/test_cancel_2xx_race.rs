@@ -863,18 +863,30 @@ async fn test_cancel_in_calling_without_response_times_out() -> crate::Result<()
 }
 
 #[tokio::test]
-async fn test_aborted_invite_before_first_poll_removes_dialog_without_sending() -> crate::Result<()> {
+async fn test_aborted_invite_before_first_poll_removes_dialog_without_sending() -> crate::Result<()>
+{
     let token = CancellationToken::new();
-    let Uac { dialog_layer, option, peer } = setup(&token).await?;
+    let Uac {
+        dialog_layer,
+        option,
+        peer,
+    } = setup(&token).await?;
     let (sender, _states) = unbounded_channel();
     let (dialog, join) = dialog_layer.do_invite_async(option, sender)?;
     // No yield between spawn and abort: the INVITE future has not run.
     join.abort();
     assert!(join.await.unwrap_err().is_cancelled());
     assert!(dialog_layer.is_empty());
-    assert!(matches!(dialog.state(), DialogState::Terminated(_, TerminatedReason::UacCancel)));
+    assert!(matches!(
+        dialog.state(),
+        DialogState::Terminated(_, TerminatedReason::UacCancel)
+    ));
     let mut buf = [0u8; 4096];
-    assert!(tokio::time::timeout(Duration::from_millis(100), peer.recv_from(&mut buf)).await.is_err());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), peer.recv_from(&mut buf))
+            .await
+            .is_err()
+    );
     token.cancel();
     Ok(())
 }
@@ -883,13 +895,20 @@ async fn test_aborted_invite_before_first_poll_removes_dialog_without_sending() 
 // response, and its unrelated two-second deadline.
 async fn run_cleanup_cancel_retransmission(final_first: bool) -> crate::Result<()> {
     let token = CancellationToken::new();
-    let Uac { dialog_layer, option, peer } = setup(&token).await?;
+    let Uac {
+        dialog_layer,
+        option,
+        peer,
+    } = setup(&token).await?;
     let wait = Duration::from_secs(5);
     let (sender, mut states) = unbounded_channel();
     let (_dialog, join) = dialog_layer.do_invite_async(option, sender)?;
     let (inv, uac) = recv_request(&peer, Method::Invite, wait).await;
     reply(&peer, uac, &inv, 180, "Ringing").await;
-    wait_for_state(&mut states, "Early", wait, |s| matches!(s, DialogState::Early(_, _))).await;
+    wait_for_state(&mut states, "Early", wait, |s| {
+        matches!(s, DialogState::Early(_, _))
+    })
+    .await;
     join.abort();
     let _ = join.await;
     let (cancel, _) = recv_request(&peer, Method::Cancel, wait).await;
@@ -915,7 +934,9 @@ async fn run_cleanup_cancel_retransmission(final_first: bool) -> crate::Result<(
     // A received final response must stop further CANCEL retransmissions.
     assert!(tokio::time::timeout(Duration::from_millis(4200), async {
         recv_request(&peer, Method::Cancel, Duration::from_secs(5)).await
-    }).await.is_err());
+    })
+    .await
+    .is_err());
     assert!(dialog_layer.is_empty());
     token.cancel();
     Ok(())
