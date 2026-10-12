@@ -32,6 +32,8 @@ pub struct UdpConnection {
 }
 
 impl UdpConnection {
+    /// Wrap an existing socket without changing its socket options.
+    /// Configure any required address or port reuse before binding the socket.
     pub async fn attach(
         inner: UdpInner,
         external: Option<SocketAddr>,
@@ -73,6 +75,9 @@ impl UdpConnection {
         Ok(t)
     }
 
+    /// Bind a UDP socket without enabling address or port reuse.
+    /// For intentional port sharing, configure and bind a socket yourself,
+    /// then pass it to [`Self::attach`].
     #[cfg(feature = "platform-tokio")]
     pub async fn create_connection(
         local: SocketAddr,
@@ -85,12 +90,6 @@ impl UdpConnection {
             Domain::IPV4
         };
         let socket = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP))?;
-        match socket.set_reuse_address(true) {
-            Ok(_) => (),
-            Err(e) => {
-                warn!(error = %e, "Failed to set SO_REUSEADDR on UDP socket");
-            }
-        }
         socket.set_nonblocking(true)?;
         socket.bind(&local.into())?;
         let conn: Arc<dyn PlatformUdpSocket> =

@@ -10,6 +10,24 @@ use std::time::Duration;
 use tokio::{select, sync::mpsc::unbounded_channel, time::sleep};
 
 #[tokio::test]
+async fn test_udp_bind_is_exclusive_and_reusable_after_close() -> Result<()> {
+    let first = UdpConnection::create_connection("127.0.0.1:0".parse()?, None, None).await?;
+    let addr = first.get_addr().get_socketaddr()?;
+    match UdpConnection::create_connection(addr, None, None).await {
+        Err(crate::Error::IoError(err)) => {
+            assert_eq!(err.kind(), std::io::ErrorKind::AddrInUse);
+        }
+        Err(err) => panic!("expected AddrInUse, got {err}"),
+        Ok(_) => panic!("a second UDP socket bound an address still in use"),
+    }
+
+    drop(first);
+    let rebound = UdpConnection::create_connection(addr, None, None).await?;
+    assert_eq!(rebound.get_addr().get_socketaddr()?, addr);
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_udp_keepalive() -> Result<()> {
     let peer_bob = UdpConnection::create_connection("127.0.0.1:0".parse()?, None, None).await?;
     let peer_alice = UdpConnection::create_connection("127.0.0.1:0".parse()?, None, None).await?;
