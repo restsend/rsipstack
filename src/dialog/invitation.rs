@@ -183,15 +183,17 @@ impl Drop for DialogGuard {
     }
 }
 
-pub(super) struct DialogGuardForUnconfirmed<'a> {
-    pub dialog_layer_inner: &'a DialogLayerInnerRef,
-    pub id: &'a DialogId,
+pub(super) struct DialogGuardForUnconfirmed {
+    pub dialog_layer_inner: DialogLayerInnerRef,
+    pub id: DialogId,
     invite_tx: Option<Transaction>,
+    /// Whether the owning future started processing the INVITE.
+    started: bool,
     /// The INVITE's dialog, `None` once `process_invite` returned.
     dialog: Option<InviteDialog>,
 }
 
-impl<'a> Drop for DialogGuardForUnconfirmed<'a> {
+impl Drop for DialogGuardForUnconfirmed {
     fn drop(&mut self) {
         let client_dialog = match self.dialog_layer_inner.dialogs.remove(&self.id.to_string()) {
             Some(Dialog::Invite(client_dialog)) => client_dialog,
@@ -204,6 +206,15 @@ impl<'a> Drop for DialogGuardForUnconfirmed<'a> {
                 None => return,
             },
         };
+
+        // A task dropped before its first poll never sent an INVITE.
+        if !self.started {
+            let _ = client_dialog.inner.transition(DialogState::Terminated(
+                client_dialog.id(),
+                TerminatedReason::UacCancel,
+            ));
+            return;
+        }
 
         match client_dialog.state() {
             DialogState::Terminated(_, _) => {}
@@ -240,64 +251,17 @@ impl<'a> Drop for DialogGuardForUnconfirmed<'a> {
                             return;
                         }
                     }
-                    let started = crate::platform::Instant::now();
                     let final_window = invite_tx.endpoint_inner.option.t1x64;
-                    let mut timeout =
-                        core::pin::pin!(crate::platform::sleep(core::time::Duration::from_secs(2)));
                     invite_tx.stop_retransmissions();
 
-                    let mut cancel_done = false;
-                    let mut final_response = None;
-                    // Boxed so it can be dropped before the wait below.
-                    let mut cancel = Box::pin(client_dialog.send_cancel());
-
-                    use crate::platform::select::Which3;
-                    loop {
-                        // after cancel completes, use pending as placeholder (3-arm race with
-                        // unchanged types)
-                        let cancel_sel = if cancel_done {
-                            futures::future::Either::Left(core::future::pending::<
-                                core::result::Result<(), crate::Error>,
-                            >())
-                        } else {
-                            futures::future::Either::Right(&mut cancel)
-                        };
-                        let mut cancel_sel = core::pin::pin!(cancel_sel);
-                        let mut recv_f = core::pin::pin!(invite_tx.receive());
-                        match crate::platform::select::select3(
-                            &mut timeout,
-                            &mut cancel_sel,
-                            &mut recv_f,
-                        )
-                        .await
-                        {
-                            Which3::A(()) => break,
-                            Which3::B(result) => match result {
-                                Ok(()) => cancel_done = true,
-                                Err(e) => {
-                                    warn!(id = %client_dialog.id(), error = %e, "dialog cancel failed");
-                                    break;
-                                }
-                            },
-                            Which3::C(msg) => match msg {
-                                Some(SipMessage::Response(resp))
-                                    if resp.status_code.kind() != StatusCodeKind::Provisional =>
-                                {
-                                    debug!(
-                                        id = %client_dialog.id(),
-                                        status = %resp.status_code,
-                                        "received final response"
-                                    );
-                                    final_response = Some(resp);
-                                    break;
-                                }
-                                Some(_) => {}
-                                None => break,
-                            },
+                    // CANCEL is a separate transaction. Keep driving it to its
+                    // own response or timeout even if the INVITE finishes first.
+                    let cancel_dialog = client_dialog.clone();
+                    let _handle = crate::platform::spawn(async move {
+                        if let Err(e) = cancel_dialog.send_cancel().await {
+                            warn!(id = %cancel_dialog.id(), error = %e, "dialog cancel failed");
                         }
-                    }
-
-                    drop(cancel);
+                    });
                     if !calling {
                         let _ = client_dialog.inner.transition(DialogState::Terminated(
                             client_dialog.id(),
@@ -310,17 +274,7 @@ impl<'a> Drop for DialogGuardForUnconfirmed<'a> {
                     // INVITE transaction until its final response (up to
                     // 64*T1) so a 2xx is ACKed, then end that session with a
                     // BYE (RFC 3261 §9.1, §15).
-                    if final_response.is_none() {
-                        let elapsed = crate::platform::Instant::now()
-                            .checked_duration_since(started)
-                            .unwrap_or_default();
-                        final_response = wait_response(
-                            &mut invite_tx,
-                            final_window.saturating_sub(elapsed),
-                            true,
-                        )
-                        .await;
-                    }
+                    let final_response = wait_response(&mut invite_tx, final_window, true).await;
                     // Closing the command channel terminates the dialog loop.
                     drop(invite_tx);
                     bye_if_2xx(&client_dialog, final_response).await;
@@ -692,9 +646,10 @@ impl DialogLayer {
             .insert(id.to_string(), Dialog::Invite(dialog.clone()));
 
         let mut guard = DialogGuardForUnconfirmed {
-            dialog_layer_inner: &self.inner,
-            id: &id,
+            dialog_layer_inner: self.inner.clone(),
+            id: id.clone(),
             invite_tx: Some(tx),
+            started: true,
             dialog: Some(dialog.clone()),
         };
 
@@ -787,16 +742,19 @@ impl DialogLayer {
         let inner = self.inner.clone();
         let dialog_clone = dialog.clone();
 
+        // Own the guard before spawning so an abort before the first poll
+        // also removes the early registry entry.
+        let mut guard = DialogGuardForUnconfirmed {
+            dialog_layer_inner: inner.clone(),
+            id: id0.clone(),
+            invite_tx: Some(tx),
+            started: false,
+            dialog: Some(dialog_clone.clone()),
+        };
+
         // 2) run invite in background, keep registry updated like do_invite()
         let handle = crate::platform::spawn_with_result(async move {
-            // As in do_invite: a task aborted before the final response
-            // still ends the INVITE (CANCEL, or ACK + BYE for a 2xx).
-            let mut guard = DialogGuardForUnconfirmed {
-                dialog_layer_inner: &inner,
-                id: &id0,
-                invite_tx: Some(tx),
-                dialog: Some(dialog_clone.clone()),
-            };
+            guard.started = true;
             let invite_tx = guard
                 .invite_tx
                 .as_mut()

@@ -861,3 +861,72 @@ async fn test_cancel_in_calling_without_response_times_out() -> crate::Result<()
     token.cancel();
     Ok(())
 }
+
+#[tokio::test]
+async fn test_aborted_invite_before_first_poll_removes_dialog_without_sending() -> crate::Result<()> {
+    let token = CancellationToken::new();
+    let Uac { dialog_layer, option, peer } = setup(&token).await?;
+    let (sender, _states) = unbounded_channel();
+    let (dialog, join) = dialog_layer.do_invite_async(option, sender)?;
+    // No yield between spawn and abort: the INVITE future has not run.
+    join.abort();
+    assert!(join.await.unwrap_err().is_cancelled());
+    assert!(dialog_layer.is_empty());
+    assert!(matches!(dialog.state(), DialogState::Terminated(_, TerminatedReason::UacCancel)));
+    let mut buf = [0u8; 4096];
+    assert!(tokio::time::timeout(Duration::from_millis(100), peer.recv_from(&mut buf)).await.is_err());
+    token.cancel();
+    Ok(())
+}
+
+// Exercise both ways the old cleanup cut CANCEL short: an INVITE final
+// response, and its unrelated two-second deadline.
+async fn run_cleanup_cancel_retransmission(final_first: bool) -> crate::Result<()> {
+    let token = CancellationToken::new();
+    let Uac { dialog_layer, option, peer } = setup(&token).await?;
+    let wait = Duration::from_secs(5);
+    let (sender, mut states) = unbounded_channel();
+    let (_dialog, join) = dialog_layer.do_invite_async(option, sender)?;
+    let (inv, uac) = recv_request(&peer, Method::Invite, wait).await;
+    reply(&peer, uac, &inv, 180, "Ringing").await;
+    wait_for_state(&mut states, "Early", wait, |s| matches!(s, DialogState::Early(_, _))).await;
+    join.abort();
+    let _ = join.await;
+    let (cancel, _) = recv_request(&peer, Method::Cancel, wait).await;
+    if final_first {
+        reply(&peer, uac, &inv, 487, "Request Terminated").await;
+        recv_request(&peer, Method::Ack, wait).await;
+    }
+    // Withhold the CANCEL response, then require a retransmission after
+    // two seconds (discard earlier retries rather than counting queued data).
+    let started = tokio::time::Instant::now();
+    loop {
+        let (retry, _) = recv_request(&peer, Method::Cancel, wait).await;
+        assert_eq!(retry.to_string(), cancel.to_string());
+        if started.elapsed() > Duration::from_secs(2) {
+            reply(&peer, uac, &retry, 200, "OK").await;
+            break;
+        }
+    }
+    if !final_first {
+        reply(&peer, uac, &inv, 487, "Request Terminated").await;
+        recv_request(&peer, Method::Ack, wait).await;
+    }
+    // A received final response must stop further CANCEL retransmissions.
+    assert!(tokio::time::timeout(Duration::from_millis(4200), async {
+        recv_request(&peer, Method::Cancel, Duration::from_secs(5)).await
+    }).await.is_err());
+    assert!(dialog_layer.is_empty());
+    token.cancel();
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_cleanup_cancel_survives_invite_final() -> crate::Result<()> {
+    run_cleanup_cancel_retransmission(true).await
+}
+
+#[tokio::test]
+async fn test_cleanup_cancel_retransmits_beyond_two_seconds() -> crate::Result<()> {
+    run_cleanup_cancel_retransmission(false).await
+}
