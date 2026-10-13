@@ -1,7 +1,11 @@
 use crate::{
-    transport::{TcpListenerConnection, WebSocketListenerConnection},
+    platform::CancellationToken,
+    transport::{
+        SipConnection, TcpListenerConnection, TransportLayer, WebSocketListenerConnection,
+    },
     Result,
 };
+use std::{net::SocketAddr, time::Duration};
 
 /// Test new TcpListenerConnection API
 #[tokio::test]
@@ -57,5 +61,52 @@ async fn test_websocket_listener_connection_api() -> Result<()> {
         Some(crate::sip::transport::Transport::Wss)
     );
 
+    Ok(())
+}
+
+/// Reserves a free loopback port (listeners bind lazily in `serve_listens`).
+fn free_port() -> SocketAddr {
+    let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("bind probe");
+    probe.local_addr().expect("probe addr")
+}
+
+/// The accept loop must stop when the transport layer is cancelled, closing the
+/// listening socket even while the `TransportLayer` itself is still alive.
+async fn assert_listener_closed_on_cancel(listener: SipConnection, addr: SocketAddr) {
+    let cancel = CancellationToken::new();
+    let transport_layer = TransportLayer::new(cancel.clone());
+    transport_layer.add_transport(listener);
+    transport_layer
+        .serve_listens()
+        .await
+        .expect("serve listeners");
+    tokio::net::TcpStream::connect(addr)
+        .await
+        .expect("listener accepts before cancel");
+
+    cancel.cancel();
+    for _ in 0..50 {
+        if tokio::net::TcpStream::connect(addr).await.is_err() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("listener on {addr} still accepting after cancel");
+}
+
+#[tokio::test]
+async fn test_tcp_listener_closed_on_cancel() -> Result<()> {
+    let addr = free_port();
+    let listener = TcpListenerConnection::new(addr, None).await?;
+    assert_listener_closed_on_cancel(listener.into(), addr).await;
+    Ok(())
+}
+
+#[cfg(feature = "websocket")]
+#[tokio::test]
+async fn test_websocket_listener_closed_on_cancel() -> Result<()> {
+    let addr = free_port();
+    let listener = WebSocketListenerConnection::new(addr, None, false).await?;
+    assert_listener_closed_on_cancel(listener.into(), addr).await;
     Ok(())
 }

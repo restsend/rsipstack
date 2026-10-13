@@ -1,3 +1,4 @@
+use crate::platform::CancellationToken;
 use crate::transport::tcp::TcpConnection;
 use crate::transport::transport_layer::TransportLayerInnerRef;
 use crate::transport::SipAddr;
@@ -6,7 +7,7 @@ use crate::Result;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::fmt;
 use std::{net::SocketAddr, sync::Arc};
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 use tracing::{debug, warn};
 pub struct TcpListenerConnectionInner {
     pub local_addr: SipAddr,
@@ -56,13 +57,19 @@ impl TcpListenerConnection {
         let listener_local_addr = self.get_addr().clone();
         crate::platform::spawn(async move {
             loop {
-                let (stream, remote_addr) = match listener.accept().await {
-                    Ok((stream, remote_addr)) => (stream, remote_addr),
-                    Err(e) => {
-                        warn!(error = ?e, "Failed to accept connection");
-                        continue;
-                    }
-                };
+                let (stream, remote_addr) =
+                    match accept_or_cancelled(&listener, &transport_layer_inner.cancel_token).await
+                    {
+                        Some(Ok((stream, remote_addr))) => (stream, remote_addr),
+                        Some(Err(e)) => {
+                            warn!(error = ?e, "Failed to accept connection");
+                            continue;
+                        }
+                        None => {
+                            debug!(local = %listener_local_addr, "TCP listener cancelled");
+                            break;
+                        }
+                    };
                 if !transport_layer_inner.is_whitelisted(remote_addr.ip()).await {
                     debug!(remote = %remote_addr, "tcp connection rejected by whitelist");
                     continue;
@@ -85,6 +92,23 @@ impl TcpListenerConnection {
             }
         });
         Ok(())
+    }
+}
+
+/// Accepts the next connection, or returns `None` once `cancel_token` fires.
+///
+/// Listener accept loops run in detached tasks; racing the token lets them exit
+/// and release the listening socket (and the transport layer they hold) when the
+/// transport layer is cancelled.
+pub(crate) async fn accept_or_cancelled(
+    listener: &TcpListener,
+    cancel_token: &CancellationToken,
+) -> Option<std::io::Result<(TcpStream, SocketAddr)>> {
+    let mut cancel_f = core::pin::pin!(cancel_token.cancelled());
+    let mut accept_f = core::pin::pin!(listener.accept());
+    match crate::platform::select::select2(&mut cancel_f, &mut accept_f).await {
+        crate::platform::select::Either::A(()) => None,
+        crate::platform::select::Either::B(accepted) => Some(accepted),
     }
 }
 
