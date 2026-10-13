@@ -1,5 +1,6 @@
 use crate::platform::CancellationToken;
 use crate::sip::SipMessage;
+use crate::transport::tcp_listener::accept_or_cancelled;
 use crate::{
     transport::{
         connection::{TransportSender, KEEPALIVE_REQUEST, KEEPALIVE_RESPONSE},
@@ -101,13 +102,19 @@ impl WebSocketListenerConnection {
         debug!(local = %self.inner.local_addr, "Starting WebSocket listener");
         crate::platform::spawn(async move {
             loop {
-                let (stream, remote_addr) = match listener.accept().await {
-                    Ok((stream, remote_addr)) => (stream, remote_addr),
-                    Err(e) => {
-                        warn!(error = ?e, "Failed to accept WebSocket connection");
-                        continue;
-                    }
-                };
+                let (stream, remote_addr) =
+                    match accept_or_cancelled(&listener, &transport_layer_inner.cancel_token).await
+                    {
+                        Some(Ok((stream, remote_addr))) => (stream, remote_addr),
+                        Some(Err(e)) => {
+                            warn!(error = ?e, "Failed to accept WebSocket connection");
+                            continue;
+                        }
+                        None => {
+                            debug!(local = %listener_local_addr, "WebSocket listener cancelled");
+                            break;
+                        }
+                    };
                 if !transport_layer_inner.is_whitelisted(remote_addr.ip()).await {
                     debug!(remote = %remote_addr, "websocket connection rejected by whitelist");
                     continue;
