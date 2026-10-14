@@ -3,7 +3,9 @@ use std::sync::Arc;
 
 /// Generate a self-signed certificate and key for testing
 #[cfg(feature = "rustls")]
-fn generate_test_cert(subject_cn: &str) -> std::result::Result<(String, String), std::io::Error> {
+pub(super) fn generate_test_cert(
+    subject_cn: &str,
+) -> std::result::Result<(String, String), std::io::Error> {
     use std::process::Command;
     use tempfile::TempDir;
 
