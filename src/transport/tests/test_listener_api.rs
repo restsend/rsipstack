@@ -110,3 +110,20 @@ async fn test_websocket_listener_closed_on_cancel() -> Result<()> {
     assert_listener_closed_on_cancel(listener.into(), addr).await;
     Ok(())
 }
+
+#[cfg(feature = "rustls")]
+#[tokio::test]
+async fn test_tls_listener_closed_on_cancel() -> Result<()> {
+    use crate::transport::{TlsConfig, TlsListenerConnection};
+
+    let (cert, key) = super::test_tls_reload::generate_test_cert("localhost")?;
+    let config = TlsConfig {
+        cert: Some(cert.into_bytes()),
+        key: Some(key.into_bytes()),
+        ..Default::default()
+    };
+    let addr = free_port();
+    let listener = TlsListenerConnection::new(addr, None, config).await?;
+    assert_listener_closed_on_cancel(listener.into(), addr).await;
+    Ok(())
+}
