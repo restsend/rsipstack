@@ -403,12 +403,16 @@ impl TlsListenerConnection {
                 .ok_or_else(|| Error::Error("No private key provided".to_string()))?,
             ServerConfig::builder().crypto_provider().clone(),
         )?;
+        // The acceptor and the handle kept for `reload_tls_config` must share
+        // one resolver: a clone has its own lock and certificate, and a
+        // reload of the clone would never reach a handshake.
+        let resolver = Arc::new(resolver);
         let server_config = ServerConfig::builder()
             .with_no_client_auth()
-            .with_cert_resolver(Arc::new(resolver.clone()));
+            .with_cert_resolver(resolver.clone());
 
         let acceptor = TlsAcceptor::from(Arc::new(server_config));
-        Ok((acceptor, Arc::new(resolver)))
+        Ok((acceptor, resolver))
     }
 
     pub async fn reload_tls_config(&self, cert: Vec<u8>, key: Vec<u8>) -> Result<()> {

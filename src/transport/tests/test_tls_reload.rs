@@ -172,3 +172,142 @@ async fn test_tls_listener_connection_with_config() -> Result<()> {
 
     Ok(())
 }
+
+/// A handshake after `reload_tls_config` must present the new certificate.
+///
+/// The acceptor used to hold a clone of the resolver, so a reload changed
+/// the stored resolver but never the one that answers handshakes.
+#[cfg(feature = "rustls")]
+#[tokio::test]
+async fn test_reload_tls_config_reaches_handshake() -> Result<()> {
+    use crate::transport::{TlsConfig, TlsListenerConnection, TransportLayer};
+    use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+    use rustls::pki_types::pem::PemObject;
+    use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+    use rustls::{DigitallySignedStruct, SignatureScheme};
+    use std::net::SocketAddr;
+    use std::sync::Mutex;
+    use std::time::Duration;
+    use tokio::io::AsyncWriteExt;
+    use tokio_util::sync::CancellationToken;
+
+    /// Accepts any certificate and records the one the server presented.
+    #[derive(Debug)]
+    struct Recorder {
+        seen: Mutex<Option<CertificateDer<'static>>>,
+        schemes: Vec<SignatureScheme>,
+    }
+
+    impl ServerCertVerifier for Recorder {
+        fn verify_server_cert(
+            &self,
+            end_entity: &CertificateDer<'_>,
+            _intermediates: &[CertificateDer<'_>],
+            _server_name: &ServerName<'_>,
+            _ocsp_response: &[u8],
+            _now: UnixTime,
+        ) -> std::result::Result<ServerCertVerified, rustls::Error> {
+            *self.seen.lock().unwrap() = Some(end_entity.clone().into_owned());
+            Ok(ServerCertVerified::assertion())
+        }
+
+        fn verify_tls12_signature(
+            &self,
+            _message: &[u8],
+            _cert: &CertificateDer<'_>,
+            _dss: &DigitallySignedStruct,
+        ) -> std::result::Result<HandshakeSignatureValid, rustls::Error> {
+            Ok(HandshakeSignatureValid::assertion())
+        }
+
+        fn verify_tls13_signature(
+            &self,
+            _message: &[u8],
+            _cert: &CertificateDer<'_>,
+            _dss: &DigitallySignedStruct,
+        ) -> std::result::Result<HandshakeSignatureValid, rustls::Error> {
+            Ok(HandshakeSignatureValid::assertion())
+        }
+
+        fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+            self.schemes.clone()
+        }
+    }
+
+    /// Connects once and returns the certificate the server presented.
+    async fn presented_cert(addr: SocketAddr) -> Result<CertificateDer<'static>> {
+        let provider = get_test_provider();
+        let recorder = Arc::new(Recorder {
+            seen: Mutex::new(None),
+            schemes: provider
+                .signature_verification_algorithms
+                .supported_schemes(),
+        });
+        let mut config = rustls::ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .map_err(|e| crate::Error::Error(e.to_string()))?
+            .with_root_certificates(rustls::RootCertStore::empty())
+            .with_no_client_auth();
+        config
+            .dangerous()
+            .set_certificate_verifier(recorder.clone());
+        let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
+        let tcp = tokio::net::TcpStream::connect(addr).await?;
+        let mut tls = connector
+            .connect(ServerName::try_from("localhost").unwrap(), tcp)
+            .await?;
+        tls.shutdown().await.ok();
+        let seen = recorder.seen.lock().unwrap().clone();
+        seen.ok_or_else(|| crate::Error::Error("no certificate seen".to_string()))
+    }
+
+    let (cert1, key1) = generate_test_cert("before.example.com")?;
+    let (cert2, key2) = generate_test_cert("after.example.com")?;
+    let der1 = CertificateDer::from_pem_slice(cert1.as_bytes()).unwrap();
+    let der2 = CertificateDer::from_pem_slice(cert2.as_bytes()).unwrap();
+    assert_ne!(der1, der2);
+
+    // A free port; the listener binds with SO_REUSEADDR.
+    let addr = {
+        let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        probe.local_addr()?
+    };
+    let cancel = CancellationToken::new();
+    let transport_layer = TransportLayer::new(cancel.clone());
+    let listener = TlsListenerConnection::new(
+        addr,
+        None,
+        TlsConfig {
+            cert: Some(cert1.into_bytes()),
+            key: Some(key1.into_bytes()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    listener
+        .serve_listener(transport_layer.inner.clone())
+        .await?;
+
+    let first = tokio::time::timeout(Duration::from_secs(5), presented_cert(addr))
+        .await
+        .expect("first handshake timed out")?;
+    assert_eq!(
+        first, der1,
+        "the listener starts with the first certificate"
+    );
+
+    listener
+        .reload_tls_config(cert2.into_bytes(), key2.into_bytes())
+        .await?;
+
+    let second = tokio::time::timeout(Duration::from_secs(5), presented_cert(addr))
+        .await
+        .expect("second handshake timed out")?;
+    assert_eq!(
+        second, der2,
+        "a handshake after the reload gets the new certificate"
+    );
+
+    cancel.cancel();
+    Ok(())
+}
