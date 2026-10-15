@@ -579,13 +579,13 @@ async fn test_2xx_over_tcp_is_retransmitted_until_the_ack() -> crate::Result<()>
         .with_cancel_token(token.child_token())
         .with_option(short_timers())
         .build();
-    endpoint.inner.transport_layer.serve_listens().await?;
     let dialog_layer = Arc::new(DialogLayer::new(endpoint.inner.clone()));
     let mut incoming = endpoint.incoming_transactions()?;
     let endpoint_inner = endpoint.inner.clone();
-    tokio::spawn(async move {
-        let _ = endpoint_inner.serve().await;
-    });
+    let mut serving = Box::pin(async move { endpoint_inner.serve().await });
+    // Poll Endpoint startup before connecting to its TCP listener.
+    assert!(futures::poll!(&mut serving).is_pending());
+    tokio::spawn(serving);
     let (state_sender, mut states) = unbounded_channel();
     let (dialog_sender, mut dialogs) = unbounded_channel();
     tokio::spawn(async move {

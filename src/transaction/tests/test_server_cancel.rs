@@ -99,7 +99,7 @@ async fn timeout_at<T>(
 async fn cancel_answers(case: &str, tcp: bool) -> (Vec<Seen>, Option<String>) {
     let token = CancellationToken::new();
     let tl = TransportLayer::new(token.child_token());
-    let mut peer = if tcp {
+    let (udp_peer, tcp_addr) = if tcp {
         let port = std::net::TcpListener::bind("127.0.0.1:0")
             .unwrap()
             .local_addr()
@@ -107,8 +107,7 @@ async fn cancel_answers(case: &str, tcp: bool) -> (Vec<Seen>, Option<String>) {
             .port();
         let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
         tl.add_transport(TcpListenerConnection::new(addr, None).await.unwrap().into());
-        tl.serve_listens().await.unwrap();
-        Peer::Tcp(tokio::net::TcpStream::connect(addr).await.unwrap())
+        (None, Some(addr))
     } else {
         let conn = UdpConnection::create_connection("127.0.0.1:0".parse().unwrap(), None, None)
             .await
@@ -116,7 +115,7 @@ async fn cancel_answers(case: &str, tcp: bool) -> (Vec<Seen>, Option<String>) {
         let addr = conn.get_addr().get_socketaddr().unwrap();
         tl.add_transport(conn.into());
         let sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        Peer::Udp(sock, addr)
+        (Some(Peer::Udp(sock, addr)), None)
     };
     let endpoint = EndpointBuilder::new()
         .with_transport_layer(tl)
@@ -124,7 +123,14 @@ async fn cancel_answers(case: &str, tcp: bool) -> (Vec<Seen>, Option<String>) {
         .build();
     let mut incoming = endpoint.incoming_transactions().unwrap();
     let inner = endpoint.inner.clone();
-    tokio::spawn(async move { inner.serve().await });
+    let mut serving = Box::pin(async move { inner.serve().await });
+    // Start listeners through Endpoint before connecting the TCP peer.
+    assert!(futures::poll!(&mut serving).is_pending());
+    tokio::spawn(serving);
+    let mut peer = match tcp_addr {
+        Some(addr) => Peer::Tcp(tokio::net::TcpStream::connect(addr).await.unwrap()),
+        None => udp_peer.unwrap(),
+    };
 
     let mut tx: Option<Transaction> = None;
     let mut final_tag = None;

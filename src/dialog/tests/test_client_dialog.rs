@@ -767,7 +767,6 @@ async fn test_ack_sent_to_domain_name_from_contact() -> crate::Result<()> {
         .with_transport_layer(uas_transport_layer)
         .build();
 
-    uas_endpoint.inner.transport_layer.serve_listens().await?;
     let uas_endpoint_inner = uas_endpoint.inner.clone();
     tokio::spawn(async move {
         let _ = uas_endpoint_inner.serve().await;
@@ -808,7 +807,6 @@ async fn test_ack_sent_to_domain_name_from_contact() -> crate::Result<()> {
         .transport_layer
         .add_transport(uac_udp.into());
 
-    uac_endpoint.inner.transport_layer.serve_listens().await?;
     let uac_endpoint_inner = uac_endpoint.inner.clone();
     tokio::spawn(async move {
         let _ = uac_endpoint_inner.serve().await;
@@ -991,7 +989,6 @@ async fn test_ack_sent_to_websocket_channel_via_locator() -> crate::Result<()> {
         .with_target_locator(locator)
         .build();
 
-    uac_endpoint.inner.transport_layer.serve_listens().await?;
     let uac_endpoint_inner = uac_endpoint.inner.clone();
     tokio::spawn(async move {
         let _ = uac_endpoint_inner.serve().await;
@@ -1144,7 +1141,6 @@ async fn test_drop_polls_invite_after_cancel_success() -> crate::Result<()> {
     .await?;
     let uac_port = udp.get_addr().addr.port.map(|p| u16::from(p)).unwrap_or(0);
     endpoint.inner.transport_layer.add_transport(udp.into());
-    endpoint.inner.transport_layer.serve_listens().await?;
 
     let endpoint_inner = endpoint.inner.clone();
     tokio::spawn(async move {
@@ -1394,7 +1390,6 @@ async fn test_drop_cleans_up_after_cancel_failure_impl() -> crate::Result<()> {
     .await?;
     let uac_port = udp.get_addr().addr.port.map(|p| u16::from(p)).unwrap_or(0);
     endpoint.inner.transport_layer.add_transport(udp.into());
-    endpoint.inner.transport_layer.serve_listens().await?;
 
     let endpoint_inner = endpoint.inner.clone();
     tokio::spawn(async move {
@@ -1547,7 +1542,6 @@ async fn test_drop_unconfirmed_dialog_before_provisional_stops_requests() -> cra
     .await?;
     let uac_port = udp.get_addr().addr.port.map(u16::from).unwrap_or(0);
     endpoint.inner.transport_layer.add_transport(udp.into());
-    endpoint.inner.transport_layer.serve_listens().await?;
 
     let endpoint_inner = endpoint.inner.clone();
     tokio::spawn(async move {
@@ -1656,7 +1650,6 @@ async fn test_cancel_returns_error_on_transaction_timeout() -> crate::Result<()>
     .await?;
     let uac_port = udp.get_addr().addr.port.map(u16::from).unwrap_or(0);
     endpoint.inner.transport_layer.add_transport(udp.into());
-    endpoint.inner.transport_layer.serve_listens().await?;
 
     let endpoint_inner = endpoint.inner.clone();
     tokio::spawn(async move {

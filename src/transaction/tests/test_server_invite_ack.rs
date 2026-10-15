@@ -207,16 +207,11 @@ async fn test_server_invite_ignores_ack_with_other_cseq_over_tcp() {
         .with_user_agent("rsipstack-test")
         .with_transport_layer(tl)
         .build();
-    endpoint
-        .inner
-        .transport_layer
-        .serve_listens()
-        .await
-        .unwrap();
     let endpoint_inner = endpoint.inner.clone();
-    let serve_handle = tokio::spawn(async move {
-        let _ = endpoint_inner.serve().await;
-    });
+    let mut serving = Box::pin(async move { endpoint_inner.serve().await });
+    // Poll Endpoint startup before connecting to its TCP listener.
+    assert!(futures::poll!(&mut serving).is_pending());
+    let serve_handle = tokio::spawn(serving);
     let mut incoming = endpoint.incoming_transactions().expect("incoming");
     let mut stream = tokio::net::TcpStream::connect(server_addr).await.unwrap();
 

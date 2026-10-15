@@ -274,8 +274,6 @@ impl EndpointInner {
 
     // process transport layer, receive message from transport layer
     async fn process_transport_layer(self: Arc<Self>) -> Result<()> {
-        self.transport_layer.serve_listens().await.ok();
-
         #[cfg_attr(not(feature = "platform-tokio"), allow(unused_mut))]
         let mut transport_rx = match self.transport_layer.inner.transport_rx.lock().take() {
             Some(rx) => rx,
@@ -283,6 +281,10 @@ impl EndpointInner {
                 return Err(Error::EndpointError("transport_rx not set".to_string()));
             }
         };
+
+        // Claim the receiver before starting listeners: another serve() call
+        // must fail without spawning a second reader on the same socket.
+        self.transport_layer.serve_listens().await.ok();
 
         while let Some(mut event) = transport_rx.recv().await {
             if let Some(transport_inspector) = &self.transport_inspector {
@@ -777,6 +779,9 @@ impl EndpointBuilder {
 }
 
 impl Endpoint {
+    /// Start the registered transport listeners and process SIP transactions.
+    /// Configure transports before calling this method, and call it only once
+    /// per endpoint. Further calls log an error without starting more listeners.
     pub async fn serve(&self) {
         let inner = self.inner.clone();
         match inner.serve().await {

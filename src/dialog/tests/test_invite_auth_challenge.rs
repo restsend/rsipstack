@@ -50,7 +50,6 @@ async fn udp_endpoint(
         .with_transport_layer(tl)
         .with_cancel_token(token.child_token())
         .build();
-    endpoint.inner.transport_layer.serve_listens().await?;
     let inner = endpoint.inner.clone();
     tokio::spawn(async move {
         let _ = inner.serve().await;

@@ -222,7 +222,8 @@ impl TransportLayer {
         self.inner.lookup(target, self.outbound.as_ref(), key).await
     }
 
-    pub async fn serve_listens(&self) -> Result<()> {
+    /// Start registered listeners. Endpoint owns startup after claiming the event receiver.
+    pub(crate) async fn serve_listens(&self) -> Result<()> {
         let listens = self.inner.listens.read().clone();
         for transport in listens {
             let addr = transport.get_addr().clone();

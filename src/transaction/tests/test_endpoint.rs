@@ -132,3 +132,64 @@ async fn test_get_record_route_addr_override() {
     let override_rr = endpoint.inner.get_record_route_with_addr(override_addr);
     assert_eq!(override_rr.uri.to_string(), "sip:127.0.0.1:15061;lr");
 }
+
+#[tokio::test]
+async fn test_serve_rejects_duplicate_udp_reader() -> Result<(), Box<dyn std::error::Error>> {
+    use crate::transport::{udp::UdpConnection, TransportLayer};
+    use tokio::sync::{mpsc, Semaphore};
+    use tokio::time::timeout;
+    use tokio_util::sync::CancellationToken;
+
+    let token = CancellationToken::new();
+    let transport = TransportLayer::new(token.child_token());
+    let udp = UdpConnection::create_connection(
+        "127.0.0.1:0".parse()?,
+        None,
+        Some(token.child_token()),
+    )
+    .await?;
+    let addr = udp.get_addr().get_socketaddr()?;
+    transport.add_transport(udp.into());
+    let gate = Arc::new(Semaphore::new(0));
+    let (seen, mut packets) = mpsc::unbounded_channel();
+    let reader_gate = gate.clone();
+    transport.set_whitelist(move |_| {
+        let seen = seen.clone();
+        let gate = reader_gate.clone();
+        async move {
+            seen.send(()).unwrap();
+            gate.acquire().await.unwrap().forget();
+            false
+        }
+    });
+    let endpoint = crate::EndpointBuilder::new()
+        .with_transport_layer(transport)
+        .with_cancel_token(token.child_token())
+        .build();
+    let inner = endpoint.inner.clone();
+    let serving = tokio::spawn(async move { inner.serve().await });
+    let peer = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
+    // The whitelist blocks the first reader before it can receive again.
+    peer.send_to(b"first packet", addr).await?;
+    assert_eq!(
+        timeout(Duration::from_secs(2), packets.recv()).await?,
+        Some(())
+    );
+    let second = timeout(Duration::from_secs(2), endpoint.inner.serve()).await?;
+    assert!(matches!(second, Err(crate::Error::EndpointError(_))));
+    peer.send_to(b"second packet", addr).await?;
+    assert!(
+        timeout(Duration::from_millis(100), packets.recv())
+            .await
+            .is_err()
+    );
+    // Releasing the original reader lets it consume the queued packet.
+    gate.add_permits(2);
+    assert_eq!(
+        timeout(Duration::from_secs(2), packets.recv()).await?,
+        Some(())
+    );
+    token.cancel();
+    timeout(Duration::from_secs(2), serving).await???;
+    Ok(())
+}
