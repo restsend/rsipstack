@@ -142,12 +142,9 @@ async fn test_serve_rejects_duplicate_udp_reader() -> Result<(), Box<dyn std::er
 
     let token = CancellationToken::new();
     let transport = TransportLayer::new(token.child_token());
-    let udp = UdpConnection::create_connection(
-        "127.0.0.1:0".parse()?,
-        None,
-        Some(token.child_token()),
-    )
-    .await?;
+    let udp =
+        UdpConnection::create_connection("127.0.0.1:0".parse()?, None, Some(token.child_token()))
+            .await?;
     let addr = udp.get_addr().get_socketaddr()?;
     transport.add_transport(udp.into());
     let gate = Arc::new(Semaphore::new(0));
@@ -178,11 +175,9 @@ async fn test_serve_rejects_duplicate_udp_reader() -> Result<(), Box<dyn std::er
     let second = timeout(Duration::from_secs(2), endpoint.inner.serve()).await?;
     assert!(matches!(second, Err(crate::Error::EndpointError(_))));
     peer.send_to(b"second packet", addr).await?;
-    assert!(
-        timeout(Duration::from_millis(100), packets.recv())
-            .await
-            .is_err()
-    );
+    assert!(timeout(Duration::from_millis(100), packets.recv())
+        .await
+        .is_err());
     // Releasing the original reader lets it consume the queued packet.
     gate.add_permits(2);
     assert_eq!(
