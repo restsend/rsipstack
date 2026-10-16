@@ -376,6 +376,161 @@ Content-Length: 0\r\n\r\n";
     Ok(())
 }
 
+/// A re-INVITE inside a dialog: To carries the remote tag and the Route
+/// headers are the dialog's route set.
+fn make_reinvite_request() -> Result<crate::sip::Request> {
+    let mut reinvite = make_invite_request("sip:uas@192.0.2.55:5080")?;
+    reinvite
+        .headers
+        .retain(|h| !matches!(h, Header::To(_) | Header::CSeq(_)));
+    reinvite
+        .headers
+        .push(To::new("<sip:bob@example.com>;tag=to-tag").into());
+    reinvite.headers.push(CSeq::new("2 INVITE").into());
+    reinvite
+        .headers
+        .push(Route::new("<sip:proxy-d.example.com:5060;lr>").into());
+    reinvite
+        .headers
+        .push(Route::new("<sip:proxy-c.example.com:5070;lr>").into());
+    Ok(reinvite)
+}
+
+fn route_values(req: &crate::sip::Request) -> Vec<String> {
+    req.headers
+        .iter()
+        .filter_map(|header| match header {
+            Header::Route(route) => Some(route.value().to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn test_make_ack_reinvite_2xx_without_record_route_keeps_route_set() -> Result<()> {
+    let endpoint = super::create_test_endpoint(None).await?;
+
+    // A 2xx to a re-INVITE does not repeat Record-Route.
+    let raw_response = "SIP/2.0 200 OK\r\n\
+Via: SIP/2.0/TCP uac.example.com:5060;branch=z9hG4bK1\r\n\
+From: <sip:alice@example.com>;tag=from-tag\r\n\
+To: <sip:bob@example.com>;tag=to-tag\r\n\
+Call-ID: callid@example.com\r\n\
+CSeq: 2 INVITE\r\n\
+Contact: <sip:uas@192.0.2.55:5080>\r\n\
+Content-Length: 0\r\n\r\n";
+
+    let response = Response::try_from(raw_response)?;
+    let reinvite = make_reinvite_request()?;
+    let ack = endpoint.inner.make_ack(&reinvite, &response)?;
+
+    assert_eq!(ack.uri, Uri::try_from("sip:uas@192.0.2.55:5080")?);
+    assert_eq!(
+        route_values(&ack),
+        vec![
+            "<sip:proxy-d.example.com:5060;lr>".to_string(),
+            "<sip:proxy-c.example.com:5070;lr>".to_string(),
+        ],
+        "the re-INVITE ACK must keep the dialog route set"
+    );
+    assert_eq!(
+        ack.destination().to_string(),
+        "sip:proxy-d.example.com:5060;lr",
+        "the re-INVITE ACK must be sent to the first route, not the Contact"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_make_ack_reinvite_2xx_ignores_record_route() -> Result<()> {
+    let endpoint = super::create_test_endpoint(None).await?;
+
+    // RFC 3261 §12.2: Record-Route in a mid-dialog 2xx does not change the
+    // route set.
+    let raw_response = "SIP/2.0 200 OK\r\n\
+Via: SIP/2.0/TCP uac.example.com:5060;branch=z9hG4bK1\r\n\
+Record-Route: <sip:other-proxy.example.com:5090;lr>\r\n\
+From: <sip:alice@example.com>;tag=from-tag\r\n\
+To: <sip:bob@example.com>;tag=to-tag\r\n\
+Call-ID: callid@example.com\r\n\
+CSeq: 2 INVITE\r\n\
+Contact: <sip:uas-new@192.0.2.56:5080>\r\n\
+Content-Length: 0\r\n\r\n";
+
+    let response = Response::try_from(raw_response)?;
+    let reinvite = make_reinvite_request()?;
+    let ack = endpoint.inner.make_ack(&reinvite, &response)?;
+
+    assert_eq!(
+        ack.uri,
+        Uri::try_from("sip:uas-new@192.0.2.56:5080")?,
+        "a target refresh 2xx updates the remote target"
+    );
+    assert_eq!(
+        route_values(&ack),
+        vec![
+            "<sip:proxy-d.example.com:5060;lr>".to_string(),
+            "<sip:proxy-c.example.com:5070;lr>".to_string(),
+        ]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_make_ack_initial_2xx_ignores_preloaded_route() -> Result<()> {
+    let endpoint = super::create_test_endpoint(None).await?;
+
+    let raw_response = "SIP/2.0 200 OK\r\n\
+Via: SIP/2.0/TCP uac.example.com:5060;branch=z9hG4bK1\r\n\
+Record-Route: <sip:proxy1.example.com:5060;lr>\r\n\
+From: <sip:alice@example.com>;tag=from-tag\r\n\
+To: <sip:bob@example.com>;tag=to-tag\r\n\
+Call-ID: callid@example.com\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:uas@192.0.2.55:5080>\r\n\
+Content-Length: 0\r\n\r\n";
+
+    let response = Response::try_from(raw_response)?;
+    // The dialog-creating INVITE was sent through an outbound proxy.
+    let mut invite = make_invite_request("sip:bob@example.com")?;
+    invite
+        .headers
+        .push(Route::new("<sip:outbound.example.com:5060;lr>").into());
+    let ack = endpoint.inner.make_ack(&invite, &response)?;
+
+    assert_eq!(
+        route_values(&ack),
+        vec!["<sip:proxy1.example.com:5060;lr>".to_string()],
+        "the initial 2xx ACK takes its route set from the 2xx Record-Route"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_make_ack_reinvite_non_2xx_uses_reinvite_route_and_uri() -> Result<()> {
+    let endpoint = super::create_test_endpoint(None).await?;
+
+    let raw_response = "SIP/2.0 488 Not Acceptable Here\r\n\
+Via: SIP/2.0/TCP uac.example.com:5060;branch=z9hG4bK1\r\n\
+From: <sip:alice@example.com>;tag=from-tag\r\n\
+To: <sip:bob@example.com>;tag=to-tag\r\n\
+Call-ID: callid@example.com\r\n\
+CSeq: 2 INVITE\r\n\
+Content-Length: 0\r\n\r\n";
+
+    let response = Response::try_from(raw_response)?;
+    let reinvite = make_reinvite_request()?;
+    let ack = endpoint.inner.make_ack(&reinvite, &response)?;
+
+    assert_eq!(ack.uri, reinvite.uri);
+    assert_eq!(
+        route_values(&ack),
+        route_values(&reinvite),
+        "RFC 3261 §17.1.1.3: the non-2xx ACK carries the INVITE's Route headers"
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_invite_2xx_upstream_via_delivery_and_ack() -> Result<()> {
     use crate::transaction::transaction::TransactionEvent;

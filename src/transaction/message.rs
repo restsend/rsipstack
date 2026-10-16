@@ -301,58 +301,82 @@ impl EndpointInner {
                     Ok(typed_via.into())
                 });
             }
-            let mut route_set: Vec<UriWithParams> = Vec::new();
-            for header in resp.headers.iter() {
-                if let Header::RecordRoute(record_route) = header {
-                    for typed in
-                        crate::sip::typed::RecordRoute::parse_header_list(record_route.value())
-                            .unwrap_or_default()
-                    {
-                        route_set.push(typed.uri);
-                    }
-                }
-            }
-            route_set.reverse();
-
             let contact = resp.contact_header()?;
 
             let remote_target_uri = contact.typed()?.uri;
 
-            let route_headers = match route_set.as_slice() {
-                [] => {
-                    request_uri = remote_target_uri;
-                    Vec::new()
-                }
-                [head, rest @ ..] => {
-                    // loose routing
-                    if head.has_lr() {
-                        request_uri = remote_target_uri;
-                        route_set
-                    } else {
-                        // Strict routing promotes the first route URI into the Request-URI
-                        // and appends the remote target as the last Route value.
-                        let mut request_uri_value = head.clone();
-                        request_uri_value.headers.clear();
-                        request_uri = request_uri_value;
-
-                        let mut strict_routes = rest.to_vec();
-                        strict_routes.push(remote_target_uri.clone());
-
-                        strict_routes
+            // An INVITE that already carries a To tag is a re-INVITE inside a
+            // confirmed dialog. The dialog's route set is fixed (RFC 3261
+            // §12.2) and the re-INVITE was sent with it as its Route headers,
+            // so the ACK reuses them; a 2xx to a re-INVITE usually repeats no
+            // Record-Route, and one it does repeat must not change the route.
+            let in_dialog = invite
+                .to_header()
+                .ok()
+                .and_then(|to| to.tag().ok().flatten())
+                .is_some_and(|tag| !tag.value().is_empty());
+            if in_dialog {
+                request_uri = remote_target_uri;
+                headers.extend(
+                    invite
+                        .headers
+                        .iter()
+                        .filter(|header| matches!(header, Header::Route(_)))
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                );
+            } else {
+                // The 2xx to the dialog-creating INVITE defines the route set:
+                // its Record-Route in reverse order (RFC 3261 §12.1.2).
+                let mut route_set: Vec<UriWithParams> = Vec::new();
+                for header in resp.headers.iter() {
+                    if let Header::RecordRoute(record_route) = header {
+                        for typed in
+                            crate::sip::typed::RecordRoute::parse_header_list(record_route.value())
+                                .unwrap_or_default()
+                        {
+                            route_set.push(typed.uri);
+                        }
                     }
                 }
-            };
+                route_set.reverse();
 
-            headers.extend(
-                route_headers
-                    .iter()
-                    .cloned()
-                    .map(|route| {
-                        let typed_route = TypedRoute::from(route);
-                        Header::Route(typed_route.into())
-                    })
-                    .collect::<Vec<_>>(),
-            );
+                let route_headers = match route_set.as_slice() {
+                    [] => {
+                        request_uri = remote_target_uri;
+                        Vec::new()
+                    }
+                    [head, rest @ ..] => {
+                        // loose routing
+                        if head.has_lr() {
+                            request_uri = remote_target_uri;
+                            route_set
+                        } else {
+                            // Strict routing promotes the first route URI into the Request-URI
+                            // and appends the remote target as the last Route value.
+                            let mut request_uri_value = head.clone();
+                            request_uri_value.headers.clear();
+                            request_uri = request_uri_value;
+
+                            let mut strict_routes = rest.to_vec();
+                            strict_routes.push(remote_target_uri.clone());
+
+                            strict_routes
+                        }
+                    }
+                };
+
+                headers.extend(
+                    route_headers
+                        .iter()
+                        .cloned()
+                        .map(|route| {
+                            let typed_route = TypedRoute::from(route);
+                            Header::Route(typed_route.into())
+                        })
+                        .collect::<Vec<_>>(),
+                );
+            }
         }
 
         headers.retain(|h| {
