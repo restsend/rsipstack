@@ -331,7 +331,7 @@ Content-Length: 0\r\n\r\n";
 }
 
 #[tokio::test]
-async fn test_make_ack_uses_first_route_without_lr() -> Result<()> {
+async fn test_make_ack_treats_route_without_lr_as_loose() -> Result<()> {
     let endpoint = super::create_test_endpoint(None).await?;
 
     let raw_response = "SIP/2.0 200 OK\r\n\
@@ -349,28 +349,23 @@ Content-Length: 0\r\n\r\n";
     let invite = make_invite_request("sip:bob@example.com")?;
     let ack = endpoint.inner.make_ack(&invite, &response)?;
 
+    // Like every other request the stack builds, the ACK does not do strict
+    // routing: the remote target stays the Request-URI and the route set
+    // is sent as Route headers, first hop first.
     assert_eq!(
         ack.uri,
-        Uri::try_from("sip:strict-proxy-2.example.com:5070")?,
-        "strict routing must place the first route set URI into the Request-URI"
+        Uri::try_from("sip:uas@192.0.2.55:5080;transport=tcp")?
     );
-
-    let routes: Vec<String> = ack
-        .headers
-        .iter()
-        .filter_map(|header| match header {
-            Header::Route(route) => Some(route.value().to_string()),
-            _ => None,
-        })
-        .collect();
-
     assert_eq!(
-        routes,
+        route_values(&ack),
         vec![
+            "<sip:strict-proxy-2.example.com:5070>".to_string(),
             "<sip:strict-proxy-1.example.com:5060>".to_string(),
-            "<sip:uas@192.0.2.55:5080;transport=TCP>".to_string(),
-        ],
-        "strict routing must place the remaining route set first and the remote target last"
+        ]
+    );
+    assert_eq!(
+        ack.destination().to_string(),
+        "sip:strict-proxy-2.example.com:5070"
     );
 
     Ok(())

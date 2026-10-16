@@ -3,7 +3,6 @@ use crate::prelude::*;
 use crate::sip::{
     prelude::{HeadersExt, ToTypedHeader},
     typed::Route as TypedRoute,
-    uri::ParamsExt,
     Error, Header, Request, Response, StatusCode, UriWithParams,
 };
 use crate::sip::{CallId, Method};
@@ -301,9 +300,9 @@ impl EndpointInner {
                     Ok(typed_via.into())
                 });
             }
-            let contact = resp.contact_header()?;
-
-            let remote_target_uri = contact.typed()?.uri;
+            // The 2xx ACK goes to the remote target. Routes are always loose,
+            // like every other request the stack builds.
+            request_uri = resp.contact_header()?.typed()?.uri;
 
             // An INVITE that already carries a To tag is a re-INVITE inside a
             // confirmed dialog. The dialog's route set is fixed (RFC 3261
@@ -316,7 +315,6 @@ impl EndpointInner {
                 .and_then(|to| to.tag().ok().flatten())
                 .is_some_and(|tag| !tag.value().is_empty());
             if in_dialog {
-                request_uri = remote_target_uri;
                 headers.extend(
                     invite
                         .headers
@@ -341,39 +339,10 @@ impl EndpointInner {
                 }
                 route_set.reverse();
 
-                let route_headers = match route_set.as_slice() {
-                    [] => {
-                        request_uri = remote_target_uri;
-                        Vec::new()
-                    }
-                    [head, rest @ ..] => {
-                        // loose routing
-                        if head.has_lr() {
-                            request_uri = remote_target_uri;
-                            route_set
-                        } else {
-                            // Strict routing promotes the first route URI into the Request-URI
-                            // and appends the remote target as the last Route value.
-                            let mut request_uri_value = head.clone();
-                            request_uri_value.headers.clear();
-                            request_uri = request_uri_value;
-
-                            let mut strict_routes = rest.to_vec();
-                            strict_routes.push(remote_target_uri.clone());
-
-                            strict_routes
-                        }
-                    }
-                };
-
                 headers.extend(
-                    route_headers
-                        .iter()
-                        .cloned()
-                        .map(|route| {
-                            let typed_route = TypedRoute::from(route);
-                            Header::Route(typed_route.into())
-                        })
+                    route_set
+                        .into_iter()
+                        .map(|route| Header::Route(TypedRoute::from(route).into()))
                         .collect::<Vec<_>>(),
                 );
             }
