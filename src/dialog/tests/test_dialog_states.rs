@@ -143,7 +143,7 @@ async fn test_dialog_state_transitions() -> crate::Result<()> {
     assert!(matches!(initial_state, DialogState::Calling(_)));
 
     // Test transition to Trying
-    dialog_inner.transition(DialogState::Trying(dialog_id.clone()))?;
+    dialog_inner.transition(DialogState::Trying(dialog_id.clone()));
     let state = dialog_inner.state.lock().clone();
     assert!(matches!(state, DialogState::Trying(_)));
 
@@ -154,7 +154,7 @@ async fn test_dialog_state_transitions() -> crate::Result<()> {
         "bob-tag-789",
         "test-call-id-123",
     );
-    dialog_inner.transition(DialogState::Early(dialog_id.clone(), ringing_resp))?;
+    dialog_inner.transition(DialogState::Early(dialog_id.clone(), ringing_resp));
     let state = dialog_inner.state.lock().clone();
     assert!(matches!(state, DialogState::Early(_, _)));
 
@@ -162,7 +162,7 @@ async fn test_dialog_state_transitions() -> crate::Result<()> {
     dialog_inner.transition(DialogState::Confirmed(
         dialog_id.clone(),
         Response::default(),
-    ))?;
+    ));
     let state = dialog_inner.state.lock().clone();
     assert!(matches!(state, DialogState::Confirmed(_, _)));
     assert!(dialog_inner.is_confirmed());
@@ -171,7 +171,7 @@ async fn test_dialog_state_transitions() -> crate::Result<()> {
     dialog_inner.transition(DialogState::Terminated(
         dialog_id.clone(),
         TerminatedReason::Timeout,
-    ))?;
+    ));
     let state = dialog_inner.state.lock().clone();
     assert!(matches!(state, DialogState::Terminated(_, _)));
 
@@ -211,7 +211,7 @@ async fn test_server_dialog_state_transitions() -> crate::Result<()> {
     assert!(matches!(initial_state, DialogState::Calling(_)));
 
     // Test transition to Trying (server sends 100 Trying)
-    dialog_inner.transition(DialogState::Trying(dialog_id.clone()))?;
+    dialog_inner.transition(DialogState::Trying(dialog_id.clone()));
     let state = dialog_inner.state.lock().clone();
     assert!(matches!(state, DialogState::Trying(_)));
 
@@ -222,12 +222,12 @@ async fn test_server_dialog_state_transitions() -> crate::Result<()> {
         "bob-tag-789",
         "test-call-id-server-123",
     );
-    dialog_inner.transition(DialogState::WaitAck(dialog_id.clone(), ok_resp.clone()))?;
+    dialog_inner.transition(DialogState::WaitAck(dialog_id.clone(), ok_resp.clone()));
     let state = dialog_inner.state.lock().clone();
     assert!(matches!(state, DialogState::WaitAck(_, _)));
 
     // Test transition to Confirmed (after receiving ACK)
-    dialog_inner.transition(DialogState::Confirmed(dialog_id.clone(), ok_resp))?;
+    dialog_inner.transition(DialogState::Confirmed(dialog_id.clone(), ok_resp));
     let state = dialog_inner.state.lock().clone();
     assert!(matches!(state, DialogState::Confirmed(_, _)));
     assert!(dialog_inner.is_confirmed());
@@ -270,7 +270,7 @@ async fn test_dialog_in_dialog_requests() -> crate::Result<()> {
     dialog_inner.transition(DialogState::Confirmed(
         dialog_id.clone(),
         Response::default(),
-    ))?;
+    ));
     assert!(dialog_inner.is_confirmed());
 
     // Test INFO request in dialog
@@ -290,7 +290,7 @@ async fn test_dialog_in_dialog_requests() -> crate::Result<()> {
     };
 
     let (handle, _) = TransactionHandle::new();
-    dialog_inner.transition(DialogState::Info(dialog_id.clone(), info_req, handle))?;
+    dialog_inner.transition(DialogState::Info(dialog_id.clone(), info_req, handle));
 
     // Test UPDATE request in dialog
     let update_req = Request {
@@ -309,7 +309,7 @@ async fn test_dialog_in_dialog_requests() -> crate::Result<()> {
     };
 
     let (handle, _) = TransactionHandle::new();
-    dialog_inner.transition(DialogState::Updated(dialog_id.clone(), update_req, handle))?;
+    dialog_inner.transition(DialogState::Updated(dialog_id.clone(), update_req, handle));
 
     // Test OPTIONS request in dialog
     let options_req = Request {
@@ -328,7 +328,7 @@ async fn test_dialog_in_dialog_requests() -> crate::Result<()> {
     };
 
     let (handle, _) = TransactionHandle::new();
-    dialog_inner.transition(DialogState::Options(dialog_id.clone(), options_req, handle))?;
+    dialog_inner.transition(DialogState::Options(dialog_id.clone(), options_req, handle));
 
     // Dialog should still be confirmed after in-dialog requests
     assert!(dialog_inner.is_confirmed());
@@ -368,7 +368,7 @@ async fn test_dialog_termination_scenarios() -> crate::Result<()> {
     dialog_inner_1.transition(DialogState::Terminated(
         dialog_id_1.clone(),
         TerminatedReason::UasBusy,
-    ))?;
+    ));
     let state = dialog_inner_1.state.lock().clone();
     assert!(matches!(
         state,
@@ -402,14 +402,14 @@ async fn test_dialog_termination_scenarios() -> crate::Result<()> {
     dialog_inner_2.transition(DialogState::Confirmed(
         dialog_id_2.clone(),
         Response::default(),
-    ))?;
+    ));
     assert!(dialog_inner_2.is_confirmed());
 
     // Then terminate normally
     dialog_inner_2.transition(DialogState::Terminated(
         dialog_id_2.clone(),
         TerminatedReason::UacBye,
-    ))?;
+    ));
     let state = dialog_inner_2.state.lock().clone();
     assert!(matches!(state, DialogState::Terminated(_, _)));
 
@@ -565,26 +565,26 @@ async fn test_dialog_lifecycle_notifies_each_state_once() -> crate::Result<()> {
         tu_sender,
     )?;
 
-    dialog_inner.transition(DialogState::Calling(dialog_id.clone()))?;
-    dialog_inner.transition(DialogState::Trying(dialog_id.clone()))?;
+    dialog_inner.transition(DialogState::Calling(dialog_id.clone()));
+    dialog_inner.transition(DialogState::Trying(dialog_id.clone()));
     let ringing = create_response(
         StatusCode::Ringing,
         "alice-tag-456",
         "bob-tag-789",
         "test-call-id-lifecycle",
     );
-    dialog_inner.transition(DialogState::Early(dialog_id.clone(), ringing))?;
+    dialog_inner.transition(DialogState::Early(dialog_id.clone(), ringing));
     let ok = create_response(
         StatusCode::OK,
         "alice-tag-456",
         "bob-tag-789",
         "test-call-id-lifecycle",
     );
-    dialog_inner.transition(DialogState::Confirmed(dialog_id.clone(), ok))?;
+    dialog_inner.transition(DialogState::Confirmed(dialog_id.clone(), ok));
     dialog_inner.transition(DialogState::Terminated(
         dialog_id.clone(),
         TerminatedReason::UacBye,
-    ))?;
+    ));
 
     assert_eq!(
         drain_states(&mut state_receiver),
@@ -621,22 +621,22 @@ async fn test_no_state_notification_after_terminated() -> crate::Result<()> {
     dialog_inner.transition(DialogState::Confirmed(
         dialog_id.clone(),
         Response::default(),
-    ))?;
+    ));
     // Two teardown paths racing: our BYE completes, and the peer's BYE is
     // handled as well.
     dialog_inner.transition(DialogState::Terminated(
         dialog_id.clone(),
         TerminatedReason::UacBye,
-    ))?;
+    ));
     dialog_inner.transition(DialogState::Terminated(
         dialog_id.clone(),
         TerminatedReason::UasBye,
-    ))?;
+    ));
     // A late state change after termination must not be applied or notified.
     dialog_inner.transition(DialogState::Confirmed(
         dialog_id.clone(),
         Response::default(),
-    ))?;
+    ));
 
     assert_eq!(
         drain_states(&mut state_receiver),
@@ -675,9 +675,9 @@ async fn test_ignored_waitack_after_confirmed_is_not_notified() -> crate::Result
     dialog_inner.transition(DialogState::Confirmed(
         dialog_id.clone(),
         Response::default(),
-    ))?;
+    ));
     // e.g. a second accept() after the ACK already confirmed the dialog.
-    dialog_inner.transition(DialogState::WaitAck(dialog_id.clone(), Response::default()))?;
+    dialog_inner.transition(DialogState::WaitAck(dialog_id.clone(), Response::default()));
 
     assert_eq!(drain_states(&mut state_receiver), vec!["Confirmed"]);
     assert!(dialog_inner.is_confirmed());
@@ -712,7 +712,7 @@ async fn test_info_answered_after_bye_does_not_notify_confirmed() -> crate::Resu
     dialog_inner.transition(DialogState::Confirmed(
         dialog_id.clone(),
         Response::default(),
-    ))?;
+    ));
     let dialog = ServerInviteDialog {
         inner: Arc::new(dialog_inner),
     };

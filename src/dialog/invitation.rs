@@ -209,7 +209,7 @@ impl Drop for DialogGuardForUnconfirmed {
 
         // A task dropped before its first poll never sent an INVITE.
         if !self.started {
-            let _ = client_dialog.inner.transition(DialogState::Terminated(
+            client_dialog.inner.transition(DialogState::Terminated(
                 client_dialog.id(),
                 TerminatedReason::UacCancel,
             ));
@@ -227,7 +227,7 @@ impl Drop for DialogGuardForUnconfirmed {
                 let calling = matches!(state, DialogState::Calling(_));
                 let invite_tx = self.invite_tx.take();
                 if calling || invite_tx.is_none() {
-                    let _ = client_dialog.inner.transition(DialogState::Terminated(
+                    client_dialog.inner.transition(DialogState::Terminated(
                         client_dialog.id(),
                         TerminatedReason::UacCancel,
                     ));
@@ -263,7 +263,7 @@ impl Drop for DialogGuardForUnconfirmed {
                         }
                     });
                     if !calling {
-                        let _ = client_dialog.inner.transition(DialogState::Terminated(
+                        client_dialog.inner.transition(DialogState::Terminated(
                             client_dialog.id(),
                             TerminatedReason::UacCancel,
                         ));

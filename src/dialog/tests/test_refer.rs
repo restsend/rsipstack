@@ -78,12 +78,12 @@ async fn test_refer_event_keeps_established_dialog_usable() -> crate::Result<()>
             Some(Uri::try_from("sip:alice@example.com:5060")?),
             tu_sender,
         )?;
-        inner.transition(DialogState::Confirmed(id.clone(), Response::default()))?;
+        inner.transition(DialogState::Confirmed(id.clone(), Response::default()));
         states.recv().await.unwrap();
         let mut refer = invite;
         refer.method = Method::Refer;
         let (handle, mut responses) = TransactionHandle::new();
-        inner.transition(DialogState::Refer(id.clone(), refer, handle))?;
+        inner.transition(DialogState::Refer(id.clone(), refer, handle));
         let Some(DialogState::Refer(received_id, _, transaction)) = states.recv().await else {
             panic!("REFER must reach the application");
         };

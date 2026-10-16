@@ -357,7 +357,7 @@ async fn test_dialback_retry_keeps_the_via_on_its_transport() -> crate::Result<(
     )?;
     *inner.remote_uri.lock() =
         Uri::try_from(format!("sip:alice@127.0.0.1:{closed_port};transport=tcp").as_str())?;
-    inner.transition(DialogState::Confirmed(id, Default::default()))?;
+    inner.transition(DialogState::Confirmed(id, Default::default()));
     let dialog = InviteDialog::from_inner(std::sync::Arc::new(inner));
     tokio::spawn(async move { dialog.bye().await });
 

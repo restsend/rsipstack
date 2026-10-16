@@ -41,7 +41,7 @@ impl ClientSubscriptionDialog {
         headers.push(Header::Expires(0.into()));
         self.request(Method::Subscribe, Some(headers), None).await?;
         self.inner
-            .transition(DialogState::Terminated(self.id(), TerminatedReason::UacBye))?;
+            .transition(DialogState::Terminated(self.id(), TerminatedReason::UacBye));
         Ok(())
     }
 
@@ -82,30 +82,21 @@ impl ClientSubscriptionDialog {
         match tx.original.method {
             Method::Notify => {
                 let (handle, rx) = TransactionHandle::new();
-                self.inner.transition(DialogState::Notify(
-                    self.id(),
-                    tx.original.clone(),
-                    handle,
-                ))?;
+                self.inner
+                    .transition(DialogState::Notify(self.id(), tx.original.clone(), handle));
                 self.inner.process_transaction_handle(tx, rx).await
             }
             Method::Refer => {
                 let (handle, rx) = TransactionHandle::new();
-                self.inner.transition(DialogState::Refer(
-                    self.id(),
-                    tx.original.clone(),
-                    handle,
-                ))?;
+                self.inner
+                    .transition(DialogState::Refer(self.id(), tx.original.clone(), handle));
 
                 self.inner.process_transaction_handle(tx, rx).await
             }
             Method::Message => {
                 let (handle, rx) = TransactionHandle::new();
-                self.inner.transition(DialogState::Message(
-                    self.id(),
-                    tx.original.clone(),
-                    handle,
-                ))?;
+                self.inner
+                    .transition(DialogState::Message(self.id(), tx.original.clone(), handle));
 
                 self.inner.process_transaction_handle(tx, rx).await
             }
@@ -144,7 +135,7 @@ impl ServerSubscriptionDialog {
             .tu_sender
             .send(TransactionEvent::Respond(resp.clone()))?;
         self.inner
-            .transition(DialogState::Confirmed(self.id(), resp))?;
+            .transition(DialogState::Confirmed(self.id(), resp));
         Ok(())
     }
 
@@ -171,7 +162,7 @@ impl ServerSubscriptionDialog {
         headers.push(Header::Expires(0.into()));
         self.request(Method::Subscribe, Some(headers), None).await?;
         self.inner
-            .transition(DialogState::Terminated(self.id(), TerminatedReason::UasBye))?;
+            .transition(DialogState::Terminated(self.id(), TerminatedReason::UasBye));
         Ok(())
     }
 
@@ -215,29 +206,20 @@ impl ServerSubscriptionDialog {
         match tx.original.method {
             Method::Subscribe => {
                 let (handle, rx) = TransactionHandle::new();
-                self.inner.transition(DialogState::Updated(
-                    self.id(),
-                    tx.original.clone(),
-                    handle,
-                ))?;
+                self.inner
+                    .transition(DialogState::Updated(self.id(), tx.original.clone(), handle));
                 self.inner.process_transaction_handle(tx, rx).await
             }
             Method::Refer => {
                 let (handle, rx) = TransactionHandle::new();
-                self.inner.transition(DialogState::Refer(
-                    self.id(),
-                    tx.original.clone(),
-                    handle,
-                ))?;
+                self.inner
+                    .transition(DialogState::Refer(self.id(), tx.original.clone(), handle));
                 self.inner.process_transaction_handle(tx, rx).await
             }
             Method::Message => {
                 let (handle, rx) = TransactionHandle::new();
-                self.inner.transition(DialogState::Message(
-                    self.id(),
-                    tx.original.clone(),
-                    handle,
-                ))?;
+                self.inner
+                    .transition(DialogState::Message(self.id(), tx.original.clone(), handle));
                 self.inner.process_transaction_handle(tx, rx).await
             }
             _ => Ok(()),

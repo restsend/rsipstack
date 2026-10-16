@@ -107,7 +107,7 @@ impl InviteDialog {
         self.inner
             .tu_sender
             .send(TransactionEvent::Respond(resp.clone()))?;
-        self.inner.transition(DialogState::Early(self.id(), resp))?;
+        self.inner.transition(DialogState::Early(self.id(), resp));
         Ok(())
     }
 
@@ -123,8 +123,7 @@ impl InviteDialog {
         self.inner
             .tu_sender
             .send(TransactionEvent::Respond(resp.clone()))?;
-        self.inner
-            .transition(DialogState::WaitAck(self.id(), resp))?;
+        self.inner.transition(DialogState::WaitAck(self.id(), resp));
         Ok(())
     }
 
@@ -173,7 +172,8 @@ impl InviteDialog {
         self.inner.transition(DialogState::Terminated(
             self.id(),
             TerminatedReason::UasDecline,
-        ))
+        ));
+        Ok(())
     }
 
     // ── UAC (Client) semantics ────────────────────────────────────────────
@@ -327,7 +327,7 @@ impl InviteDialog {
         }
         use super::authenticate::handle_client_authenticate;
 
-        self.inner.transition(DialogState::Calling(self.id()))?;
+        self.inner.transition(DialogState::Calling(self.id()));
         let mut auth_sent = false;
         tx.send().await?;
         // Record the flow the INVITE actually went out on, so later
@@ -343,7 +343,7 @@ impl InviteDialog {
                     let status = resp.status_code.clone();
 
                     if status == StatusCode::Trying {
-                        self.inner.transition(DialogState::Trying(self.id()))?;
+                        self.inner.transition(DialogState::Trying(self.id()));
                         self.send_deferred_cancel();
                         continue;
                     }
@@ -353,7 +353,7 @@ impl InviteDialog {
                         // the transition for a cancel() racing this one.
                         self.send_deferred_cancel();
                         self.inner.handle_provisional_response(&resp).await?;
-                        self.inner.transition(DialogState::Early(self.id(), resp))?;
+                        self.inner.transition(DialogState::Early(self.id(), resp));
                         self.send_deferred_cancel();
                         continue;
                     }
@@ -370,7 +370,7 @@ impl InviteDialog {
                             self.inner.transition(DialogState::Terminated(
                                 self.id(),
                                 TerminatedReason::ProxyAuthRequired,
-                            ))?;
+                            ));
                             break;
                         }
                         auth_sent = true;
@@ -398,7 +398,7 @@ impl InviteDialog {
                             self.inner.transition(DialogState::Terminated(
                                 self.id(),
                                 TerminatedReason::ProxyAuthRequired,
-                            ))?;
+                            ));
                             break;
                         }
                     }
@@ -423,7 +423,7 @@ impl InviteDialog {
                         StatusCode::OK => {
                             self.update_remote_target_from_2xx(&resp)?;
                             let confirmed = DialogState::Confirmed(dialog_id.clone(), resp.clone());
-                            if self.inner.confirm_unless_cancelled(confirmed)? {
+                            if self.inner.confirm_unless_cancelled(confirmed) {
                                 self.bye_2xx_of_cancelled(resp);
                             }
                         }
@@ -431,7 +431,7 @@ impl InviteDialog {
                             self.inner.transition(DialogState::Terminated(
                                 self.id(),
                                 TerminatedReason::UasOther(resp.status_code.clone()),
-                            ))?;
+                            ));
                         }
                     }
                     break;
@@ -850,7 +850,7 @@ impl InviteDialog {
             TransactionRole::Client => TerminatedReason::UasBye,
         };
         self.inner
-            .transition(DialogState::Terminated(self.id(), reason))?;
+            .transition(DialogState::Terminated(self.id(), reason));
         tx.reply(StatusCode::OK).await?;
         Ok(())
     }
@@ -859,20 +859,20 @@ impl InviteDialog {
         debug!(id = %self.id(), uri = %tx.original.uri, "received info");
         let (handle, rx) = TransactionHandle::new();
         self.inner
-            .transition(DialogState::Info(self.id(), tx.original.clone(), handle))?;
+            .transition(DialogState::Info(self.id(), tx.original.clone(), handle));
         let result = self.inner.process_transaction_handle(tx, rx).await;
-        let confirmed = self.return_to_confirmed(tx);
-        result.and(confirmed)
+        self.return_to_confirmed(tx);
+        result
     }
 
     /// Restore confirmation after the mid-dialog handlers that use this helper.
     /// REFER is delivered as an event without leaving Confirmed and does not
     /// need another confirmation event after its response.
-    fn return_to_confirmed(&self, tx: &Transaction) -> Result<()> {
+    fn return_to_confirmed(&self, tx: &Transaction) {
         self.inner.transition(DialogState::Confirmed(
             self.id(),
             tx.last_response.clone().unwrap_or_default(),
-        ))
+        ));
     }
 
     async fn handle_prack(&mut self, tx: &mut Transaction) -> Result<()> {
@@ -905,7 +905,7 @@ impl InviteDialog {
         debug!(id = %self.id(), uri = %tx.original.uri, "received options");
         let (handle, rx) = TransactionHandle::new();
         self.inner
-            .transition(DialogState::Options(self.id(), tx.original.clone(), handle))?;
+            .transition(DialogState::Options(self.id(), tx.original.clone(), handle));
 
         self.inner.process_transaction_handle(tx, rx).await
     }
@@ -914,54 +914,54 @@ impl InviteDialog {
         debug!(id = %self.id(), uri = %tx.original.uri, "received update");
         let (handle, rx) = TransactionHandle::new();
         self.inner
-            .transition(DialogState::Updated(self.id(), tx.original.clone(), handle))?;
+            .transition(DialogState::Updated(self.id(), tx.original.clone(), handle));
 
         let result = self.inner.process_transaction_handle(tx, rx).await;
-        let confirmed = self.return_to_confirmed(tx);
-        result.and(confirmed)
+        self.return_to_confirmed(tx);
+        result
     }
 
     async fn handle_refer(&mut self, tx: &mut Transaction) -> Result<()> {
         debug!(id = %self.id(), uri = %tx.original.uri, "received refer");
         let (handle, rx) = TransactionHandle::new();
         self.inner
-            .transition(DialogState::Refer(self.id(), tx.original.clone(), handle))?;
+            .transition(DialogState::Refer(self.id(), tx.original.clone(), handle));
 
         // RFC 3515: the REFER was answered (usually 202) and the dialog must
         // go back to Confirmed — the implicit subscription's NOTIFYs are
         // in-dialog requests that need the confirmed dialog.
         let result = self.inner.process_transaction_handle(tx, rx).await;
-        let confirmed = self.return_to_confirmed(tx);
-        result.and(confirmed)
+        self.return_to_confirmed(tx);
+        result
     }
 
     async fn handle_message(&mut self, tx: &mut Transaction) -> Result<()> {
         debug!(id = %self.id(), uri = %tx.original.uri, "received message");
         let (handle, rx) = TransactionHandle::new();
         self.inner
-            .transition(DialogState::Message(self.id(), tx.original.clone(), handle))?;
+            .transition(DialogState::Message(self.id(), tx.original.clone(), handle));
 
         let result = self.inner.process_transaction_handle(tx, rx).await;
-        let confirmed = self.return_to_confirmed(tx);
-        result.and(confirmed)
+        self.return_to_confirmed(tx);
+        result
     }
 
     async fn handle_notify(&mut self, tx: &mut Transaction) -> Result<()> {
         debug!(id = %self.id(), uri = %tx.original.uri, "received notify");
         let (handle, rx) = TransactionHandle::new();
         self.inner
-            .transition(DialogState::Notify(self.id(), tx.original.clone(), handle))?;
+            .transition(DialogState::Notify(self.id(), tx.original.clone(), handle));
 
         let result = self.inner.process_transaction_handle(tx, rx).await;
-        let confirmed = self.return_to_confirmed(tx);
-        result.and(confirmed)
+        self.return_to_confirmed(tx);
+        result
     }
 
     async fn handle_reinvite(&mut self, tx: &mut Transaction) -> Result<()> {
         debug!(id = %self.id(), "received re-invite {}", tx.original.uri);
         let (handle, rx) = TransactionHandle::new();
         self.inner
-            .transition(DialogState::Updated(self.id(), tx.original.clone(), handle))?;
+            .transition(DialogState::Updated(self.id(), tx.original.clone(), handle));
 
         self.inner.process_transaction_handle(tx, rx).await?;
         let answered_2xx = tx
@@ -978,7 +978,7 @@ impl InviteDialog {
                     self.inner.transition(DialogState::Confirmed(
                         self.id(),
                         tx.last_response.clone().unwrap_or_default(),
-                    ))?;
+                    ));
                     acked = true;
                     break;
                 }
@@ -996,7 +996,7 @@ impl InviteDialog {
     async fn handle_invite(&mut self, tx: &mut Transaction) -> Result<()> {
         let handle_loop = async {
             if matches!(tx.original.method, Method::Invite)
-                && self.inner.transition_if_calling().unwrap_or(false)
+                && self.inner.transition_if_calling()
                 && tx.last_response.is_none()
             {
                 tx.send_trying().await.ok();
@@ -1014,7 +1014,7 @@ impl InviteDialog {
                             self.inner.transition(DialogState::Confirmed(
                                 self.id(),
                                 tx.last_response.clone().unwrap_or_default(),
-                            ))?;
+                            ));
                             break;
                         }
                         Method::Cancel => {
@@ -1023,7 +1023,7 @@ impl InviteDialog {
                             self.inner.transition(DialogState::Terminated(
                                 self.id(),
                                 TerminatedReason::UacCancel,
-                            ))?;
+                            ));
                             break;
                         }
                         _ => {}

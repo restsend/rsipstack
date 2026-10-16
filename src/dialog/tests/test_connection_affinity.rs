@@ -266,8 +266,7 @@ async fn test_server_dialog_bye_is_delivered_over_initial_connection() {
     let id = dialog.id();
     dialog
         .inner
-        .transition(DialogState::Confirmed(id.clone(), Response::default()))
-        .expect("confirm dialog");
+        .transition(DialogState::Confirmed(id.clone(), Response::default()));
     assert!(dialog.inner.is_confirmed());
 
     let bye_dialog = dialog.clone();
@@ -498,9 +497,7 @@ async fn test_restored_dialog_falls_back_to_initial_via_dialback() {
     assert!(inner.test_resolve_affinity_connection().is_none());
 
     let id = inner.id.lock().clone();
-    inner
-        .transition(DialogState::Confirmed(id.clone(), Response::default()))
-        .unwrap();
+    inner.transition(DialogState::Confirmed(id.clone(), Response::default()));
     assert!(inner.is_confirmed());
 
     // No responder will answer the BYE here — we only assert delivery.
@@ -555,9 +552,7 @@ async fn test_server_request_without_route_fails_unless_dialed_back() -> crate::
         let (ep, role) = (endpoint.inner.clone(), TransactionRole::Server);
         let inner = server_dialog(ep, role, invite, "sip:bob@127.0.0.1:5060");
         let id = inner.id.lock().clone();
-        inner
-            .transition(DialogState::Confirmed(id, Response::default()))
-            .unwrap();
+        inner.transition(DialogState::Confirmed(id, Response::default()));
         InviteDialog::from_inner(Arc::new(inner))
     };
 
@@ -641,8 +636,7 @@ async fn test_bye_survives_cancelled_flow_without_received_via_param() {
     let id = dialog.id();
     dialog
         .inner
-        .transition(DialogState::Confirmed(id.clone(), Response::default()))
-        .expect("confirm dialog");
+        .transition(DialogState::Confirmed(id.clone(), Response::default()));
 
     // Browser drops the connection before we hang up the leg.
     flow.cancel.cancel();
@@ -745,8 +739,7 @@ async fn test_bye_before_send_reports_flow_destination() {
     let id = dialog.id();
     dialog
         .inner
-        .transition(DialogState::Confirmed(id.clone(), Response::default()))
-        .expect("confirm dialog");
+        .transition(DialogState::Confirmed(id.clone(), Response::default()));
 
     let bye_dialog = dialog.clone();
     tokio::spawn(async move {

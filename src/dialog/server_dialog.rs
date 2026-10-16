@@ -148,7 +148,7 @@ impl ServerInviteDialog {
         self.inner
             .tu_sender
             .send(TransactionEvent::Respond(resp.clone()))?;
-        self.inner.transition(DialogState::Early(self.id(), resp))?;
+        self.inner.transition(DialogState::Early(self.id(), resp));
         Ok(())
     }
     /// Accept the incoming INVITE request
@@ -193,8 +193,7 @@ impl ServerInviteDialog {
             .tu_sender
             .send(TransactionEvent::Respond(resp.clone()))?;
 
-        self.inner
-            .transition(DialogState::WaitAck(self.id(), resp))?;
+        self.inner.transition(DialogState::WaitAck(self.id(), resp));
         Ok(())
     }
 
@@ -312,7 +311,8 @@ impl ServerInviteDialog {
         self.inner.transition(DialogState::Terminated(
             self.id(),
             TerminatedReason::UasDecline,
-        ))
+        ));
+        Ok(())
     }
 
     /// Send a BYE request to terminate the dialog.
@@ -740,7 +740,7 @@ impl ServerInviteDialog {
     async fn handle_bye(&mut self, tx: &mut Transaction) -> Result<()> {
         debug!(id = %self.id(), uri = %tx.original.uri, "received bye");
         self.inner
-            .transition(DialogState::Terminated(self.id(), TerminatedReason::UacBye))?;
+            .transition(DialogState::Terminated(self.id(), TerminatedReason::UacBye));
         tx.reply(crate::sip::StatusCode::OK).await?;
         Ok(())
     }
@@ -749,20 +749,20 @@ impl ServerInviteDialog {
         debug!(id = %self.id(), uri = %tx.original.uri, "received info");
         let (handle, rx) = TransactionHandle::new();
         self.inner
-            .transition(DialogState::Info(self.id(), tx.original.clone(), handle))?;
+            .transition(DialogState::Info(self.id(), tx.original.clone(), handle));
         let result = self.inner.process_transaction_handle(tx, rx).await;
-        let confirmed = self.return_to_confirmed(tx);
-        result.and(confirmed)
+        self.return_to_confirmed(tx);
+        result
     }
 
     /// Restore confirmation after the mid-dialog handlers that use this helper.
     /// REFER is delivered as an event without leaving Confirmed and does not
     /// need another confirmation event after its response.
-    fn return_to_confirmed(&self, tx: &Transaction) -> Result<()> {
+    fn return_to_confirmed(&self, tx: &Transaction) {
         self.inner.transition(DialogState::Confirmed(
             self.id(),
             tx.last_response.clone().unwrap_or_default(),
-        ))
+        ));
     }
 
     async fn handle_prack(&mut self, tx: &mut Transaction) -> Result<()> {
@@ -795,7 +795,7 @@ impl ServerInviteDialog {
         debug!(id = %self.id(), uri = %tx.original.uri, "received options");
         let (handle, rx) = TransactionHandle::new();
         self.inner
-            .transition(DialogState::Options(self.id(), tx.original.clone(), handle))?;
+            .transition(DialogState::Options(self.id(), tx.original.clone(), handle));
 
         self.inner.process_transaction_handle(tx, rx).await
     }
@@ -804,18 +804,18 @@ impl ServerInviteDialog {
         debug!(id = %self.id(), uri = %tx.original.uri, "received update");
         let (handle, rx) = TransactionHandle::new();
         self.inner
-            .transition(DialogState::Updated(self.id(), tx.original.clone(), handle))?;
+            .transition(DialogState::Updated(self.id(), tx.original.clone(), handle));
 
         let result = self.inner.process_transaction_handle(tx, rx).await;
-        let confirmed = self.return_to_confirmed(tx);
-        result.and(confirmed)
+        self.return_to_confirmed(tx);
+        result
     }
 
     async fn handle_refer(&mut self, tx: &mut Transaction) -> Result<()> {
         debug!(id = %self.id(), uri = %tx.original.uri, "received refer");
         let (handle, rx) = TransactionHandle::new();
         self.inner
-            .transition(DialogState::Refer(self.id(), tx.original.clone(), handle))?;
+            .transition(DialogState::Refer(self.id(), tx.original.clone(), handle));
 
         self.inner.process_transaction_handle(tx, rx).await
     }
@@ -824,29 +824,29 @@ impl ServerInviteDialog {
         debug!(id = %self.id(), uri = %tx.original.uri, "received message");
         let (handle, rx) = TransactionHandle::new();
         self.inner
-            .transition(DialogState::Message(self.id(), tx.original.clone(), handle))?;
+            .transition(DialogState::Message(self.id(), tx.original.clone(), handle));
 
         let result = self.inner.process_transaction_handle(tx, rx).await;
-        let confirmed = self.return_to_confirmed(tx);
-        result.and(confirmed)
+        self.return_to_confirmed(tx);
+        result
     }
 
     async fn handle_notify(&mut self, tx: &mut Transaction) -> Result<()> {
         debug!(id = %self.id(), uri = %tx.original.uri, "received notify");
         let (handle, rx) = TransactionHandle::new();
         self.inner
-            .transition(DialogState::Notify(self.id(), tx.original.clone(), handle))?;
+            .transition(DialogState::Notify(self.id(), tx.original.clone(), handle));
 
         let result = self.inner.process_transaction_handle(tx, rx).await;
-        let confirmed = self.return_to_confirmed(tx);
-        result.and(confirmed)
+        self.return_to_confirmed(tx);
+        result
     }
 
     async fn handle_reinvite(&mut self, tx: &mut Transaction) -> Result<()> {
         debug!(id = %self.id(), "received re-invite {}", tx.original.uri);
         let (handle, rx) = TransactionHandle::new();
         self.inner
-            .transition(DialogState::Updated(self.id(), tx.original.clone(), handle))?;
+            .transition(DialogState::Updated(self.id(), tx.original.clone(), handle));
 
         self.inner.process_transaction_handle(tx, rx).await?;
         let answered_2xx = tx
@@ -863,7 +863,7 @@ impl ServerInviteDialog {
                     self.inner.transition(DialogState::Confirmed(
                         self.id(),
                         tx.last_response.clone().unwrap_or_default(),
-                    ))?;
+                    ));
                     acked = true;
                     break;
                 }
@@ -881,7 +881,7 @@ impl ServerInviteDialog {
     async fn handle_invite(&mut self, tx: &mut Transaction) -> Result<()> {
         let handle_loop = async {
             if matches!(tx.original.method, crate::sip::Method::Invite)
-                && self.inner.transition_if_calling().unwrap_or(false)
+                && self.inner.transition_if_calling()
             {
                 tx.send_trying().await.ok();
             }
@@ -899,7 +899,7 @@ impl ServerInviteDialog {
                             self.inner.transition(DialogState::Confirmed(
                                 self.id(),
                                 tx.last_response.clone().unwrap_or_default(),
-                            ))?;
+                            ));
                             break;
                         }
                         crate::sip::Method::Cancel => {
@@ -908,7 +908,7 @@ impl ServerInviteDialog {
                             self.inner.transition(DialogState::Terminated(
                                 self.id(),
                                 TerminatedReason::UacCancel,
-                            ))?;
+                            ));
                             break;
                         }
                         _ => {}

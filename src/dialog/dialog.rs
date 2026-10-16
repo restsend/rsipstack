@@ -737,7 +737,7 @@ impl DialogInner {
                             self.transition(DialogState::Terminated(
                                 id,
                                 TerminatedReason::ProxyAuthRequired,
-                            ))?;
+                            ));
                             break;
                         }
                         auth_sent = true;
@@ -754,7 +754,7 @@ impl DialogInner {
                             self.transition(DialogState::Terminated(
                                 id,
                                 TerminatedReason::ProxyAuthRequired,
-                            ))?;
+                            ));
                             break;
                         }
                     }
@@ -1273,7 +1273,7 @@ impl DialogInner {
                         // The provisional is still notified so the caller sees it.
                         let state = DialogState::Early(self.id.lock().clone(), resp);
                         if self.can_cancel() {
-                            self.transition(state)?;
+                            self.transition(state);
                         } else if !self.is_terminated() {
                             // Still notify the provisional so the caller sees
                             // it (e.g. a reliable 183 with SDP to a
@@ -1297,7 +1297,7 @@ impl DialogInner {
                             self.transition(DialogState::Terminated(
                                 id,
                                 TerminatedReason::ProxyAuthRequired,
-                            ))?;
+                            ));
                             break;
                         }
                         auth_sent = true;
@@ -1317,7 +1317,7 @@ impl DialogInner {
                             self.transition(DialogState::Terminated(
                                 id,
                                 TerminatedReason::ProxyAuthRequired,
-                            ))?;
+                            ));
                             continue;
                         }
                     }
@@ -1349,7 +1349,7 @@ impl DialogInner {
     pub(super) async fn send_bye(&self, request: Request, reason: TerminatedReason) -> Result<()> {
         let result = self.do_request(request).await;
         let id = self.id.lock().clone();
-        self.transition(DialogState::Terminated(id, reason))?;
+        self.transition(DialogState::Terminated(id, reason));
         result.map(|_| ())
     }
 
@@ -1431,8 +1431,7 @@ impl DialogInner {
         self.transition(DialogState::Terminated(
             id.clone(),
             TerminatedReason::Timeout,
-        ))
-        .ok();
+        ));
         match bye {
             Ok(bye) => {
                 if let Err(e) = self.do_request(bye).await {
@@ -1649,50 +1648,50 @@ impl DialogInner {
             version: Version::V2,
         }
     }
-    pub(super) fn transition(&self, state: DialogState) -> Result<()> {
+    pub(super) fn transition(&self, state: DialogState) {
         // Decide under the state lock and notify only transitions that are
         // applied, while still holding it, so notifications follow the order
         // in which the state changed.
-        self.transition_locked(&mut self.state.lock(), state)
+        self.transition_locked(&mut self.state.lock(), state);
     }
 
     /// `handle()` announcing an initial INVITE: re-enters `Calling` only while
     /// the dialog is still `Calling`. Checked under the state lock `accept()`,
     /// `ringing()` and `reject()` take, so one that ran first (`WaitAck`,
     /// `Early`, `Terminated`) is never undone. Returns whether it applied.
-    pub(super) fn transition_if_calling(&self) -> Result<bool> {
+    pub(super) fn transition_if_calling(&self) -> bool {
         let id = self.id.lock().clone();
         let mut state = self.state.lock();
         if !matches!(&*state, DialogState::Calling(_)) {
-            return Ok(false);
+            return false;
         }
-        self.transition_locked(&mut state, DialogState::Calling(id))?;
-        Ok(true)
+        self.transition_locked(&mut state, DialogState::Calling(id));
+        true
     }
 
     /// The 2xx to the INVITE: `confirmed`, or `Terminated(UacCancel)` once
     /// `cancel()` was called. Decided under the state lock `cancel()` takes,
     /// so a racing `cancel()` is either seen here or sees `Confirmed`.
     /// Returns whether the INVITE was cancelled.
-    pub(super) fn confirm_unless_cancelled(&self, confirmed: DialogState) -> Result<bool> {
+    pub(super) fn confirm_unless_cancelled(&self, confirmed: DialogState) -> bool {
         let id = self.id.lock().clone();
         let mut state = self.state.lock();
         if self.cancel_requested.load(Ordering::SeqCst) {
             let cancelled = DialogState::Terminated(id, TerminatedReason::UacCancel);
-            self.transition_locked(&mut state, cancelled)?;
-            return Ok(true);
+            self.transition_locked(&mut state, cancelled);
+            return true;
         }
-        self.transition_locked(&mut state, confirmed)?;
-        Ok(false)
+        self.transition_locked(&mut state, confirmed);
+        false
     }
 
-    fn transition_locked(&self, old_state: &mut DialogState, state: DialogState) -> Result<()> {
+    fn transition_locked(&self, old_state: &mut DialogState, state: DialogState) {
         // Late updates after termination (e.g. CANCEL's 200 arriving after
         // the INVITE's 487, or a second Terminated from a racing teardown)
         // are neither applied nor broadcast: observers already saw Terminated.
         if let DialogState::Terminated(id, _) = &*old_state {
             debug!(id = %id, target = %state, "dialog already terminated, ignoring late transition");
-            return Ok(());
+            return;
         }
         // In-dialog request events do not change the established lifecycle state.
         match state {
@@ -1703,19 +1702,18 @@ impl DialogInner {
             | DialogState::Refer(_, _, _) => {
                 // Try to send state update, but don't fail if channel is closed
                 self.state_sender.send(state).ok();
-                return Ok(());
+                return;
             }
             _ => {}
         }
         if let (DialogState::Confirmed(_, _), DialogState::WaitAck(_, _)) = (&*old_state, &state) {
             warn!(target = %state, "dialog already confirmed, ignoring transition");
-            return Ok(());
+            return;
         }
         debug!(from = %old_state, to = %state, "transitioning state");
         *old_state = state.clone();
         // Try to send state update, but don't fail if channel is closed
         self.state_sender.send(state).ok();
-        Ok(())
     }
 
     #[cfg_attr(not(feature = "platform-tokio"), allow(unused_mut))]

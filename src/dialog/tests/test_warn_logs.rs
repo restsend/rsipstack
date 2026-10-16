@@ -131,7 +131,7 @@ async fn test_bye_in_early_state_warns_without_the_response() -> crate::Result<(
     let SipMessage::Response(ringing) = message("SIP/2.0 180 Ringing", "1 INVITE") else {
         unreachable!()
     };
-    inner.transition(DialogState::Early(inner.id.lock().clone(), ringing))?;
+    inner.transition(DialogState::Early(inner.id.lock().clone(), ringing));
 
     let errors = [
         ClientInviteDialog {
