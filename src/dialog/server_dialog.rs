@@ -880,12 +880,8 @@ impl ServerInviteDialog {
 
     async fn handle_invite(&mut self, tx: &mut Transaction) -> Result<()> {
         let handle_loop = async {
-            if !self.inner.is_confirmed()
-                && matches!(tx.original.method, crate::sip::Method::Invite)
-                && self
-                    .inner
-                    .transition(DialogState::Calling(self.id()))
-                    .is_ok()
+            if matches!(tx.original.method, crate::sip::Method::Invite)
+                && self.inner.transition_if_calling().unwrap_or(false)
             {
                 tx.send_trying().await.ok();
             }

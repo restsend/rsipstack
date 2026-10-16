@@ -1,3 +1,4 @@
+mod test_accept_before_handle;
 mod test_ack_answer;
 mod test_authenticate;
 mod test_cancel_2xx_race;

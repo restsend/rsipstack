@@ -995,12 +995,8 @@ impl InviteDialog {
 
     async fn handle_invite(&mut self, tx: &mut Transaction) -> Result<()> {
         let handle_loop = async {
-            if matches!(self.state(), DialogState::Calling(_))
-                && matches!(tx.original.method, Method::Invite)
-                && self
-                    .inner
-                    .transition(DialogState::Calling(self.id()))
-                    .is_ok()
+            if matches!(tx.original.method, Method::Invite)
+                && self.inner.transition_if_calling().unwrap_or(false)
                 && tx.last_response.is_none()
             {
                 tx.send_trying().await.ok();

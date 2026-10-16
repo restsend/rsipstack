@@ -1656,6 +1656,20 @@ impl DialogInner {
         self.transition_locked(&mut self.state.lock(), state)
     }
 
+    /// `handle()` announcing an initial INVITE: re-enters `Calling` only while
+    /// the dialog is still `Calling`. Checked under the state lock `accept()`,
+    /// `ringing()` and `reject()` take, so one that ran first (`WaitAck`,
+    /// `Early`, `Terminated`) is never undone. Returns whether it applied.
+    pub(super) fn transition_if_calling(&self) -> Result<bool> {
+        let id = self.id.lock().clone();
+        let mut state = self.state.lock();
+        if !matches!(&*state, DialogState::Calling(_)) {
+            return Ok(false);
+        }
+        self.transition_locked(&mut state, DialogState::Calling(id))?;
+        Ok(true)
+    }
+
     /// The 2xx to the INVITE: `confirmed`, or `Terminated(UacCancel)` once
     /// `cancel()` was called. Decided under the state lock `cancel()` takes,
     /// so a racing `cancel()` is either seen here or sees `Confirmed`.
