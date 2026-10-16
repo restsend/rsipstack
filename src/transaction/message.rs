@@ -346,6 +346,21 @@ impl EndpointInner {
                         .collect::<Vec<_>>(),
                 );
             }
+
+            // RFC 3261 §13.2.2.4: the 2xx ACK carries the INVITE's credentials.
+            headers.extend(
+                invite
+                    .headers
+                    .iter()
+                    .filter(|header| {
+                        matches!(
+                            header,
+                            Header::Authorization(_) | Header::ProxyAuthorization(_)
+                        )
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            );
         }
 
         headers.retain(|h| {
@@ -358,6 +373,8 @@ impl EndpointInner {
                     | Header::CSeq(_)
                     | Header::Route(_)
                     | Header::SessionId(_)
+                    | Header::Authorization(_)
+                    | Header::ProxyAuthorization(_)
             )
         });
         // RFC 7989 §6/§10.1: the ACK is sent by the INVITE originator, so its

@@ -186,6 +186,65 @@ Content-Length: 0\r\n\r\n";
 }
 
 #[tokio::test]
+async fn test_make_ack_carries_invite_credentials() -> Result<()> {
+    let endpoint = super::create_test_endpoint(None).await?;
+    let mut invite = make_invite_request("sip:bob@example.com")?;
+    let authorization = r#"Digest username="alice", realm="example.com", nonce="n1", uri="sip:bob@example.com", response="r1""#;
+    let proxy_authorization = r#"Digest username="alice", realm="proxy.example.com", nonce="n2", uri="sip:bob@example.com", response="r2""#;
+    invite
+        .headers
+        .push(Authorization::new(authorization).into());
+    invite
+        .headers
+        .push(ProxyAuthorization::new(proxy_authorization).into());
+
+    let credentials = |ack: &crate::sip::Request| -> Vec<String> {
+        ack.headers
+            .iter()
+            .filter_map(|header| match header {
+                Header::Authorization(h) => Some(h.value().to_string()),
+                Header::ProxyAuthorization(h) => Some(h.value().to_string()),
+                _ => None,
+            })
+            .collect()
+    };
+
+    let ok = Response::try_from(
+        "SIP/2.0 200 OK\r\n\
+Via: SIP/2.0/TCP uac.example.com:5060;branch=z9hG4bK1\r\n\
+From: <sip:alice@example.com>;tag=from-tag\r\n\
+To: <sip:bob@example.com>;tag=to-tag\r\n\
+Call-ID: callid@example.com\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:uas@192.0.2.55:5080;transport=tcp>\r\n\
+Content-Length: 0\r\n\r\n",
+    )?;
+    let ack = endpoint.inner.make_ack(&invite, &ok)?;
+    assert_eq!(
+        credentials(&ack),
+        vec![authorization.to_string(), proxy_authorization.to_string()],
+        "the 2xx ACK must carry the INVITE's credentials (RFC 3261 §13.2.2.4)"
+    );
+
+    let busy = Response::try_from(
+        "SIP/2.0 486 Busy Here\r\n\
+Via: SIP/2.0/TCP uac.example.com:5060;branch=z9hG4bK1\r\n\
+From: <sip:alice@example.com>;tag=from-tag\r\n\
+To: <sip:bob@example.com>;tag=to-tag\r\n\
+Call-ID: callid@example.com\r\n\
+CSeq: 1 INVITE\r\n\
+Content-Length: 0\r\n\r\n",
+    )?;
+    let ack = endpoint.inner.make_ack(&invite, &busy)?;
+    assert!(
+        credentials(&ack).is_empty(),
+        "the non-2xx ACK is hop-by-hop (RFC 3261 §17.1.1.3) and needs no credentials"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_make_ack_accepts_comma_separated_record_route() -> Result<()> {
     let endpoint = super::create_test_endpoint(None).await?;
 
