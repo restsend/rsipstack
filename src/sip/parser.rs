@@ -210,6 +210,36 @@ mod tests {
         }
     }
 
+    fn parse_request_line(request_line: &str) -> Result<SipMessage, crate::sip::Error> {
+        let raw = format!(
+            "{request_line}\r\nVia: SIP/2.0/UDP a.example:5060;branch=z9hG4bK-1\r\n\
+             From: <sip:a@a.example>;tag=1\r\nTo: <sip:b@b.example>;tag=2\r\n\
+             Call-ID: c1\r\nCSeq: 2 BYE\r\nContent-Length: 0\r\n\r\n"
+        );
+        SipMessage::try_from(raw.as_str())
+    }
+
+    #[test]
+    fn a_request_without_a_request_uri_host_is_rejected() {
+        for line in [
+            "BYE  SIP/2.0",
+            "BYE \t SIP/2.0",
+            "BYE sip: SIP/2.0",
+            "BYE sip:bob@ SIP/2.0",
+            "INVITE  SIP/2.0",
+        ] {
+            assert!(parse_request_line(line).is_err(), "{line:?} was accepted");
+        }
+        for line in [
+            "BYE sip:bob@127.0.0.1:5060 SIP/2.0",
+            "BYE sip:bob@b.example;transport=udp SIP/2.0",
+            "INVITE sip:[::1]:5060 SIP/2.0",
+            "INVITE tel:+15551234567 SIP/2.0",
+        ] {
+            assert!(parse_request_line(line).is_ok(), "{line:?} was rejected");
+        }
+    }
+
     fn response(status_line: &str) -> crate::sip::Response {
         let raw = format!(
             "{status_line}\r\nVia: SIP/2.0/UDP a.example:5060;branch=z9hG4bK-1\r\n\

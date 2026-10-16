@@ -124,6 +124,9 @@ impl FromStr for Host {
     type Err = Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let s = s.trim();
+        if s.is_empty() {
+            return Err(Error::ParseError("empty host".into()));
+        }
         if let Ok(ip) = s.parse::<IpAddr>() {
             Ok(Host::IpAddr(ip))
         } else {
@@ -971,6 +974,19 @@ mod tests {
             uri.to_string(),
             "sip:alice@restsend.com;transport=TCP;tag=1928301774"
         );
+    }
+
+    #[test]
+    fn uri_without_a_host_is_rejected() {
+        for s in ["", "<>", "sip:", "sip:bob@", "sip:bob@;transport=udp"] {
+            assert!(parse_uri(s).is_err(), "{s:?} was accepted");
+        }
+        for s in ["", "  ", ":5060"] {
+            assert!(
+                super::HostWithPort::try_from(s).is_err(),
+                "{s:?} was accepted"
+            );
+        }
     }
 
     #[test]
