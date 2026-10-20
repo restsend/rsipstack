@@ -898,3 +898,99 @@ mod tests {
         assert_eq!(granted_expiration(&resp, &ours(), Some(0)), 0);
     }
 }
+
+// ── resident keep-alive refresh policy ─────────────────────────────────────
+
+/// Outcome of one keep-alive REGISTER attempt.
+#[derive(Debug)]
+pub enum RefreshOutcome<'a> {
+    /// 2xx — the binding is (re)established for another expiry window.
+    Registered(&'a Response),
+    /// REGISTER answered with a non-2xx final response.
+    Rejected(&'a Response),
+    /// Transport / transaction failure (registrar unreachable).
+    Failed(&'a crate::Error),
+}
+
+/// 75% of the granted expiry, floored at 1 s.
+pub fn refresh_interval(expires: u32) -> core::time::Duration {
+    core::time::Duration::from_millis((u64::from(expires) * 3 / 4 * 1000).max(1000))
+}
+
+/// 1 s doubling per consecutive failure, capped at 60 s.
+pub fn backoff_interval(failures: u32) -> core::time::Duration {
+    const MIN_MS: u64 = 1_000;
+    const MAX_MS: u64 = 60_000;
+    core::time::Duration::from_millis((MIN_MS << failures.min(6)).min(MAX_MS))
+}
+
+impl Registration {
+    /// REGISTER immediately, then refresh at 75% of the expiry (or backoff).
+    /// `on_result` fires after every attempt. Returns on token cancel; the
+    /// caller owns the final expires=0 unregister.
+    pub async fn keep_alive<E>(
+        &mut self,
+        server: crate::sip::Uri,
+        expires: u32,
+        token: crate::platform::CancellationToken,
+        mut on_result: E,
+    ) where
+        E: FnMut(RefreshOutcome<'_>),
+    {
+        let refresh = refresh_interval(expires);
+        let mut failures: u32 = 0;
+        loop {
+            match self.register(server.clone(), Some(expires)).await {
+                Ok(resp) if resp.status_code.kind() == crate::sip::StatusCodeKind::Successful => {
+                    failures = 0;
+                    on_result(RefreshOutcome::Registered(&resp));
+                }
+                Ok(resp) => {
+                    failures += 1;
+                    on_result(RefreshOutcome::Rejected(&resp));
+                }
+                Err(e) => {
+                    failures += 1;
+                    on_result(RefreshOutcome::Failed(&e));
+                }
+            }
+
+            let wait = if failures == 0 {
+                refresh
+            } else {
+                backoff_interval(failures - 1)
+            };
+            // Prompt exit on Unregister/shutdown instead of waiting out.
+            let sleep_fut = crate::platform::sleep(wait);
+            let mut sleep_fut = core::pin::pin!(sleep_fut);
+            let cancelled = token.cancelled();
+            let mut cancelled = core::pin::pin!(cancelled);
+            if matches!(
+                crate::platform::select2(&mut sleep_fut, &mut cancelled).await,
+                crate::platform::Either::B(_)
+            ) {
+                return;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod keep_alive_tests {
+    use super::*;
+
+    #[test]
+    fn refresh_interval_is_75_percent_with_floor() {
+        assert_eq!(refresh_interval(600), core::time::Duration::from_secs(450));
+        assert_eq!(refresh_interval(1), core::time::Duration::from_secs(1));
+        assert_eq!(refresh_interval(2), core::time::Duration::from_secs(1));
+    }
+
+    #[test]
+    fn backoff_doubles_and_caps() {
+        assert_eq!(backoff_interval(0), core::time::Duration::from_secs(1));
+        assert_eq!(backoff_interval(1), core::time::Duration::from_secs(2));
+        assert_eq!(backoff_interval(3), core::time::Duration::from_secs(8));
+        assert_eq!(backoff_interval(10), core::time::Duration::from_secs(60));
+    }
+}
