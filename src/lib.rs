@@ -245,6 +245,9 @@
 // platform backend (embassy, WP3); host builds use the default `std` feature
 // (tokio backend).
 #![cfg_attr(not(feature = "std"), no_std)]
+// `async_trait`'s expansion trips clippy's `double_must_use` on newer
+// toolchains (the generated futures already carry `#[must_use]`).
+#![allow(clippy::double_must_use)]
 #![allow(
     clippy::result_large_err,
     clippy::too_many_arguments,
