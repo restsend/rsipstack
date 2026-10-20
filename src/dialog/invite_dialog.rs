@@ -24,6 +24,17 @@ use crate::Result;
 use core::sync::atomic::Ordering;
 use tracing::{debug, info, trace, warn};
 
+/// Jittered glare backoff: 2.1–4.0 s (RFC 3261 §14.1 wants random spacing).
+/// `AtomicUsize`: xtensa has no 64-bit atomics.
+fn glare_backoff_ms() -> u64 {
+    static COUNTER: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+    let mut x = (COUNTER.fetch_add(1, Ordering::Relaxed) as u64) ^ 0x9E37_79B9_7F4A_7C15;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    2100 + (x % 1900)
+}
+
 /// Unified INVITE dialog that can act as either a UAS (Server) or UAC (Client).
 ///
 /// Role-specific methods (e.g. `ringing`/`accept`/`reject` for UAS, or
@@ -596,6 +607,42 @@ impl InviteDialog {
             .inner
             .make_request(Method::Invite, None, None, None, headers, body)?;
         self.inner.do_request(request).await
+    }
+
+    /// re-INVITE with glare handling (RFC 3261 §14.1): on 491 retry after a
+    /// jittered 2.1–4.0 s backoff, up to `max_attempts` total.
+    pub async fn reinvite_with_glare_retry(
+        &self,
+        headers: Option<Vec<Header>>,
+        body: Option<Vec<u8>>,
+        max_attempts: usize,
+    ) -> Result<Option<Response>> {
+        for attempt in 0..max_attempts {
+            let resp = self.reinvite(headers.clone(), body.clone()).await?;
+            let glare = matches!(
+                resp.as_ref(),
+                Some(r) if r.status_code == StatusCode::RequestPending
+            );
+            if !glare {
+                return Ok(resp);
+            }
+            if attempt + 1 == max_attempts {
+                return Err(crate::Error::Error(alloc::format!(
+                    "re-INVITE glare: exhausted {max_attempts} retries (491)"
+                )));
+            }
+            let backoff_ms = glare_backoff_ms();
+            warn!(
+                id = %self.id(),
+                attempt,
+                backoff_ms,
+                "re-INVITE glare (491), retrying"
+            );
+            crate::platform::sleep(core::time::Duration::from_millis(backoff_ms)).await;
+        }
+        Err(crate::Error::Error(alloc::string::String::from(
+            "re-INVITE glare: no attempts made",
+        )))
     }
 
     /// Send an UPDATE request to modify session parameters.
