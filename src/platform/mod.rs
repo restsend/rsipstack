@@ -31,6 +31,8 @@ pub mod mpsc;
 pub use tokio::sync::mpsc;
 pub mod atomic64;
 pub mod net;
+#[cfg(not(feature = "std"))]
+pub mod rng;
 pub mod select;
 pub mod tls;
 

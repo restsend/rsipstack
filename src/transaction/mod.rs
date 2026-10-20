@@ -384,6 +384,9 @@ fn fill_random_bytes(buf: &mut [u8]) {
 /// backend (WP3) — do not rely on this for secrets.
 #[cfg(not(feature = "std"))]
 fn fill_random_bytes(buf: &mut [u8]) {
+    if crate::platform::rng::try_fill(buf) {
+        return;
+    }
     use crate::platform::atomic64::AtomicU64;
     use core::sync::atomic::Ordering;
     static STATE: AtomicU64 = AtomicU64::new(0x9E37_79B9_7F4A_7C15);
