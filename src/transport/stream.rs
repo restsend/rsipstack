@@ -8,6 +8,7 @@ use crate::{
     Result,
 };
 use bytes::{Buf, BytesMut};
+use core::time::Duration;
 use memchr::{memchr, memmem};
 use tokio::{
     io::{AsyncRead, AsyncWrite, AsyncWriteExt},
@@ -192,6 +193,7 @@ where
         &self,
         sender: TransportSender,
         connection: SipConnection,
+        idle_timeout: Duration,
     ) -> Result<()> {
         let mut read_half = match self.read_half.lock().await.take() {
             Some(read_half) => read_half,
@@ -208,13 +210,21 @@ where
         let mut read_buf = BytesMut::with_capacity(MAX_SIP_MESSAGE_SIZE);
         read_buf.resize(MAX_SIP_MESSAGE_SIZE, 0);
         loop {
-            use tokio::io::AsyncReadExt;
-            match read_half.read(&mut read_buf).await {
-                Ok(0) => {
+            match read_stream_chunk(&mut read_half, &mut read_buf, idle_timeout).await {
+                StreamRead::Idle => {
+                    warn!(
+                        local = %self.local_addr,
+                        remote = %remote_addr,
+                        idle_secs = idle_timeout.as_secs(),
+                        "stream idle timeout, closing connection"
+                    );
+                    break;
+                }
+                StreamRead::Data(Ok(0)) => {
                     debug!(local = %self.local_addr, remote = %remote_addr, "Connection closed");
                     break;
                 }
-                Ok(n) => {
+                StreamRead::Data(Ok(n)) => {
                     buffer.extend_from_slice(&read_buf[0..n]);
 
                     while let Some(msg) = codec.decode(&mut buffer)? {
@@ -244,7 +254,7 @@ where
                         }
                     }
                 }
-                Err(e) => {
+                StreamRead::Data(Err(e)) => {
                     warn!(error = %e, src = %remote_addr, "Error reading from stream");
                     break;
                 }
@@ -269,8 +279,35 @@ pub trait StreamConnection: Send + Sync + 'static {
     fn get_remote_addr(&self) -> &SipAddr;
     async fn send_message(&self, msg: SipMessage) -> Result<()>;
     async fn send_raw(&self, data: &[u8]) -> Result<()>;
-    async fn serve_loop(&self, sender: TransportSender) -> Result<()>;
+    /// Serve the connection until the peer closes, an error occurs, or no
+    /// bytes arrive for `idle_timeout` (`Duration::ZERO` = wait forever).
+    async fn serve_loop(&self, sender: TransportSender, idle_timeout: Duration) -> Result<()>;
     async fn close(&self) -> Result<()>;
+}
+
+/// Outcome of one stream read attempt.
+pub enum StreamRead {
+    /// Bytes read, EOF, or an I/O error — mirrors `AsyncReadExt::read`.
+    Data(std::io::Result<usize>),
+    /// No bytes arrived within the configured idle timeout.
+    Idle,
+}
+
+/// Read one chunk from a stream, bounding the wait by `idle_timeout`.
+/// `Duration::ZERO` disables the timeout (blocking read, legacy behavior).
+async fn read_stream_chunk<R: AsyncRead + Unpin>(
+    read_half: &mut R,
+    buf: &mut [u8],
+    idle_timeout: Duration,
+) -> StreamRead {
+    use tokio::io::AsyncReadExt;
+    if idle_timeout.is_zero() {
+        return StreamRead::Data(read_half.read(buf).await);
+    }
+    match tokio::time::timeout(idle_timeout, read_half.read(buf)).await {
+        Ok(res) => StreamRead::Data(res),
+        Err(_) => StreamRead::Idle,
+    }
 }
 
 pub async fn send_to_stream<W>(write_half: &Mutex<W>, msg: SipMessage) -> Result<()>

@@ -10,6 +10,7 @@ use crate::{
     Result,
 };
 use std::{fmt, sync::Arc};
+use core::time::Duration;
 use tokio::net::TcpStream;
 use tracing::debug;
 
@@ -111,9 +112,11 @@ impl StreamConnection for TcpConnection {
         self.inner.send_raw(data).await
     }
 
-    async fn serve_loop(&self, sender: TransportSender) -> Result<()> {
+    async fn serve_loop(&self, sender: TransportSender, idle_timeout: Duration) -> Result<()> {
         let sip_connection = SipConnection::Tcp(self.clone());
-        self.inner.serve_loop(sender, sip_connection).await
+        self.inner
+            .serve_loop(sender, sip_connection, idle_timeout)
+            .await
     }
 
     async fn close(&self) -> Result<()> {

@@ -183,7 +183,8 @@ async fn test_websocket_parse_failure_warns_without_the_message() -> crate::Resu
     });
     let remote = SipAddr::new(crate::sip::transport::Transport::Ws, addr.into());
     let conn = WebSocketConnection::connect(&remote, None).await?;
-    conn.serve_loop(unbounded_channel().0).await?;
+    conn.serve_loop(unbounded_channel().0, core::time::Duration::ZERO)
+        .await?;
 
     let warns = capture.lines(Level::WARN, "Error parsing SIP message");
     assert_eq!(warns.len(), 1, "{warns:?}");

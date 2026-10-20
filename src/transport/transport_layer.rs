@@ -19,8 +19,17 @@ use crate::transaction::key::TransactionKey;
 use crate::transport::connection::TransportReceiver;
 use crate::{transport::TransportEvent, Result};
 use async_trait::async_trait;
+use core::sync::atomic::{AtomicU32, Ordering};
 use core::net::IpAddr;
 use tracing::{debug, info, warn};
+
+/// Default idle timeout applied to stream (TCP/TLS/WS) connections when the
+/// application does not configure one. A stream connection that receives no
+/// bytes (SIP message, keepalive, WS ping) for this long is closed and
+/// retired: half-open sockets (client vanished without FIN — network drop,
+/// NAT rebinding, sleep) otherwise pin their `serve_loop` forever and leak
+/// the connection table entry.
+pub const DEFAULT_STREAM_IDLE_TIMEOUT_MS: u32 = 300_000;
 
 #[async_trait]
 pub trait DomainResolver: Send + Sync {
@@ -148,6 +157,10 @@ pub struct TransportLayerInner {
     tls_config: RwLock<Option<TlsConfig>>,
     #[cfg(all(feature = "platform-tokio", feature = "websocket"))]
     ws_path: RwLock<Option<String>>,
+    /// Idle timeout for stream (TCP/TLS/WS) connections, in **milliseconds**.
+    /// `0` disables the timeout (legacy behavior). See
+    /// [`DEFAULT_STREAM_IDLE_TIMEOUT_MS`].
+    stream_idle_timeout_ms: AtomicU32,
 }
 pub(crate) type TransportLayerInnerRef = Arc<TransportLayerInner>;
 
@@ -175,6 +188,7 @@ impl TransportLayer {
             tls_config: RwLock::new(None),
             #[cfg(all(feature = "platform-tokio", feature = "websocket"))]
             ws_path: RwLock::new(None),
+            stream_idle_timeout_ms: AtomicU32::new(DEFAULT_STREAM_IDLE_TIMEOUT_MS),
         };
         Self {
             outbound: None,
@@ -273,6 +287,16 @@ impl TransportLayer {
         addrs
     }
 
+    /// Number of live tracked stream/outbound connections (listeners
+    /// excluded): the sum of every remote-address slot in the connection
+    /// table. Cheap snapshot for health/metrics endpoints — unlike
+    /// [`TransportLayer::get_addrs`] it clones nothing.
+    pub fn connections_count(&self) -> usize {
+        self.inner
+            .connections
+            .with(|m| m.values().map(Vec::len).sum())
+    }
+
     /// Set an async whitelist callback invoked on incoming packets/connections.
     pub fn set_whitelist<T>(&self, whitelist: T)
     where
@@ -310,6 +334,23 @@ impl TransportLayer {
     pub fn clear_ws_path(&self) {
         self.inner.set_ws_path(None);
     }
+
+    /// Set the idle timeout applied to stream (TCP/TLS/WS) connections.
+    ///
+    /// A stream connection that receives no bytes for this long is closed and
+    /// retired from the connection table, reclaiming half-open sockets whose
+    /// peer vanished without a FIN. `Duration::ZERO` disables the timeout
+    /// (legacy behavior). Defaults to [`DEFAULT_STREAM_IDLE_TIMEOUT_MS`]
+    /// (300 s). Sub-second values are honored (useful for tests).
+    pub fn set_stream_idle_timeout(&self, timeout: Duration) {
+        let ms = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX);
+        self.inner.set_stream_idle_timeout_ms(ms);
+    }
+
+    /// Current stream idle timeout (`Duration::ZERO` = disabled).
+    pub fn stream_idle_timeout(&self) -> Duration {
+        self.inner.stream_idle_timeout()
+    }
 }
 
 impl TransportLayerInner {
@@ -338,6 +379,19 @@ impl TransportLayerInner {
     #[cfg(all(feature = "platform-tokio", feature = "websocket"))]
     fn set_ws_path(&self, path: Option<String>) {
         *self.ws_path.write() = path;
+    }
+
+    /// Set the stream idle timeout in milliseconds (0 disables it).
+    /// Millisecond granularity: sub-second timeouts are meaningful for tests
+    /// and aggressive deployments; `as_secs()` truncation would silently turn
+    /// them into "disabled".
+    fn set_stream_idle_timeout_ms(&self, ms: u32) {
+        self.stream_idle_timeout_ms.store(ms, Ordering::Relaxed);
+    }
+
+    /// Current stream idle timeout.
+    fn stream_idle_timeout(&self) -> Duration {
+        Duration::from_millis(self.stream_idle_timeout_ms.load(Ordering::Relaxed) as u64)
     }
 
     #[cfg(all(feature = "platform-tokio", feature = "websocket"))]
@@ -574,6 +628,7 @@ impl TransportLayerInner {
     pub fn serve_connection(&self, transport: SipConnection) {
         let sub_token = self.cancel_token.child_token();
         let sender_clone = self.transport_tx.clone();
+        let idle_timeout = self.stream_idle_timeout();
         let remote_addr = transport
             .get_remote_addr()
             .map(|addr| addr.to_string())
@@ -592,8 +647,11 @@ impl TransportLayerInner {
             }
             let transport2 = transport.clone();
             let mut cancel_f = core::pin::pin!(sub_token.cancelled());
-            let mut serve_f =
-                core::pin::pin!(async { transport2.serve_loop(sender_clone.clone()).await });
+            let mut serve_f = core::pin::pin!(async {
+                transport2
+                    .serve_loop(sender_clone.clone(), idle_timeout)
+                    .await
+            });
             match crate::platform::select::select2(&mut cancel_f, &mut serve_f).await {
                 crate::platform::select::Either::A(()) => {}
                 crate::platform::select::Either::B(result) => {

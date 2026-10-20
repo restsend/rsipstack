@@ -12,6 +12,7 @@ use crate::{
     Result,
 };
 use futures_util::{SinkExt, StreamExt};
+use core::time::Duration;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::{fmt, net::SocketAddr, sync::Arc};
 use tokio::{net::TcpListener, sync::Mutex};
@@ -313,7 +314,7 @@ impl StreamConnection for WebSocketConnection {
         Ok(())
     }
 
-    async fn serve_loop(&self, sender: TransportSender) -> Result<()> {
+    async fn serve_loop(&self, sender: TransportSender, idle_timeout: Duration) -> Result<()> {
         let sip_connection = SipConnection::WebSocket(self.clone());
 
         let remote_addr = self.inner.remote_addr.clone();
@@ -324,7 +325,25 @@ impl StreamConnection for WebSocketConnection {
                 return Ok(());
             }
         };
-        while let Some(msg) = ws_read.next().await {
+        loop {
+            let msg_opt = if idle_timeout.is_zero() {
+                ws_read.next().await
+            } else {
+                match tokio::time::timeout(idle_timeout, ws_read.next()).await {
+                    Ok(msg_opt) => msg_opt,
+                    Err(_) => {
+                        warn!(
+                            src = %remote_addr,
+                            idle_secs = idle_timeout.as_secs(),
+                            "websocket idle timeout, closing connection"
+                        );
+                        break;
+                    }
+                }
+            };
+            let Some(msg) = msg_opt else {
+                break;
+            };
             match msg {
                 Ok(Message::Text(text)) => {
                     info!(src = %remote_addr, raw_message = ?text.as_str(), "websocket message received");

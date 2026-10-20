@@ -11,6 +11,7 @@ use crate::{error::Error, transport::transport_layer::TransportLayerInnerRef, Re
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
+use core::time::Duration;
 use rustls::client::danger::ServerCertVerifier;
 use rustls::crypto::CryptoProvider;
 use rustls::server::{ClientHello, ResolvesServerCert};
@@ -873,11 +874,15 @@ impl StreamConnection for TlsConnection {
         }
     }
 
-    async fn serve_loop(&self, sender: TransportSender) -> Result<()> {
+    async fn serve_loop(&self, sender: TransportSender, idle_timeout: Duration) -> Result<()> {
         let sip_connection = SipConnection::Tls(self.clone());
         match &self.inner {
-            TlsConnectionInner::Client(inner) => inner.serve_loop(sender, sip_connection).await,
-            TlsConnectionInner::Server(inner) => inner.serve_loop(sender, sip_connection).await,
+            TlsConnectionInner::Client(inner) => {
+                inner.serve_loop(sender, sip_connection, idle_timeout).await
+            }
+            TlsConnectionInner::Server(inner) => {
+                inner.serve_loop(sender, sip_connection, idle_timeout).await
+            }
         }
     }
 
