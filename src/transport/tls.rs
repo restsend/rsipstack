@@ -616,6 +616,15 @@ impl TlsConnection {
                     .add(cert)
                     .map_err(|e| Error::Error(format!("Failed to add CA certificate: {}", e)))?;
             }
+        } else {
+            // Library policy: no implicit trust anchors. Callers own the
+            // trust store (system roots / pinning / provisioned anchors) and
+            // pass it via `TlsConfig::ca_certs`; an empty store rejects
+            // public-CA peers as UnknownIssuer.
+            tracing::warn!(
+                "TLS: no CA certificates configured — a public-CA peer will \
+                 fail verification; pass TlsConfig::ca_certs"
+            );
         }
 
         // Build client config with optional mutual TLS
