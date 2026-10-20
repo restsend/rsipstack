@@ -1074,30 +1074,34 @@ impl DialogInner {
     /// Returns `Some(connection)` when all of the following hold:
     /// * the recorded connection uses a reliable transport (WS/WSS/TCP/TLS)
     ///   — UDP dialogs keep the classic destination-based routing,
-    /// * the dialog has no route set; with loose-routing proxies in path the
-    ///   request must follow the route set, not the raw transport flow.
+    /// * the flow is still alive.
     ///
     /// Applies to both dialog roles: a UAS dialog rides the flow the initial
     /// request arrived on; a UAC dialog rides the flow its initial INVITE
     /// was sent on (e.g. a proxy dialing a WebSocket callee).
+    ///
+    /// A route set does NOT defeat the affinity: a TLS/WSS flow-bound peer
+    /// (rustpbx among them) keeps its dialog state on the flow, so a BYE
+    /// routed off-flow via a UDP Record-Route hop comes back 481 and the
+    /// retransmissions burn Timer F. Reliable-transport flows are reused
+    /// whenever they exist; UDP-only dialogs are unaffected.
     fn resolve_affinity_connection(&self) -> Option<SipConnection> {
-        if !self.route_set.lock().is_empty() {
-            return None;
-        }
-        let conn = self.server_connection.lock().clone()?;
-        if !conn.is_reliable() {
-            return None;
-        }
-        // Skip flows whose transport already terminated (e.g. browser closed
-        // the WebSocket): dial-back via the recorded address is a better
-        // last resort than retransmitting into a dead socket until Timer B.
-        if let Some(token) = conn.cancel_token() {
-            if token.is_cancelled() {
-                debug!(id = %self.id.lock(), "affinity connection cancelled; falling back");
-                return None;
-            }
-        }
-        Some(conn)
+        let conn = self.server_connection.lock().clone();
+        let reason = match &conn {
+            None => "no-recorded-connection",
+            Some(c) if !c.is_reliable() => "connection-not-reliable",
+            Some(c) => match c.cancel_token() {
+                Some(token) if token.is_cancelled() => "connection-cancelled",
+                _ => return conn,
+            },
+        };
+        debug!(
+            id = %self.id.lock(),
+            has_route_set = !self.route_set.lock().is_empty(),
+            why = reason,
+            "affinity unavailable"
+        );
+        None
     }
 
     /// Test-visible wrapper around [`Self::resolve_affinity_connection`].

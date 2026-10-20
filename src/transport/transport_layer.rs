@@ -423,8 +423,8 @@ impl TransportLayerInner {
         key: Option<&TransactionKey>,
     ) -> Result<(SipConnection, SipAddr)> {
         let target = outbound.unwrap_or(destination);
-        #[cfg(all(feature = "platform-tokio", feature = "rustls"))]
-        // Capture the original domain name before DNS resolution for TLS SNI
+        // Capture the original domain name before DNS resolution: it is the
+        // TLS SNI / certificate identity (all backends, not just rustls).
         let original_domain = match &target.addr.host {
             Host::Domain(domain) => Some(domain.to_string()),
             _ => None,
@@ -445,6 +445,21 @@ impl TransportLayerInner {
             if let Some(transport) = connections.last() {
                 return Ok((transport.clone(), target.clone()));
             }
+        }
+        // TLS client dial for embedded backends: no tokio, no rustls — the
+        // `platform::tls` connector seam owns the TCP dial and the handshake.
+        #[cfg(not(all(feature = "platform-tokio", feature = "rustls")))]
+        if let Some(Transport::Tls) = target.r#type {
+            let sip_connection = SipConnection::TlsPlatform(
+                crate::transport::tls_platform::PlatformTlsConnection::connect(
+                    target,
+                    original_domain.as_deref(),
+                    Some(self.cancel_token.child_token()),
+                )
+                .await?,
+            );
+            self.add_connection(sip_connection.clone());
+            return Ok((sip_connection, target.clone()));
         }
         #[cfg(feature = "platform-tokio")]
         if let Some(Transport::Tcp | Transport::Tls | Transport::Ws | Transport::Wss) =
@@ -507,8 +522,14 @@ impl TransportLayerInner {
                 return Ok((transport.clone(), target.clone()));
             }
         }
-        if let Some(transport) = first_udp {
-            return Ok((transport, target.clone()));
+        // A UDP listener can only carry UDP (or transport-less) targets:
+        // never downgrade a reliable-transport target to the UDP listener —
+        // that silently sent `sips:` INVITEs as plaintext datagrams to a TLS
+        // port (5061).
+        if matches!(target.r#type, None | Some(Transport::Udp)) {
+            if let Some(transport) = first_udp {
+                return Ok((transport, target.clone()));
+            }
         }
         Err(crate::Error::TransportLayerError(
             format!("unsupported transport type: {:?}", target.r#type),

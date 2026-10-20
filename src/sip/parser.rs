@@ -29,6 +29,12 @@ pub fn parse_message(data: &[u8]) -> Result<SipMessage, Error> {
 
         if line.as_bytes()[0] == b' ' || line.as_bytes()[0] == b'\t' {
             if let Some((_, ref mut val)) = pending {
+                if val.len() > 4096 {
+                    tracing::warn!(
+                        len = val.len(),
+                        "parser: folded header value exceeds 4 KiB — likely misframed stream"
+                    );
+                }
                 val.push(' ');
                 val.push_str(line.trim());
             }

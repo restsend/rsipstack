@@ -127,11 +127,20 @@ impl Future for Cancelled<'_> {
         // still wakes us because cancel() flips the flag first and drains
         // the list afterwards — if the list was drained before our push,
         // the very next poll re-checks `is_cancelled` and completes.
-        let waker = cx.waker().clone();
+        //
+        // Registration is idempotent per task: a future polled over and over
+        // (select loops re-poll `cancelled()` on every tick) must not grow
+        // the list per poll — on a small-heap target that is a certain OOM
+        // (524k wakers = 4 MiB). `will_wake` keeps one entry per distinct
+        // task waker.
+        let waker = cx.waker();
         let mut node = Some(Arc::clone(inner));
         while let Some(n) = node {
             critical_section::with(|cs| {
-                n.wakers.borrow_ref_mut(cs).push(waker.clone());
+                let mut list = n.wakers.borrow_ref_mut(cs);
+                if !list.iter().any(|w| w.will_wake(waker)) {
+                    list.push(waker.clone());
+                }
             });
             node = n.parent.as_ref().and_then(Weak::upgrade);
         }

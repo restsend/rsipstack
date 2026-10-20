@@ -161,6 +161,10 @@ pub const MAX_UDP_BUF_SIZE: usize = 8192;
 pub enum SipConnection {
     Channel(ChannelConnection),
     Udp(UdpConnection),
+    /// TLS client dialled through the `platform::tls` connector seam (embedded
+    /// backends: embassy-net + embedded-tls etc.). Always compiled; host builds
+    /// use [`SipConnection::Tls`] instead.
+    TlsPlatform(crate::transport::tls_platform::PlatformTlsConnection),
     #[cfg(feature = "platform-tokio")]
     Tcp(TcpConnection),
     #[cfg(feature = "platform-tokio")]
@@ -183,6 +187,7 @@ impl SipConnection {
     pub fn transport(&self) -> Transport {
         match self {
             SipConnection::Udp(_) => Transport::Udp,
+            SipConnection::TlsPlatform(_) => Transport::Tls,
             #[cfg(feature = "platform-tokio")]
             SipConnection::Tcp(_) | SipConnection::TcpListener(_) => Transport::Tcp,
             #[cfg(feature = "rustls")]
@@ -205,6 +210,7 @@ impl SipConnection {
     /// Whether this is a connection-oriented stream (TCP, TLS or WebSocket).
     pub(crate) fn is_stream(&self) -> bool {
         match self {
+            SipConnection::TlsPlatform(_) => true,
             #[cfg(feature = "platform-tokio")]
             SipConnection::Tcp(_) => true,
             #[cfg(all(feature = "platform-tokio", feature = "rustls"))]
@@ -219,6 +225,7 @@ impl SipConnection {
     /// WebSocket) connection. Always false for other connection types.
     pub(crate) fn is_same_stream(&self, other: &SipConnection) -> bool {
         match (self, other) {
+            (SipConnection::TlsPlatform(a), SipConnection::TlsPlatform(b)) => a.ptr_eq(b),
             #[cfg(feature = "platform-tokio")]
             (SipConnection::Tcp(a), SipConnection::Tcp(b)) => {
                 std::sync::Arc::ptr_eq(&a.inner, &b.inner)
@@ -237,6 +244,7 @@ impl SipConnection {
         match self {
             SipConnection::Channel(transport) => transport.cancel_token(),
             SipConnection::Udp(transport) => transport.cancel_token(),
+            SipConnection::TlsPlatform(transport) => transport.cancel_token(),
             #[cfg(feature = "platform-tokio")]
             SipConnection::Tcp(transport) => transport.cancel_token(),
             #[cfg(feature = "rustls")]
@@ -255,6 +263,7 @@ impl SipConnection {
         match self {
             SipConnection::Channel(transport) => transport.get_addr(),
             SipConnection::Udp(transport) => transport.get_addr(),
+            SipConnection::TlsPlatform(transport) => transport.get_addr(),
             #[cfg(feature = "platform-tokio")]
             SipConnection::Tcp(transport) => transport.get_addr(),
             #[cfg(feature = "platform-tokio")]
@@ -278,6 +287,7 @@ impl SipConnection {
         match self {
             SipConnection::Channel(transport) => transport.get_remote_addr(),
             SipConnection::Udp(transport) => transport.get_remote_addr(),
+            SipConnection::TlsPlatform(transport) => Some(transport.get_remote_addr()),
             #[cfg(feature = "platform-tokio")]
             SipConnection::Tcp(transport) => Some(transport.get_remote_addr()),
             #[cfg(feature = "platform-tokio")]
@@ -301,6 +311,7 @@ impl SipConnection {
         match self {
             SipConnection::Channel(transport) => transport.send(msg).await,
             SipConnection::Udp(transport) => transport.send(msg, destination).await,
+            SipConnection::TlsPlatform(transport) => transport.send_message(msg).await,
             #[cfg(feature = "platform-tokio")]
             SipConnection::Tcp(transport) => transport.send_message(msg).await,
             #[cfg(feature = "platform-tokio")]
@@ -330,6 +341,7 @@ impl SipConnection {
         match self {
             SipConnection::Channel(transport) => transport.serve_loop(sender).await,
             SipConnection::Udp(transport) => transport.serve_loop(sender).await,
+            SipConnection::TlsPlatform(transport) => transport.serve_loop(sender).await,
             #[cfg(feature = "platform-tokio")]
             SipConnection::Tcp(transport) => transport.serve_loop(sender).await,
             #[cfg(feature = "platform-tokio")]
@@ -360,6 +372,7 @@ impl SipConnection {
         match self {
             SipConnection::Channel(transport) => transport.close().await,
             SipConnection::Udp(_) => Ok(()), // UDP has no connection state
+            SipConnection::TlsPlatform(transport) => transport.close().await,
             #[cfg(feature = "platform-tokio")]
             SipConnection::Tcp(transport) => transport.close().await,
             #[cfg(feature = "platform-tokio")]
@@ -539,6 +552,7 @@ impl core::fmt::Display for SipConnection {
         match self {
             SipConnection::Channel(t) => write!(f, "{}", t),
             SipConnection::Udp(t) => write!(f, "UDP {}", t),
+            SipConnection::TlsPlatform(t) => write!(f, "{}", t),
             #[cfg(feature = "platform-tokio")]
             SipConnection::Tcp(t) => write!(f, "TCP {}", t),
             #[cfg(feature = "platform-tokio")]

@@ -428,15 +428,16 @@ async fn test_affinity_requires_recorded_reliable_server_connection() {
     inner.set_server_connection(Some(flow.sip_conn));
     assert!(inner.test_resolve_affinity_connection().is_some());
 
-    // With a route set present (loose-routing proxy in path), affinity must
-    // yield to route-set based resolution.
+    // With a route set present the flow STILL wins for reliable transports:
+    // flow-bound peers keep their dialog state on the connection, and a
+    // route-set-routed BYE over a UDP hop comes back 481 (burning Timer F).
     inner
         .route_set
         .lock()
         .push(Route::from("sip:proxy.example.com;lr"));
     assert!(
-        inner.test_resolve_affinity_connection().is_none(),
-        "route set must take precedence over raw flow affinity"
+        inner.test_resolve_affinity_connection().is_some(),
+        "reliable flow affinity must win over route-set resolution"
     );
 }
 
