@@ -289,6 +289,8 @@ impl Transaction {
             self.connection.replace(connection.clone());
             self.destination.replace(resolved_addr.clone());
         }
+        // Failed lookups stay non-fatal (DNS failure → Calling + retry;
+        // see test_before_send).
 
         // RFC 5626 flow affinity: when the request is bound to an existing
         // reliable connection (e.g. a WebSocket/WSS flow reused for in-dialog
@@ -370,17 +372,27 @@ impl Transaction {
     /// Priority: self.destination (pre-set by dialog) >
     /// Request::destination() (first Route or request URI) + locator fallback.
     async fn resolve_target_uri(&self) -> Result<SipAddr> {
-        match &self.destination {
-            Some(addr) => Ok(addr.clone()),
+        let mut resolved = match &self.destination {
+            Some(addr) => addr.clone(),
             None => {
                 let dest = self.original.destination();
                 if let Some(locator) = self.endpoint_inner.locator.as_ref() {
-                    locator.locate(&dest).await
+                    locator.locate(&dest).await?
                 } else {
-                    SipAddr::try_from(&dest)
+                    SipAddr::try_from(&dest)?
                 }
             }
+        };
+        // `sips:` implies TLS even without `;transport=tls` (RFC 3261
+        // §26.2.2); an explicit transport (WS/channel) is preserved.
+        if resolved.r#type.is_none() && self.original.uri.scheme == Some(crate::sip::Scheme::Sips) {
+            resolved.r#type = Some(crate::sip::Transport::Tls);
         }
+        // SIPS default port 5061 (RFC 3261 §26.2.3).
+        if resolved.r#type == Some(crate::sip::Transport::Tls) && resolved.addr.port.is_none() {
+            resolved.addr.port = Some(5061.into());
+        }
+        Ok(resolved)
     }
 
     pub async fn reply_with(
@@ -1248,7 +1260,7 @@ impl Transaction {
                     (TransactionType::ServerInvite, TransactionTimer::TimerG(key, duration)) => {
                         // retransmit the 2xx (documented Timer G deviation,
                         // doubling up to T2 — RFC 3261 §13.3.1.4)
-                        self.retransmit_last_response(key, &duration).await?;
+                        self.retransmit_last_response(key, duration).await?;
                     }
                     (
                         TransactionType::ClientNonInvite
