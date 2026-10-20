@@ -8,6 +8,12 @@
 //! | `platform-tokio` (default, implies `std`) | tokio + parking_lot | server/desktop |
 //! | `platform-embassy` | embassy-time / embassy-sync / critical-section | embedded (ESP32-S3) |
 //!
+//! The backends are mutually exclusive: every embassy block is gated on
+//! `all(feature = "platform-embassy", not(feature = "platform-tokio"))`, so
+//! when both features are enabled (e.g. `--all-features`) the tokio backend
+//! wins. Embedded builds use
+//! `--no-default-features --features platform-embassy`.
+//!
 //! Deliberate differences:
 //! - `spawn` on the embassy backend goes through an **injected function
 //!   pointer** (`set_spawn_fn`), implemented by the application (rtcembed)
@@ -25,7 +31,7 @@
 use core::future::Future;
 use core::time::Duration;
 
-#[cfg(feature = "platform-embassy")]
+#[cfg(all(feature = "platform-embassy", not(feature = "platform-tokio")))]
 pub mod mpsc;
 #[cfg(feature = "platform-tokio")]
 pub use tokio::sync::mpsc;
@@ -94,7 +100,7 @@ where
 // [`set_spawn_fn`] after executor init).
 // CancellationToken keeps using tokio-util's `sync` feature — it does not
 // depend on the tokio runtime.
-#[cfg(feature = "platform-embassy")]
+#[cfg(all(feature = "platform-embassy", not(feature = "platform-tokio")))]
 pub mod embassy_impl {
     use alloc::boxed::Box;
     use alloc::sync::Arc;
@@ -161,21 +167,21 @@ pub mod embassy_impl {
     }
 }
 
-#[cfg(feature = "platform-embassy")]
+#[cfg(all(feature = "platform-embassy", not(feature = "platform-tokio")))]
 pub use embassy_impl::{set_spawn_fn, Notify as EmbassyNotify};
-#[cfg(feature = "platform-embassy")]
+#[cfg(all(feature = "platform-embassy", not(feature = "platform-tokio")))]
 pub use mpsc::bounded::{Receiver as BoundedReceiver, Sender as BoundedSender};
-#[cfg(feature = "platform-embassy")]
+#[cfg(all(feature = "platform-embassy", not(feature = "platform-tokio")))]
 pub use EmbassyNotify as Notify;
 
 /// Instant wrapper: unifies the `+ core::time::Duration` and
 /// `checked_duration_since` call shapes (std backend =
 /// `std::time::Instant`; embassy = `embassy_time::Instant`).
-#[cfg(feature = "platform-embassy")]
+#[cfg(all(feature = "platform-embassy", not(feature = "platform-tokio")))]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Instant(embassy_time::Instant);
 
-#[cfg(feature = "platform-embassy")]
+#[cfg(all(feature = "platform-embassy", not(feature = "platform-tokio")))]
 impl Instant {
     pub fn now() -> Self {
         Self(embassy_time::Instant::now())
@@ -192,7 +198,7 @@ impl Instant {
     }
 }
 
-#[cfg(feature = "platform-embassy")]
+#[cfg(all(feature = "platform-embassy", not(feature = "platform-tokio")))]
 impl core::ops::Add<Duration> for Instant {
     type Output = Instant;
     fn add(self, rhs: Duration) -> Instant {
@@ -203,7 +209,7 @@ impl core::ops::Add<Duration> for Instant {
     }
 }
 
-#[cfg(feature = "platform-embassy")]
+#[cfg(all(feature = "platform-embassy", not(feature = "platform-tokio")))]
 pub async fn sleep(dur: Duration) {
     embassy_time::Timer::after(embassy_time::Duration::from_micros(
         dur.as_micros().min(u64::MAX as u128) as u64,
@@ -213,7 +219,7 @@ pub async fn sleep(dur: Duration) {
 
 /// Applies a timeout to a future. `Err` = timed out (callers only
 /// distinguish success from timeout).
-#[cfg(feature = "platform-embassy")]
+#[cfg(all(feature = "platform-embassy", not(feature = "platform-tokio")))]
 pub async fn timeout<T>(
     dur: Duration,
     future: impl Future<Output = T>,
@@ -230,7 +236,7 @@ pub async fn timeout<T>(
 /// The embassy backend cannot provide a `JoinHandle` for an arbitrary
 /// future — call sites that need the result use [`spawn_with_result`]
 /// (a capacity-1 result channel + a Future-shaped handle).
-#[cfg(feature = "platform-embassy")]
+#[cfg(all(feature = "platform-embassy", not(feature = "platform-tokio")))]
 pub fn spawn<F>(future: F)
 where
     F: Future<Output = ()> + Send + 'static,
@@ -241,12 +247,12 @@ where
 
 /// embassy backend JoinHandle: receiving end of a capacity-1 result
 /// channel (impl Future).
-#[cfg(feature = "platform-embassy")]
+#[cfg(all(feature = "platform-embassy", not(feature = "platform-tokio")))]
 pub struct JoinHandle<T> {
     rx: crate::platform::mpsc::BoundedReceiver<T>,
 }
 
-#[cfg(feature = "platform-embassy")]
+#[cfg(all(feature = "platform-embassy", not(feature = "platform-tokio")))]
 impl<T: Send + 'static> Future for JoinHandle<T> {
     type Output = T;
     fn poll(
@@ -262,7 +268,7 @@ impl<T: Send + 'static> Future for JoinHandle<T> {
 }
 
 /// Spawns a task that resolves through the returned `JoinHandle`.
-#[cfg(feature = "platform-embassy")]
+#[cfg(all(feature = "platform-embassy", not(feature = "platform-tokio")))]
 pub fn spawn_with_result<F, T>(future: F) -> JoinHandle<T>
 where
     F: Future<Output = T> + Send + 'static,
@@ -287,7 +293,7 @@ pub mod sync;
 
 // ── CancellationToken for the embassy backend (tokio-util `sync` does
 // not depend on the tokio runtime) ──
-#[cfg(feature = "platform-embassy")]
+#[cfg(all(feature = "platform-embassy", not(feature = "platform-tokio")))]
 pub mod token;
-#[cfg(feature = "platform-embassy")]
+#[cfg(all(feature = "platform-embassy", not(feature = "platform-tokio")))]
 pub use token::CancellationToken;

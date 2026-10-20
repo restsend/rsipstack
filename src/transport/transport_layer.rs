@@ -135,7 +135,11 @@ impl DomainResolver for DefaultDomainResolver {
 pub struct TransportLayerInner {
     pub(crate) cancel_token: CancellationToken,
     listens: Arc<RwLock<Vec<SipConnection>>>, // listening transports
-    connections: Arc<RwMap<SipAddr, SipConnection>>, // outbound/inbound connections
+    // outbound/inbound connections, keyed by remote address. A single remote
+    // ip:port may own SEVERAL live stream connections (NAT port reuse / shared
+    // office egress), so the value is a list — never fold: overwriting here is
+    // what silently redirected calls to the wrong user's socket.
+    connections: Arc<RwMap<SipAddr, Vec<SipConnection>>>,
     pub(crate) transport_tx: TransportSender,
     pub(crate) transport_rx: Mutex<Option<TransportReceiver>>,
     pub domain_resolver: Box<dyn DomainResolver>,
@@ -202,6 +206,22 @@ impl TransportLayer {
         self.inner.add_connection(connection);
     }
 
+    /// Remove a specific stream connection **by identity** (pointer equality of
+    /// the underlying stream), cancelling its flow-affinity token.
+    ///
+    /// Unlike [`TransportLayer::del_connection`], this never touches sibling
+    /// connections cached for the same remote address: several endpoints can
+    /// legitimately share one public `ip:port` behind NAT, and tearing the
+    /// address down wholesale evicts the wrong user's channel.
+    pub fn remove_connection(&self, connection: &SipConnection) {
+        self.retire_connection(connection);
+    }
+
+    /// Remove every cached connection for `addr`.
+    #[deprecated(
+        since = "0.7.5",
+        note = "address-scoped removal evicts sibling connections sharing the same remote ip:port; use remove_connection"
+    )]
     pub fn del_connection(&self, addr: &SipAddr) {
         self.inner.del_connection(addr)
     }
@@ -246,7 +266,7 @@ impl TransportLayer {
             .map(|t| t.get_addr().to_owned())
             .collect();
         self.inner.connections.with(|m| {
-            for conn in m.values() {
+            for conn in m.values().flatten() {
                 addrs.push(conn.get_addr().clone());
             }
         });
@@ -336,7 +356,55 @@ impl TransportLayerInner {
     pub(super) fn add_connection(&self, connection: SipConnection) {
         if let Some(remote_addr) = connection.get_remote_addr().cloned() {
             debug!(%remote_addr, "add_connection");
-            self.connections.insert(remote_addr, connection.clone());
+            if !connection.is_stream() {
+                // Connectionless transports keep a single cached handle per peer.
+                self.connections
+                    .insert(remote_addr, vec![connection.clone()]);
+            } else {
+                let existing_locals = self.connections.with(|cached| {
+                    cached
+                        .get(&remote_addr)
+                        .map(|slots| {
+                            slots
+                                .iter()
+                                .filter(|c| c.is_stream() && !c.is_same_stream(&connection))
+                                .map(|c| c.get_addr().to_string())
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default()
+                });
+                let existing = existing_locals.len();
+                let duplicate = self.connections.with(|cached| {
+                    cached
+                        .get(&remote_addr)
+                        .is_some_and(|slots| slots.iter().any(|c| c.is_same_stream(&connection)))
+                });
+                if duplicate {
+                    // Same object re-registered: keep the list deduplicated so
+                    // identity-based removal can never double-count entries.
+                    debug!(%remote_addr, "add_connection: stream already cached; skipping duplicate entry");
+                } else {
+                    self.connections.with_mut(|cached| {
+                        cached
+                            .entry(remote_addr.clone())
+                            .or_default()
+                            .push(connection.clone())
+                    });
+                    if existing > 0 {
+                        // Multiple live stream connections behind one remote
+                        // ip:port: NAT port reuse or a shared office egress.
+                        // Keep both — the newest registration wins for outbound
+                        // delivery, and the conflict is made visible here.
+                        warn!(
+                            %remote_addr,
+                            existing,
+                            existing_locals = ?existing_locals,
+                            new_local = %connection.get_addr(),
+                            "connection conflict: multiple stream connections share one remote address"
+                        );
+                    }
+                }
+            }
             self.serve_connection(connection);
         } else {
             warn!(addr = %connection.get_addr(), "connection has no remote address");
@@ -369,8 +437,14 @@ impl TransportLayerInner {
         };
 
         debug!(?key, src = %destination, %target, "lookup target");
-        if let Some(transport) = self.connections.get(target) {
-            return Ok((transport.clone(), target.clone()));
+        if let Some(connections) = self.connections.get(target) {
+            // Newest wins: entries are appended on add, so the last slot is the
+            // most recent connection for this peer. Several peers may share one
+            // remote ip:port behind NAT; without an application-level channel
+            // hint the most recent registration is the best delivery target.
+            if let Some(transport) = connections.last() {
+                return Ok((transport.clone(), target.clone()));
+            }
         }
         #[cfg(feature = "platform-tokio")]
         if let Some(Transport::Tcp | Transport::Tls | Transport::Ws | Transport::Wss) =
@@ -515,7 +589,7 @@ impl TransportLayerInner {
         });
     }
 }
-fn retire_connection(connections: &RwMap<SipAddr, SipConnection>, connection: &SipConnection) {
+fn retire_connection(connections: &RwMap<SipAddr, Vec<SipConnection>>, connection: &SipConnection) {
     if !connection.is_stream() {
         return;
     }
@@ -526,10 +600,19 @@ fn retire_connection(connections: &RwMap<SipAddr, SipConnection>, connection: &S
     }
     if let Some(remote_addr) = connection.get_remote_addr() {
         let removed = connections.with_mut(|cached| {
-            let same = cached
-                .get(remote_addr)
-                .is_some_and(|c| c.is_same_stream(connection));
-            same && cached.remove(remote_addr).is_some()
+            let mut removed = false;
+            if let Some(slots) = cached.get_mut(remote_addr) {
+                let before = slots.len();
+                // Identity-based removal: only the dying connection is taken
+                // out. Sibling connections sharing the same remote ip:port
+                // (other users behind one NAT address) must survive.
+                slots.retain(|c| !c.is_same_stream(connection));
+                removed = before != slots.len();
+                if slots.is_empty() {
+                    cached.remove(remote_addr);
+                }
+            }
+            removed
         });
         if removed {
             debug!(%remote_addr, "retire connection");
