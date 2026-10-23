@@ -93,6 +93,16 @@ impl ChannelConnection {
         Some(&self.inner.addr)
     }
 
+    /// Whether `self` and `other` wrap the same in-memory channel (pointer
+    /// equality of the shared inner state). Used by identity-based connection
+    /// removal (`TransportLayer::remove_connection`) so that sibling
+    /// connections sharing one remote address — other agents behind the same
+    /// NAT ip:port — survive a targeted retire, exactly like stream
+    /// transports.
+    pub(crate) fn ptr_eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
     pub async fn serve_loop(&self, sender: TransportSender) -> Result<()> {
         #[cfg_attr(not(feature = "platform-tokio"), allow(unused_mut))]
         let mut incoming = match self.inner.clone().incoming.lock().take() {

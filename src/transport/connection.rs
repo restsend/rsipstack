@@ -226,6 +226,7 @@ impl SipConnection {
     /// WebSocket) connection. Always false for other connection types.
     pub(crate) fn is_same_stream(&self, other: &SipConnection) -> bool {
         match (self, other) {
+            (SipConnection::Channel(a), SipConnection::Channel(b)) => a.ptr_eq(b),
             (SipConnection::TlsPlatform(a), SipConnection::TlsPlatform(b)) => a.ptr_eq(b),
             #[cfg(feature = "platform-tokio")]
             (SipConnection::Tcp(a), SipConnection::Tcp(b)) => {

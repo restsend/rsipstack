@@ -669,7 +669,11 @@ impl TransportLayerInner {
     }
 }
 fn retire_connection(connections: &RwMap<SipAddr, Vec<SipConnection>>, connection: &SipConnection) {
-    if !connection.is_stream() {
+    // Identity-based removal applies to stream transports (TCP/TLS/WS) and
+    // in-memory Channel bridges (e.g. WebSocket sessions bridged by a proxy
+    // host) alike; connectionless UDP cache entries are managed
+    // per-remote-address by lookup and are never retired here.
+    if !connection.is_stream() && !matches!(connection, SipConnection::Channel(_)) {
         return;
     }
     // The token is the connection's own: cancelling it marks the flow as
