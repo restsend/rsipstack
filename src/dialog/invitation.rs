@@ -136,6 +136,11 @@ pub struct InviteOption {
     pub destination: Option<SipAddr>,
     pub content_type: Option<String>,
     pub offer: Option<Vec<u8>>,
+    /// Local Contact. On stream transports its host and port are normally
+    /// replaced with the outgoing connection's local address (and the scheme
+    /// becomes `sips` over TLS). A Contact that already carries a `transport`
+    /// parameter is treated as deliberately built by the caller, for example
+    /// from the address a registrar reported behind NAT, and is sent unchanged.
     pub contact: crate::sip::Uri,
     pub credential: Option<Credential>,
     pub headers: Option<Vec<crate::sip::Header>>,
@@ -421,7 +426,17 @@ impl DialogLayer {
             request.headers.push(route.clone().into());
         }
 
-        let contact = if let Some(ref addr) = transport_addr {
+        // A Contact that names its transport was built deliberately by the
+        // caller (e.g. with the public address learned from a REGISTER
+        // response behind NAT); keep it rather than rewriting it to the local
+        // socket address.
+        let caller_built_contact = opt
+            .contact
+            .params
+            .iter()
+            .any(|p| matches!(p, crate::sip::Param::Transport(_)));
+        let contact = if let Some(addr) = transport_addr.as_ref().filter(|_| !caller_built_contact)
+        {
             let mut uri = opt.contact.clone();
             uri.host_with_port = addr.addr.clone();
             if !uri
