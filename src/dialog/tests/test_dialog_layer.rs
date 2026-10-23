@@ -639,6 +639,54 @@ async fn test_make_invite_request_with_tls_transport_uses_sips_scheme() -> crate
     Ok(())
 }
 
+#[cfg(feature = "rustls")]
+#[tokio::test]
+async fn test_make_invite_request_keeps_caller_built_contact() -> crate::Result<()> {
+    let token = CancellationToken::new();
+    let tl = TransportLayer::new(token.child_token());
+
+    let tls_addr = "192.168.1.10:5061".parse()?;
+    let tls_listener = TlsListenerConnection::new(tls_addr, None, TlsConfig::default()).await?;
+    tl.add_transport(crate::transport::SipConnection::TlsListener(tls_listener));
+
+    let endpoint = EndpointBuilder::new()
+        .with_user_agent("rsipstack-test")
+        .with_transport_layer(tl)
+        .build();
+    let dialog_layer = DialogLayer::new(endpoint.inner.clone());
+
+    let destination = SipAddr {
+        r#type: Some(Transport::Tls),
+        addr: HostWithPort {
+            host: crate::sip::Host::IpAddr(std::net::IpAddr::V4(std::net::Ipv4Addr::new(
+                10, 0, 0, 1,
+            ))),
+            port: Some(5061.into()),
+        },
+    };
+
+    // A Contact built from the address a registrar reported behind NAT.
+    let public_contact = crate::sip::Uri::try_from("sip:alice@203.0.113.7:40000;transport=tls")?;
+    let opt = crate::dialog::invitation::InviteOption {
+        caller: crate::sip::Uri::try_from("sip:alice@example.com")?,
+        callee: crate::sip::Uri::try_from("sip:bob@example.com")?,
+        contact: public_contact.clone(),
+        destination: Some(destination),
+        ..Default::default()
+    };
+
+    let request = dialog_layer.make_invite_request(&opt)?;
+    let contact = request.contact_header()?.typed()?;
+
+    assert_eq!(
+        contact.uri, public_contact,
+        "a Contact with an explicit transport should be sent unchanged"
+    );
+    assert_eq!(contact.uri.scheme, Some(crate::sip::Scheme::Sip));
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_make_invite_request_preloads_service_route() -> crate::Result<()> {
     let token = CancellationToken::new();
