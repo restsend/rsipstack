@@ -222,7 +222,18 @@ impl Clone for ReloadableCertResolver {
     }
 }
 
-// TLS configuration
+/// TLS configuration.
+///
+/// TLS uses rustls's process-wide crypto provider. When the application links
+/// both the `ring` and `aws-lc-rs` backends (e.g. through another crate's
+/// rustls features), rustls cannot pick one and the first TLS connection
+/// panics; install one at startup, before creating any TLS transport:
+///
+/// ```ignore
+/// rustls::crypto::ring::default_provider()
+///     .install_default()
+///     .expect("install rustls crypto provider");
+/// ```
 #[derive(Clone, Debug, Default)]
 pub struct TlsConfig {
     // Server certificate in PEM format

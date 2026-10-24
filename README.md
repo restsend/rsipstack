@@ -156,6 +156,23 @@ transport_layer.add_transport(tcp_listener.into());
 To add TLS or WebSocket listeners, construct a `TlsListenerConnection` or
 `WebSocketListenerConnection` and register it with `transport_layer.add_transport(...)`.
 
+> **rustls crypto provider.** rsipstack's TLS uses rustls's process-wide crypto
+> provider and builds rustls with `ring`. If your application also links the
+> `aws-lc-rs` backend (for example through `reqwest`'s default rustls setup),
+> rustls cannot pick one on its own and the first TLS connection panics with
+> *"Could not automatically determine the process-level CryptoProvider"*.
+> Install a provider once at startup, before creating any TLS transport:
+>
+> ```rust
+> rustls::crypto::ring::default_provider()
+>     .install_default()
+>     .expect("install rustls crypto provider");
+> // or: rustls::crypto::aws_lc_rs::default_provider().install_default()
+> ```
+>
+> The installed provider is used for every rustls user in the process,
+> rsipstack included, so it is also where to restrict cipher suites.
+
 The raw `TransportEvent` stream is an internal API consumed by `Endpoint::serve`.
 To process incoming SIP messages, build an `Endpoint` around the transport layer and
 drive it with `endpoint.serve()` while consuming transactions via
