@@ -143,6 +143,9 @@ pub struct InviteOption {
     /// from the address a registrar reported behind NAT, and is sent unchanged.
     pub contact: crate::sip::Uri,
     pub credential: Option<Credential>,
+    /// Extra headers appended to the INVITE. A `Max-Forwards` or
+    /// `Content-Type` here replaces the one the stack would add, so it is
+    /// never sent twice; a `Content-Type` here wins over `content_type`.
     pub headers: Option<Vec<crate::sip::Header>>,
     pub support_prack: bool,
     pub call_id: Option<String>,
@@ -515,12 +518,12 @@ impl DialogLayer {
         // can't override default headers
         if let Some(headers) = opt.headers.as_ref() {
             for header in headers {
-                // only override if it is a "max-forwards" header
-                // so as not to duplicate it; this is important because
-                // some clients consider messages with duplicate "max-forwards"
+                // only override "max-forwards" and "content-type" headers
+                // so as not to duplicate them; this is important because
+                // some clients consider messages with duplicate single-valued
                 // headers as malformed and may silently ignore invites
                 match header {
-                    crate::sip::Header::MaxForwards(_) => {
+                    crate::sip::Header::MaxForwards(_) | crate::sip::Header::ContentType(_) => {
                         request.headers.unique_push(header.clone())
                     }
                     _ => request.headers.push(header.clone()),

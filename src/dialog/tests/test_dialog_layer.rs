@@ -732,6 +732,47 @@ async fn test_make_invite_request_preloads_service_route() -> crate::Result<()> 
 }
 
 #[tokio::test]
+async fn test_make_invite_request_caller_content_type_replaces_default() -> crate::Result<()> {
+    let token = CancellationToken::new();
+    let tl = TransportLayer::new(token.child_token());
+    let udp_conn = UdpConnection::create_connection("127.0.0.1:0".parse()?, None, None).await?;
+    tl.add_transport(crate::transport::SipConnection::Udp(udp_conn));
+
+    let endpoint = EndpointBuilder::new()
+        .with_user_agent("rsipstack-test")
+        .with_transport_layer(tl)
+        .build();
+    let dialog_layer = DialogLayer::new(endpoint.inner.clone());
+
+    let opt = crate::dialog::invitation::InviteOption {
+        caller: crate::sip::Uri::try_from("sip:alice@example.com")?,
+        callee: crate::sip::Uri::try_from("sip:bob@example.com")?,
+        contact: crate::sip::Uri::try_from("sip:alice@192.168.1.10:5060")?,
+        headers: Some(vec![ContentType::new("multipart/mixed;boundary=b1").into()]),
+        ..Default::default()
+    };
+
+    let request = dialog_layer.make_invite_request(&opt)?;
+
+    // One Content-Type, the caller's: a duplicate makes some servers drop
+    // the INVITE.
+    let content_types: Vec<_> = request
+        .headers
+        .iter()
+        .filter_map(|h| match h {
+            crate::sip::Header::ContentType(ct) => Some(ct.value().to_string()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        content_types,
+        vec!["multipart/mixed;boundary=b1".to_string()]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_make_invite_request_without_route_set_has_no_route() -> crate::Result<()> {
     let token = CancellationToken::new();
     let tl = TransportLayer::new(token.child_token());
