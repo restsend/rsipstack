@@ -280,13 +280,16 @@ impl Drop for DialogGuardForUnconfirmed {
                     bye_if_2xx(&client_dialog, final_response).await;
                 });
             }
-            DialogState::Confirmed(_, _) => {
-                let _handle = crate::platform::spawn(async move {
-                    if let Err(e) = client_dialog.hangup().await {
-                        info!(id = %client_dialog.id(), error = %e, "failed to hangup confirmed dialog");
-                    }
-                });
-            }
+            // A completed invite task is NOT an abandoned invite: for
+            // `do_invite_async` the background task always ends right after
+            // the dialog confirms (the JoinHandle detaches), and the
+            // application owns the confirmed dialog from `Confirmed` on.
+            // Hanging it up here killed established calls whenever the
+            // dialog's registry entry was still reachable under the early
+            // (tag-less) key — e.g. a 200 OK without a To tag, whose
+            // confirmed key equals the early key. Unconfirmed branches above
+            // keep their CANCEL cleanup (those ARE abandonment).
+            DialogState::Confirmed(_, _) => {}
             _ => {}
         }
     }

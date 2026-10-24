@@ -951,3 +951,54 @@ async fn test_cleanup_cancel_survives_invite_final() -> crate::Result<()> {
 async fn test_cleanup_cancel_retransmits_beyond_two_seconds() -> crate::Result<()> {
     run_cleanup_cancel_retransmission(false).await
 }
+
+/// A `do_invite_async` task that completes normally (200 OK confirmed, no
+/// cancellation) must not terminate the dialog when the task ends and its
+/// guard drops: the background task ending is the API's designed lifecycle
+/// (the JoinHandle detaches), not an abandoned invite — the application owns
+/// the confirmed dialog from `Confirmed` on.
+///
+/// Regression: the guard's drop took the dialog out of the registry when the
+/// early (tagless) key was still reachable and hung confirmed calls up with a
+/// Reason-less BYE microseconds after the 200 OK.
+#[tokio::test]
+async fn test_confirmed_dialog_survives_invite_task_completion() -> crate::Result<()> {
+    let token = CancellationToken::new();
+    let Uac {
+        dialog_layer,
+        option,
+        peer,
+    } = setup(&token).await?;
+    let (state_sender, mut states) = unbounded_channel();
+    let (dialog, join) = dialog_layer.do_invite_async(option, state_sender)?;
+    let (inv, uac) = recv_request(&peer, Method::Invite, Duration::from_secs(2)).await;
+    calling_id(&mut states).await;
+
+    // Drive the dialog straight to 200 OK (no provisional response). The
+    // response deliberately carries NO To tag — a malformed but seen-in-the-
+    // wild 2xx (RFC 3261 §13.2.2.4 requires one): the dialog must still be
+    // confirmed, registered, and — crucially — not killed by the completed
+    // task's guard.
+    let contact = format!("sip:bob@{}", peer.local_addr()?);
+    let mut ok = response(&inv, 200, "OK", &contact);
+    ok = ok.replace(&format!(";tag={PEER_TAG}"), "");
+    peer.send_to(ok.as_bytes(), uac).await?;
+
+    // The invite task must finish confirmed — this is where its guard drops.
+    let (_, resp) = tokio::time::timeout(Duration::from_secs(2), join)
+        .await
+        .expect("join")
+        .expect("invite task")?;
+    assert_eq!(resp.map(|r| r.status_code), Some(StatusCode::OK));
+
+    // No BYE may arrive: the completed task must not kill the dialog.
+    assert_no_request(
+        &peer,
+        Method::Bye,
+        Duration::from_millis(600),
+        "confirmed dialog must survive invite task completion (tag-less 200)",
+    )
+    .await;
+    token.cancel();
+    Ok(())
+}
