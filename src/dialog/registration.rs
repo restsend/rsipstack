@@ -925,7 +925,10 @@ pub fn backoff_interval(failures: u32) -> core::time::Duration {
 }
 
 impl Registration {
-    /// REGISTER immediately, then refresh at 75% of the expiry (or backoff).
+    /// REGISTER immediately, then refresh at 75% of the expiry the registrar
+    /// granted (or backoff). Each REGISTER still asks for `expires`; the
+    /// registrar may grant less (RFC 3261 §10.2.4), so the refresh follows
+    /// the granted value, falling back to `expires` when none is known.
     /// `on_result` fires after every attempt. Returns on token cancel; the
     /// caller owns the final expires=0 unregister.
     pub async fn keep_alive<E>(
@@ -937,12 +940,14 @@ impl Registration {
     ) where
         E: FnMut(RefreshOutcome<'_>),
     {
-        let refresh = refresh_interval(expires);
+        let mut refresh = refresh_interval(expires);
         let mut failures: u32 = 0;
         loop {
             match self.register(server.clone(), Some(expires)).await {
                 Ok(resp) if resp.status_code.kind() == crate::sip::StatusCodeKind::Successful => {
                     failures = 0;
+                    let granted = self.granted_expires.filter(|g| *g > 0).unwrap_or(expires);
+                    refresh = refresh_interval(granted);
                     on_result(RefreshOutcome::Registered(&resp));
                 }
                 Ok(resp) => {

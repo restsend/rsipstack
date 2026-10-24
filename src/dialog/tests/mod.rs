@@ -14,6 +14,7 @@ mod test_prack;
 mod test_proxy_headers;
 mod test_refer;
 mod test_refer_notify;
+mod test_registration_keep_alive;
 mod test_server_dialog;
 mod test_session_id;
 mod test_state_after_terminated;
