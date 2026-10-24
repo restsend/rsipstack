@@ -1,5 +1,4 @@
 use super::sip_addr::SipAddr;
-use core::time::Duration;
 #[cfg(feature = "platform-tokio")]
 use super::stream::StreamConnection;
 #[cfg(feature = "platform-tokio")]
@@ -25,6 +24,7 @@ use crate::Result;
 use core::net::SocketAddr;
 #[cfg(feature = "platform-tokio")]
 use core::net::{IpAddr, Ipv4Addr};
+use core::time::Duration;
 #[cfg(feature = "platform-tokio")]
 use if_addrs::IfAddr;
 #[cfg(feature = "platform-tokio")]
@@ -347,9 +347,7 @@ impl SipConnection {
             // idle timeout applies to the tokio stream transports only.
             SipConnection::TlsPlatform(transport) => transport.serve_loop(sender).await,
             #[cfg(feature = "platform-tokio")]
-            SipConnection::Tcp(transport) => {
-                transport.serve_loop(sender, idle_timeout).await
-            }
+            SipConnection::Tcp(transport) => transport.serve_loop(sender, idle_timeout).await,
             #[cfg(feature = "platform-tokio")]
             SipConnection::TcpListener(_) => {
                 debug!("SipConnection::serve_loop: TcpListener does not have serve_loop");
@@ -357,9 +355,7 @@ impl SipConnection {
             }
             #[cfg(feature = "rustls")]
             #[cfg(all(feature = "platform-tokio", feature = "rustls"))]
-            SipConnection::Tls(transport) => {
-                transport.serve_loop(sender, idle_timeout).await
-            }
+            SipConnection::Tls(transport) => transport.serve_loop(sender, idle_timeout).await,
             #[cfg(feature = "rustls")]
             SipConnection::TlsListener(_) => {
                 debug!("SipConnection::serve_loop: TlsListener does not have serve_loop");
@@ -367,9 +363,7 @@ impl SipConnection {
             }
             #[cfg(feature = "websocket")]
             #[cfg(all(feature = "platform-tokio", feature = "websocket"))]
-            SipConnection::WebSocket(transport) => {
-                transport.serve_loop(sender, idle_timeout).await
-            }
+            SipConnection::WebSocket(transport) => transport.serve_loop(sender, idle_timeout).await,
             #[cfg(feature = "websocket")]
             SipConnection::WebSocketListener(_) => {
                 debug!("SipConnection::serve_loop: WebSocketListener does not have serve_loop");

@@ -19,8 +19,8 @@ use crate::transaction::key::TransactionKey;
 use crate::transport::connection::TransportReceiver;
 use crate::{transport::TransportEvent, Result};
 use async_trait::async_trait;
-use core::sync::atomic::{AtomicU32, Ordering};
 use core::net::IpAddr;
+use core::sync::atomic::{AtomicU32, Ordering};
 use tracing::{debug, info, warn};
 
 /// Default idle timeout applied to stream (TCP/TLS/WS) connections when the

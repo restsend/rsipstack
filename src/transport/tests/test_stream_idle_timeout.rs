@@ -53,10 +53,7 @@ async fn idle_timeout_closes_silent_connection() {
 
     let conn = TcpConnection::connect(&remote, None).await.unwrap();
     let started = std::time::Instant::now();
-    let result = conn
-        .serve_loop(unbounded_channel().0, IDLE)
-        .await
-        .unwrap();
+    let result = conn.serve_loop(unbounded_channel().0, IDLE).await.unwrap();
     let _ = result;
     assert!(
         started.elapsed() < Duration::from_secs(5),

@@ -9,8 +9,8 @@ use crate::{
     },
     Result,
 };
-use std::{fmt, sync::Arc};
 use core::time::Duration;
+use std::{fmt, sync::Arc};
 use tokio::net::TcpStream;
 use tracing::debug;
 

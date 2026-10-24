@@ -11,8 +11,8 @@ use crate::{
     },
     Result,
 };
-use futures_util::{SinkExt, StreamExt};
 use core::time::Duration;
+use futures_util::{SinkExt, StreamExt};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::{fmt, net::SocketAddr, sync::Arc};
 use tokio::{net::TcpListener, sync::Mutex};
