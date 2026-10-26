@@ -100,7 +100,7 @@ impl ChannelConnection {
     /// NAT ip:port — survive a targeted retire, exactly like stream
     /// transports.
     pub(crate) fn ptr_eq(&self, other: &Self) -> bool {
-        std::sync::Arc::ptr_eq(&self.inner, &other.inner)
+        Arc::ptr_eq(&self.inner, &other.inner)
     }
 
     pub async fn serve_loop(&self, sender: TransportSender) -> Result<()> {
