@@ -164,7 +164,15 @@ pub struct TransportLayerInner {
 }
 pub(crate) type TransportLayerInnerRef = Arc<TransportLayerInner>;
 
-#[derive(Clone)]
+// Deliberately NOT `Clone`: `Drop` below cancels the shared token, and Rust
+// drops are per-value, not per-resource — if this handle were clonable, the
+// first clone dropped anywhere (a guard, a moved task argument) would tear
+// down every listener and serve loop while the owner is still using the
+// layer. rustpbx hit exactly that premature-shutdown bug with a cleanup guard
+// that owned a clone. Single-owner RAII: dropping the layer *is* shutdown.
+// When shared access is needed, reach it through `EndpointInner` (plain Arc,
+// no drop side effects) or wrap it in an explicit `Arc<TransportLayer>` and
+// revisit the shutdown story.
 pub struct TransportLayer {
     pub outbound: Option<SipAddr>,
     pub inner: TransportLayerInnerRef,
@@ -703,6 +711,11 @@ fn retire_connection(connections: &RwMap<SipAddr, Vec<SipConnection>>, connectio
     }
 }
 
+/// Owner-side shutdown: cancelling the shared token cascades to every
+/// listener/serve-loop child token. This lives on the (non-clonable) owner
+/// handle, NOT on `TransportLayerInner` — the listener tasks hold
+/// `Arc<TransportLayerInner>` for their whole lifetime and only exit when
+/// this token fires, so a drop impl on the inner Arc would deadlock shutdown.
 impl Drop for TransportLayer {
     fn drop(&mut self) {
         self.inner.cancel_token.cancel();
