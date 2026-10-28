@@ -4,6 +4,55 @@ use crate::sip::{
     Error,
 };
 use memchr::memchr;
+
+/// Split a combined header value into comma-joined entries, honouring
+/// quoted strings and angle-bracket delimited name-addr forms (`<...>`).
+pub fn split_comma_entries(s: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut current = String::new();
+    let mut angle_depth = 0usize;
+    let mut in_quotes = false;
+    for ch in s.chars() {
+        match ch {
+            '"' => {
+                in_quotes = !in_quotes;
+                current.push(ch);
+            }
+            '<' if !in_quotes => {
+                angle_depth += 1;
+                current.push(ch);
+            }
+            '>' if !in_quotes => {
+                angle_depth = angle_depth.saturating_sub(1);
+                current.push(ch);
+            }
+            ',' if !in_quotes && angle_depth == 0 => {
+                let v = current.trim().to_string();
+                if !v.is_empty() {
+                    values.push(v);
+                }
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+    let v = current.trim().to_string();
+    if !v.is_empty() {
+        values.push(v);
+    }
+    values
+}
+
+/// Look up a header/URI param by (ASCII-case-insensitive) name.
+pub fn param_value(params: &[Param], key: &str) -> Option<String> {
+    params.iter().find_map(|p| match p {
+        Param::Other(n, v) if n.value().eq_ignore_ascii_case(key) => {
+            v.as_ref().map(|t| t.value().to_string())
+        }
+        _ => None,
+    })
+}
+
 pub fn parse_display_uri_params_str(s: &str) -> Result<(Option<String>, Uri, Vec<Param>), Error> {
     let s = s.trim();
     if let Some(lt) = s.find('<') {

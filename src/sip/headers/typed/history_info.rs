@@ -1,4 +1,4 @@
-use super::parse_helpers::parse_display_uri_params_str;
+use super::parse_helpers::{param_value, parse_display_uri_params_str, split_comma_entries};
 use crate::prelude::*;
 use crate::sip::{uri::Param, Error, Header, Uri};
 
@@ -31,51 +31,6 @@ pub struct HistoryInfoEntry {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct HistoryInfo {
     pub entries: Vec<HistoryInfoEntry>,
-}
-
-fn split_hi_entries(s: &str) -> Vec<String> {
-    let mut values = Vec::new();
-    let mut current = String::new();
-    let mut angle_depth = 0usize;
-    let mut in_quotes = false;
-    for ch in s.chars() {
-        match ch {
-            '"' => {
-                in_quotes = !in_quotes;
-                current.push(ch);
-            }
-            '<' if !in_quotes => {
-                angle_depth += 1;
-                current.push(ch);
-            }
-            '>' if !in_quotes => {
-                angle_depth = angle_depth.saturating_sub(1);
-                current.push(ch);
-            }
-            ',' if !in_quotes && angle_depth == 0 => {
-                let v = current.trim().to_string();
-                if !v.is_empty() {
-                    values.push(v);
-                }
-                current.clear();
-            }
-            _ => current.push(ch),
-        }
-    }
-    let v = current.trim().to_string();
-    if !v.is_empty() {
-        values.push(v);
-    }
-    values
-}
-
-fn param_value(params: &[Param], key: &str) -> Option<String> {
-    params.iter().find_map(|p| match p {
-        Param::Other(n, v) if n.value().eq_ignore_ascii_case(key) => {
-            v.as_ref().map(|t| t.value().to_string())
-        }
-        _ => None,
-    })
 }
 
 impl HistoryInfoEntry {
@@ -116,7 +71,7 @@ impl HistoryInfoEntry {
 impl HistoryInfo {
     /// Parse a (possibly comma-joined) History-Info header value.
     pub fn parse(s: &str) -> Result<Self, Error> {
-        let entries = split_hi_entries(s)
+        let entries = split_comma_entries(s)
             .into_iter()
             .map(|v| HistoryInfoEntry::parse(&v))
             .collect::<Result<Vec<_>, _>>()?;

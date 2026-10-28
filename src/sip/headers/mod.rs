@@ -69,6 +69,7 @@ pub enum Header {
     UserToUser(UserToUser),
     SessionId(SessionId),
     HistoryInfo(HistoryInfo),
+    Diversion(Diversion),
 }
 
 impl core::fmt::Display for Header {
@@ -138,6 +139,7 @@ impl core::fmt::Display for Header {
             Self::UserToUser(inner) => write!(f, "{}", inner),
             Self::SessionId(inner) => write!(f, "{}", inner),
             Self::HistoryInfo(inner) => write!(f, "{}", inner),
+            Self::Diversion(inner) => write!(f, "{}", inner),
         }
     }
 }
@@ -209,6 +211,7 @@ impl Header {
             Self::UserToUser(_) => "User-to-User",
             Self::SessionId(_) => "Session-ID",
             Self::HistoryInfo(_) => "History-Info",
+            Self::Diversion(_) => "Diversion",
         }
     }
 
@@ -278,6 +281,7 @@ impl Header {
             Self::UserToUser(h) => h.value(),
             Self::SessionId(h) => h.value(),
             Self::HistoryInfo(h) => h.value(),
+            Self::Diversion(h) => h.value(),
         }
     }
 }
@@ -516,6 +520,7 @@ pub fn make_header(name: &str, value: String) -> Header {
         n if n.eq_ignore_ascii_case("User-to-User") => Header::UserToUser(UserToUser::new(value)),
         n if n.eq_ignore_ascii_case("Session-ID") => Header::SessionId(SessionId::new(value)),
         n if n.eq_ignore_ascii_case("History-Info") => Header::HistoryInfo(HistoryInfo::new(value)),
+        n if n.eq_ignore_ascii_case("Diversion") => Header::Diversion(Diversion::new(value)),
         other => Header::Other(other.to_string(), value),
     }
 }

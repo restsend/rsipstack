@@ -177,6 +177,7 @@ untyped_header!(Identity, "Identity", Header::Identity);
 untyped_header!(UserToUser, "User-to-User", Header::UserToUser);
 untyped_header!(SessionId, "Session-ID", Header::SessionId);
 untyped_header!(HistoryInfo, "History-Info", Header::HistoryInfo);
+untyped_header!(Diversion, "Diversion", Header::Diversion);
 
 impl SessionId {
     /// Nil UUID per RFC 7989 §5 (32 zeros).
@@ -802,6 +803,21 @@ impl core::convert::TryInto<typed::HistoryInfo> for HistoryInfo {
 }
 impl core::convert::From<typed::HistoryInfo> for HistoryInfo {
     fn from(h: typed::HistoryInfo) -> Self {
+        Self(h.to_string())
+    }
+}
+
+impl<'a> ToTypedHeader<'a> for Diversion {
+    type Typed = typed::Diversion;
+}
+impl core::convert::TryInto<typed::Diversion> for Diversion {
+    type Error = Error;
+    fn try_into(self) -> Result<typed::Diversion, Error> {
+        typed::Diversion::parse(&self.0)
+    }
+}
+impl core::convert::From<typed::Diversion> for Diversion {
+    fn from(h: typed::Diversion) -> Self {
         Self(h.to_string())
     }
 }

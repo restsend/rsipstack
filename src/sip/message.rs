@@ -220,6 +220,25 @@ pub trait HeadersExt: HasHeaders {
         }
         Ok(entries)
     }
+    /// All Diversion header lines (RFC 5806 allows multiple lines, each
+    /// possibly holding comma-joined diversion entries).
+    fn diversion_headers(&self) -> Vec<&crate::sip::headers::untyped::Diversion> {
+        self.headers()
+            .iter()
+            .filter_map(|h| match h {
+                Header::Diversion(d) => Some(d),
+                _ => None,
+            })
+            .collect()
+    }
+    /// Flattened typed diversion entries across every Diversion header line.
+    fn diversion_entries(&self) -> Result<Vec<crate::sip::typed::DiversionEntry>, Error> {
+        let mut entries = Vec::new();
+        for d in self.diversion_headers() {
+            entries.extend(d.clone().into_typed()?.entries);
+        }
+        Ok(entries)
+    }
     fn typed_contact_headers(&self) -> Result<Vec<crate::sip::typed::Contact>, Error> {
         let mut contacts = Vec::new();
         for contact in self.contact_headers() {
