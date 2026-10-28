@@ -336,10 +336,10 @@ impl InviteDialog {
                 StatusCode::ServerInternalError,
             ));
         }
-        use super::authenticate::handle_client_authenticate;
+        use super::authenticate::{handle_client_authenticate, AuthRetry};
 
         self.inner.transition(DialogState::Calling(self.id()));
-        let mut auth_sent = false;
+        let mut auth = AuthRetry::new();
         tx.send().await?;
         // Record the flow the INVITE actually went out on, so later
         // in-dialog requests (BYE / re-INVITE / INFO) reuse it instead of
@@ -375,7 +375,7 @@ impl InviteDialog {
                         StatusCode::ProxyAuthenticationRequired | StatusCode::Unauthorized
                     ) && !self.inner.cancel_requested.load(Ordering::SeqCst)
                     {
-                        if auth_sent {
+                        if !auth.should_answer(&resp) {
                             final_response = Some(resp.clone());
                             debug!(id = %self.id(), ?status, "received auth response after auth sent");
                             self.inner.transition(DialogState::Terminated(
@@ -384,7 +384,6 @@ impl InviteDialog {
                             ));
                             break;
                         }
-                        auth_sent = true;
                         if let Some(credential) = &self.inner.credential {
                             *tx = handle_client_authenticate(
                                 self.inner.increment_local_seq(),

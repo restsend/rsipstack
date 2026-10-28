@@ -1,5 +1,5 @@
 use super::{
-    authenticate::{handle_client_authenticate, Credential},
+    authenticate::{handle_client_authenticate, AuthRetry, Credential},
     DialogId,
 };
 use crate::prelude::*;
@@ -553,7 +553,7 @@ impl Registration {
         }
 
         tx.send().await?;
-        let mut auth_sent = false;
+        let mut auth = AuthRetry::new();
 
         while let Some(msg) = tx.receive().await {
             match msg {
@@ -585,7 +585,7 @@ impl Registration {
                             }
                         }
 
-                        if auth_sent {
+                        if !auth.should_answer(&resp) {
                             debug!(status = %resp.status_code, "received auth response after auth sent");
                             return Ok(resp);
                         }
@@ -618,7 +618,6 @@ impl Registration {
                             }
 
                             tx.send().await?;
-                            auth_sent = true;
                             continue;
                         } else {
                             debug!(status = %resp.status_code, "received auth response without credential");

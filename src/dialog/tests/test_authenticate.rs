@@ -2,7 +2,9 @@
 //!
 //! Tests for SIP authentication handling, including Via header parameter updates
 
-use crate::dialog::authenticate::{handle_client_authenticate, Credential};
+use crate::dialog::authenticate::{
+    handle_client_authenticate, is_stale_challenge, AuthRetry, Credential,
+};
 use crate::sip::headers::*;
 use crate::sip::prelude::{HeadersExt, ToTypedHeader};
 use crate::sip::{Request, Response, StatusCode};
@@ -907,4 +909,66 @@ fn test_verify_digest_real_world_unify_udp() {
         is_valid,
         "Real-world Unify UDP case should pass verification"
     );
+}
+
+/// 401 as sent by a load-balanced registrar whose node did not issue the
+/// nonce (captured from MTT, `401 Stale nonce`).
+fn create_stale_401_response() -> Response {
+    let mut resp = create_401_response();
+    resp.headers
+        .retain(|h| !matches!(h, Header::WwwAuthenticate(_)));
+    resp.headers.push(
+        WwwAuthenticate::new(
+            r#"Digest algorithm=MD5, nonce="iYPgal66iLK6_udcIWmHc5SSOaM", stale=true, realm="login.mtt.ru", opaque="", qop="auth""#,
+        )
+        .into(),
+    );
+    resp
+}
+
+fn create_stale_407_response() -> Response {
+    let mut resp = create_407_response();
+    resp.headers
+        .retain(|h| !matches!(h, Header::ProxyAuthenticate(_)));
+    resp.headers.push(
+        ProxyAuthenticate::new(
+            r#"Digest realm="proxy.example.com", nonce="0a1b2c", stale="TRUE", algorithm=MD5, qop="auth""#,
+        )
+        .into(),
+    );
+    resp
+}
+
+#[test]
+fn test_is_stale_challenge() {
+    assert!(!is_stale_challenge(&create_401_response()));
+    assert!(!is_stale_challenge(&create_407_response()));
+    assert!(is_stale_challenge(&create_stale_401_response()));
+    assert!(is_stale_challenge(&create_stale_407_response()));
+}
+
+#[test]
+fn test_auth_retry_rejects_repeated_non_stale_challenge() {
+    let mut auth = AuthRetry::new();
+    assert!(auth.should_answer(&create_401_response()));
+    // Same challenge again means the credentials were rejected.
+    assert!(!auth.should_answer(&create_401_response()));
+}
+
+#[test]
+fn test_auth_retry_answers_stale_challenge() {
+    let mut auth = AuthRetry::new();
+    assert!(auth.should_answer(&create_401_response()));
+    assert!(auth.should_answer(&create_stale_401_response()));
+    // After a stale retry, a plain challenge is still a credential failure.
+    assert!(!auth.should_answer(&create_401_response()));
+}
+
+#[test]
+fn test_auth_retry_bounds_stale_retries() {
+    let mut auth = AuthRetry::new();
+    assert!(auth.should_answer(&create_stale_401_response()));
+    assert!(auth.should_answer(&create_stale_401_response()));
+    assert!(auth.should_answer(&create_stale_401_response()));
+    assert!(!auth.should_answer(&create_stale_401_response()));
 }
