@@ -306,3 +306,108 @@ async fn test_cancelled_invite_is_not_retried_with_credential() -> crate::Result
     p.token.cancel();
     Ok(())
 }
+
+const STALE_CHALLENGE: &str =
+    r#"Digest realm="example.com", nonce="0f9e8d7c6b5a", stale=true, algorithm=MD5"#;
+
+/// UAS: challenges the unauthenticated INVITE, answers the first
+/// `stale_rounds` authenticated ones with `stale=true` (as a load-balanced
+/// registrar does when another node issued the nonce), then accepts.
+/// Reports, per INVITE, whether it answered the challenge.
+fn spawn_stale_uas(
+    mut incoming: TransactionReceiver,
+    uas_port: u16,
+    stale_rounds: usize,
+) -> UnboundedReceiver<bool> {
+    let (seen_tx, seen_rx) = unbounded_channel();
+    tokio::spawn(async move {
+        let mut authed_count = 0;
+        while let Some(mut tx) = incoming.recv().await {
+            if tx.original.method != Method::Invite {
+                continue;
+            }
+            let authed = answers_challenge(&StatusCode::Unauthorized, &tx.original.headers);
+            let _ = seen_tx.send(authed);
+            let reply = if !authed {
+                Some(WwwAuthenticate::new(CHALLENGE))
+            } else {
+                authed_count += 1;
+                (authed_count <= stale_rounds).then(|| WwwAuthenticate::new(STALE_CHALLENGE))
+            };
+            tokio::spawn(async move {
+                match reply {
+                    Some(challenge) => tx
+                        .reply_with(StatusCode::Unauthorized, vec![challenge.into()], None)
+                        .await
+                        .expect("reply challenge"),
+                    None => {
+                        let contact = Contact::new(format!("<sip:bob@127.0.0.1:{}>", uas_port));
+                        tx.reply_with(StatusCode::OK, vec![contact.into()], None)
+                            .await
+                            .expect("reply 200")
+                    }
+                }
+                while tx.receive().await.is_some() {}
+            });
+        }
+    });
+    seen_rx
+}
+
+/// `401 ... stale=true` to the authenticated retry means only the nonce was
+/// rejected (RFC 2617 §3.2.1): the UAC retries with the fresh nonce instead
+/// of failing the call.
+#[tokio::test]
+async fn test_invite_stale_nonce_is_retried() -> crate::Result<()> {
+    let (p, uas_incoming) = peers().await?;
+    let mut seen = spawn_stale_uas(uas_incoming, p.uas_port, 1);
+    let (state_tx, _state_rx) = unbounded_channel();
+    let opt = invite_option(&p, Some(credential()));
+
+    let (dialog, resp) = tokio::time::timeout(PROMPT, p.uac_layer.do_invite(opt, state_tx))
+        .await
+        .expect("stale-nonce retry did not complete")?;
+
+    assert_eq!(resp.map(|r| r.status_code), Some(StatusCode::OK));
+    assert!(dialog.inner.is_confirmed());
+    assert_eq!(
+        seen.recv().await,
+        Some(false),
+        "first INVITE is unauthenticated"
+    );
+    assert_eq!(seen.recv().await, Some(true), "authenticated retry");
+    assert_eq!(seen.recv().await, Some(true), "retry with the fresh nonce");
+    assert_no_more_invites(&mut seen).await;
+
+    p.token.cancel();
+    Ok(())
+}
+
+/// A server that keeps answering `stale=true` cannot loop the UAC: after the
+/// bounded number of stale retries the challenge is the final response.
+#[tokio::test]
+async fn test_invite_stale_nonce_retries_are_bounded() -> crate::Result<()> {
+    let (p, uas_incoming) = peers().await?;
+    let mut seen = spawn_stale_uas(uas_incoming, p.uas_port, usize::MAX);
+    let (state_tx, _state_rx) = unbounded_channel();
+    let opt = invite_option(&p, Some(credential()));
+
+    let (dialog, resp) = tokio::time::timeout(PROMPT, p.uac_layer.do_invite(opt, state_tx))
+        .await
+        .expect("bounded stale retries did not complete")?;
+
+    assert_eq!(resp.map(|r| r.status_code), Some(StatusCode::Unauthorized));
+    assert!(is_auth_terminated(&dialog.state()));
+    assert_eq!(
+        seen.recv().await,
+        Some(false),
+        "first INVITE is unauthenticated"
+    );
+    for _ in 0..3 {
+        assert_eq!(seen.recv().await, Some(true));
+    }
+    assert_no_more_invites(&mut seen).await;
+
+    p.token.cancel();
+    Ok(())
+}

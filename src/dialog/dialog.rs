@@ -1,5 +1,5 @@
 use super::{
-    authenticate::{handle_client_authenticate, Credential},
+    authenticate::{handle_client_authenticate, AuthRetry, Credential},
     invite_dialog::InviteDialog,
     publication::{ClientPublicationDialog, ServerPublicationDialog},
     subscription::{ClientSubscriptionDialog, ServerSubscriptionDialog},
@@ -722,14 +722,14 @@ impl DialogInner {
             }
         }
 
-        let mut auth_sent = false;
+        let mut auth = AuthRetry::new();
         while let Some(msg) = tx.receive().await {
             match msg {
                 SipMessage::Response(resp) => match resp.status_code {
                     StatusCode::Trying => continue,
                     StatusCode::ProxyAuthenticationRequired | StatusCode::Unauthorized => {
                         let id = self.id.lock().clone();
-                        if auth_sent {
+                        if !auth.should_answer(&resp) {
                             debug!(
                                 id = self.id.lock().to_string(),
                                 "received {} response after auth sent", resp.status_code
@@ -740,7 +740,6 @@ impl DialogInner {
                             ));
                             break;
                         }
-                        auth_sent = true;
                         if let Some(cred) = &self.credential {
                             let new_seq = self.increment_local_seq();
                             tx = handle_client_authenticate(new_seq, &tx, resp, cred).await?;
@@ -1253,7 +1252,7 @@ impl DialogInner {
             }
         }
 
-        let mut auth_sent = false;
+        let mut auth = AuthRetry::new();
         while let Some(msg) = tx.receive().await {
             match msg {
                 SipMessage::Response(resp) => {
@@ -1293,7 +1292,7 @@ impl DialogInner {
                         StatusCode::ProxyAuthenticationRequired | StatusCode::Unauthorized
                     ) {
                         let id = self.id.lock().clone();
-                        if auth_sent {
+                        if !auth.should_answer(&resp) {
                             debug!(
                                 id = self.id.lock().to_string(),
                                 "received {} response after auth sent", status
@@ -1304,7 +1303,6 @@ impl DialogInner {
                             ));
                             break;
                         }
-                        auth_sent = true;
                         if let Some(cred) = &self.credential {
                             let new_seq = match method {
                                 crate::sip::Method::Cancel => self.get_local_seq(),

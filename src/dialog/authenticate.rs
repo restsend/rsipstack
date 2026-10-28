@@ -365,6 +365,61 @@ pub async fn handle_client_authenticate(
     Ok(new_tx)
 }
 
+/// Upper bound on extra challenge rounds answered because the server marked
+/// the nonce stale, so a server that always says `stale=true` cannot loop a
+/// client transaction forever.
+const MAX_STALE_RETRIES: u8 = 2;
+
+/// Whether a 401/407 challenge carries `stale=true` (RFC 2617 §3.2.1,
+/// RFC 7616 §3.3): the server accepted the credentials and only rejected the
+/// nonce, so retrying with the fresh nonce from this challenge is expected.
+pub fn is_stale_challenge(resp: &Response) -> bool {
+    let is_true = |stale: Option<String>| {
+        stale.is_some_and(|s| s.trim_matches('"').eq_ignore_ascii_case("true"))
+    };
+    let www = resp
+        .www_authenticate_header()
+        .and_then(|h| h.typed().ok())
+        .is_some_and(|t| is_true(t.stale));
+    let proxy = crate::sip_header_opt!(resp.headers().iter(), Header::ProxyAuthenticate)
+        .and_then(|h| h.typed().ok())
+        .is_some_and(|t| is_true(t.stale));
+    www || proxy
+}
+
+/// Decides whether a 401/407 received on a client transaction should be
+/// answered with credentials.
+///
+/// The first challenge always is. A repeated challenge normally means the
+/// credentials were rejected and is final; the exception is `stale=true`,
+/// which load-balanced servers send when the node handling the retry did not
+/// issue the nonce (seen with MTT, `401 Stale nonce`). Those are answered up
+/// to [`MAX_STALE_RETRIES`] times.
+#[derive(Debug, Default)]
+pub struct AuthRetry {
+    sent: bool,
+    stale_retries: u8,
+}
+
+impl AuthRetry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Returns `true` if `resp` should be answered, recording the attempt.
+    pub fn should_answer(&mut self, resp: &Response) -> bool {
+        if !self.sent {
+            self.sent = true;
+            return true;
+        }
+        if self.stale_retries < MAX_STALE_RETRIES && is_stale_challenge(resp) {
+            self.stale_retries += 1;
+            return true;
+        }
+        false
+    }
+}
+
 /// Compute the digest hash value using the specified algorithm.
 ///
 /// This is a standalone hash function that supports MD5, SHA-256, and SHA-512
