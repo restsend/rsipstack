@@ -600,17 +600,22 @@ impl TransportLayerInner {
     }
 
     pub(super) async fn serve_listener(self: Arc<Self>, transport: SipConnection) -> Result<()> {
-        // consumed by the tokio-only transport arms below
+        // consumed by the transport arms below
         #[cfg_attr(not(feature = "platform-tokio"), allow(unused_variables))]
         let sender = self.transport_tx.clone();
         match transport {
-            #[cfg(feature = "platform-tokio")]
+            // Backend-agnostic: `platform::spawn` and `serve_loop_with_whitelist`
+            // work on every backend — without this arm, embassy (no_std) endpoints
+            // silently never read their UDP listeners and inbound responses die
+            // in the socket shim.
             SipConnection::Udp(transport) => {
                 let transport_layer_inner = self.clone();
                 crate::platform::spawn(async move {
-                    transport
+                    // embassy spawn demands `Output = ()`; the loop logs its
+                    // own exit, so the Result carries no information here.
+                    let _ = transport
                         .serve_loop_with_whitelist(sender, Some(transport_layer_inner))
-                        .await
+                        .await;
                 });
                 Ok(())
             }
