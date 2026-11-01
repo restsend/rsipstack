@@ -250,6 +250,54 @@ fn test_via_untouched_without_rport_request_on_exact_match() {
     }
 }
 
+/// An IPv6 source: `received` is the bare address (RFC 3261 §20.42), and
+/// it reads back as the address the response goes to.
+#[test]
+fn test_via_received_ipv6_is_bare() {
+    for (transport, proto) in [
+        (Transport::Udp, "SIP/2.0/UDP"),
+        (Transport::Tls, "SIP/2.0/TLS"),
+    ] {
+        let addr: SocketAddr = "[2001:db8::7]:5070".parse().unwrap();
+        let msg =
+            SipConnection::update_msg_received(create_test_request(proto).into(), addr, transport)
+                .expect("update_msg_received");
+        let SipMessage::Request(req) = msg else {
+            panic!("Expected request message")
+        };
+        let via = req.via_header().expect("via header");
+        assert!(
+            via.value().contains(";received=2001:db8::7;"),
+            "{transport}: {}",
+            via.value()
+        );
+        let typed = via.typed().expect("typed via");
+        assert_eq!(
+            typed.received().expect("received").expect("an IP"),
+            addr.ip()
+        );
+        let (_, target) = SipConnection::parse_target_from_via(via).expect("target");
+        assert_eq!(target, addr.into());
+    }
+}
+
+/// Other stacks bracket an IPv6 `received` (RFC 5118 §4.5): read it too.
+#[test]
+fn test_via_received_bracketed_ipv6_is_read() {
+    let via =
+        Via::new("SIP/2.0/TLS 10.0.0.5:5061;branch=z9hG4bK1;received=[2001:db8::7];rport=5070");
+    let typed = via.typed().expect("typed via");
+    assert_eq!(
+        typed.received().expect("received").expect("an IP"),
+        "2001:db8::7".parse::<std::net::IpAddr>().unwrap()
+    );
+    let (_, target) = SipConnection::parse_target_from_via(&via).expect("target");
+    assert_eq!(
+        target,
+        "[2001:db8::7]:5070".parse::<SocketAddr>().unwrap().into()
+    );
+}
+
 fn create_test_request(via_proto: &str) -> crate::sip::message::Request {
     crate::sip::message::Request {
         method: crate::sip::method::Method::Register,

@@ -431,8 +431,14 @@ string_newtype!(OtherParam);
 string_newtype!(OtherParamValue);
 
 impl Received {
+    /// The address. RFC 3261 writes IPv6 bare, but some stacks bracket it
+    /// (RFC 5118 §4.5): both are read.
     pub fn parse(&self) -> Result<IpAddr, core::net::AddrParseError> {
-        self.0.parse()
+        let s = self.0.as_str();
+        s.strip_prefix('[')
+            .and_then(|s| s.strip_suffix(']'))
+            .unwrap_or(s)
+            .parse()
     }
 }
 
