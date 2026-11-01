@@ -159,3 +159,23 @@ Content-Length: 3\r\n\r\n"
     };
     Ok(())
 }
+
+/// A socket on `::` serves IPv4 too; its IPv4 peers read as IPv4, not as
+/// `::ffff:a.b.c.d`.
+#[tokio::test]
+async fn test_udp_dual_stack_reports_ipv4_peer_as_ipv4() -> Result<()> {
+    let dual = UdpConnection::create_connection("[::]:0".parse()?, None, None).await?;
+    let port = dual.get_addr().get_socketaddr()?.port();
+    let v4 = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
+    v4.send_to(b"hello", ("127.0.0.1", port)).await?;
+    let buf = &mut [0u8; 64];
+    let (n, from) = dual.recv_raw(buf).await?;
+    assert_eq!(&buf[..n], b"hello");
+    assert_eq!(from.get_socketaddr()?, v4.local_addr()?);
+
+    let v6 = tokio::net::UdpSocket::bind("[::1]:0").await?;
+    v6.send_to(b"hello", ("::1", port)).await?;
+    let (_, from) = dual.recv_raw(buf).await?;
+    assert_eq!(from.get_socketaddr()?, v6.local_addr()?);
+    Ok(())
+}

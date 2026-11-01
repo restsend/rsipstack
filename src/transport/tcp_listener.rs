@@ -108,7 +108,10 @@ pub(crate) async fn accept_or_cancelled(
     let mut accept_f = core::pin::pin!(listener.accept());
     match crate::platform::select::select2(&mut cancel_f, &mut accept_f).await {
         crate::platform::select::Either::A(()) => None,
-        crate::platform::select::Either::B(accepted) => Some(accepted),
+        crate::platform::select::Either::B(accepted) => Some(
+            accepted
+                .map(|(stream, addr)| (stream, crate::platform::net::canonical_socket_addr(addr))),
+        ),
     }
 }
 
