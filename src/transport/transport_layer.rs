@@ -592,11 +592,28 @@ impl TransportLayerInner {
         }
 
         let listens = self.listens.read();
+        // The first UDP listener that can reach the target's family: an IPv4
+        // socket can't send to an IPv6 target, nor the other way around.
+        // None can: the first one, and the send fails.
+        let target_ip = match &target.addr.host {
+            Host::IpAddr(ip) => Some(*ip),
+            _ => None,
+        };
         let mut first_udp = None;
+        let mut any_udp = None;
         for transport in listens.iter() {
             let addr = transport.get_addr();
-            if addr.r#type == Some(Transport::Udp) && first_udp.is_none() {
-                first_udp = Some(transport.clone());
+            if addr.r#type == Some(Transport::Udp) {
+                if any_udp.is_none() {
+                    any_udp = Some(transport.clone());
+                }
+                let reaches = match (transport, target_ip) {
+                    (SipConnection::Udp(udp), Some(ip)) => udp.can_send_to(ip),
+                    _ => true,
+                };
+                if first_udp.is_none() && reaches {
+                    first_udp = Some(transport.clone());
+                }
             }
             if addr == target {
                 return Ok((transport.clone(), target.clone()));
@@ -607,7 +624,7 @@ impl TransportLayerInner {
         // that silently sent `sips:` INVITEs as plaintext datagrams to a TLS
         // port (5061).
         if matches!(target.r#type, None | Some(Transport::Udp)) {
-            if let Some(transport) = first_udp {
+            if let Some(transport) = first_udp.or(any_udp) {
                 return Ok((transport, target.clone()));
             }
         }
@@ -753,6 +770,41 @@ mod tests {
         transport::{udp::UdpConnection, SipAddr},
         Result,
     };
+
+    fn udp_target(addr: &str) -> SipAddr {
+        let addr: std::net::SocketAddr = addr.parse().unwrap();
+        SipAddr {
+            r#type: Some(Transport::Udp),
+            addr: addr.into(),
+        }
+    }
+
+    /// A UDP target goes out of a UDP listener of its family, not just the
+    /// first one: an IPv4 socket can't send to IPv6, nor the other way.
+    #[tokio::test]
+    async fn test_lookup_udp_by_family() -> Result<()> {
+        let tl = super::TransportLayer::new(tokio_util::sync::CancellationToken::new());
+        let v4 = UdpConnection::create_connection("127.0.0.1:0".parse()?, None, None).await?;
+        let v6 = UdpConnection::create_connection("[::1]:0".parse()?, None, None).await?;
+        let (v4_addr, v6_addr) = (v4.get_addr().clone(), v6.get_addr().clone());
+        tl.add_transport(v4.into());
+        tl.add_transport(v6.into());
+        let (conn, _) = tl.lookup(&udp_target("[::1]:5060"), None).await?;
+        assert_eq!(conn.get_addr(), &v6_addr);
+        let (conn, _) = tl.lookup(&udp_target("127.0.0.1:5060"), None).await?;
+        assert_eq!(conn.get_addr(), &v4_addr);
+
+        // One dual-stack listener reaches both.
+        let tl = super::TransportLayer::new(tokio_util::sync::CancellationToken::new());
+        let dual = UdpConnection::create_connection("[::]:0".parse()?, None, None).await?;
+        let dual_addr = dual.get_addr().clone();
+        tl.add_transport(dual.into());
+        for target in ["[::1]:5060", "127.0.0.1:5060"] {
+            let (conn, _) = tl.lookup(&udp_target(target), None).await?;
+            assert_eq!(conn.get_addr(), &dual_addr, "{target}");
+        }
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_lookup() -> Result<()> {

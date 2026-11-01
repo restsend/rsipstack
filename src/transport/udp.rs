@@ -277,6 +277,18 @@ impl UdpConnection {
         ))
     }
 
+    /// Whether this socket can send to `ip`: one on an IPv4 address only to
+    /// IPv4, one on `::` (dual-stack, see
+    /// [`crate::platform::net::socket_for`]) to both, one on a given IPv6
+    /// address only to IPv6.
+    pub fn can_send_to(&self, ip: core::net::IpAddr) -> bool {
+        match self.inner.conn.local_addr() {
+            Ok(core::net::SocketAddr::V4(_)) => ip.is_ipv4(),
+            Ok(core::net::SocketAddr::V6(local)) => local.ip().is_unspecified() || ip.is_ipv6(),
+            Err(_) => true,
+        }
+    }
+
     pub fn get_addr(&self) -> &SipAddr {
         if let Some(external) = &self.external {
             external
