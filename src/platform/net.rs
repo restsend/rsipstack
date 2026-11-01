@@ -18,6 +18,30 @@ pub fn canonical_socket_addr(addr: SocketAddr) -> SocketAddr {
     SocketAddr::new(addr.ip().to_canonical(), addr.port())
 }
 
+/// A new socket of `local`'s family, not bound yet. An IPv6 socket has
+/// `IPV6_V6ONLY` set explicitly, so the `net.ipv6.bindv6only` sysctl (or
+/// the OS default, on in BSD and Windows) does not decide it: one bound to
+/// `::` is dual-stack and serves IPv4 too, one bound to a given IPv6
+/// address serves only IPv6. To listen on IPv4 and IPv6 with separate
+/// sockets on one port, bind given addresses, not `::` and `0.0.0.0`.
+#[cfg(feature = "platform-tokio")]
+pub fn socket_for(
+    local: SocketAddr,
+    ty: socket2::Type,
+    protocol: socket2::Protocol,
+) -> std::io::Result<socket2::Socket> {
+    let domain = if local.is_ipv6() {
+        socket2::Domain::IPV6
+    } else {
+        socket2::Domain::IPV4
+    };
+    let socket = socket2::Socket::new(domain, ty, Some(protocol))?;
+    if local.is_ipv6() {
+        socket.set_only_v6(!local.ip().is_unspecified())?;
+    }
+    Ok(socket)
+}
+
 /// A UDP socket shared across connection clones: all async methods take
 /// `&self`, so implementors must be internally synchronised.
 #[async_trait::async_trait]

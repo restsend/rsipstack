@@ -179,3 +179,21 @@ async fn test_udp_dual_stack_reports_ipv4_peer_as_ipv4() -> Result<()> {
     assert_eq!(from.get_socketaddr()?, v6.local_addr()?);
     Ok(())
 }
+
+/// `IPV6_V6ONLY` is set on every IPv6 socket, whatever the
+/// `net.ipv6.bindv6only` sysctl says: off on `::` (dual-stack), on for a
+/// given IPv6 address.
+#[test]
+fn test_ipv6_sockets_set_v6only_explicitly() -> Result<()> {
+    use crate::platform::net::socket_for;
+    use socket2::{Protocol, Type};
+    for (ty, proto) in [(Type::DGRAM, Protocol::UDP), (Type::STREAM, Protocol::TCP)] {
+        let any = socket_for("[::]:0".parse()?, ty, proto)?;
+        assert!(!any.only_v6()?, "`::` is dual-stack");
+        let one = socket_for("[::1]:0".parse()?, ty, proto)?;
+        assert!(one.only_v6()?, "a given IPv6 address is IPv6 only");
+        let v4 = socket_for("127.0.0.1:0".parse()?, ty, proto)?;
+        assert_eq!(v4.domain()?, socket2::Domain::IPV4);
+    }
+    Ok(())
+}
