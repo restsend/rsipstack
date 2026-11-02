@@ -238,10 +238,8 @@ impl WebSocketConnection {
             _ => "ws",
         };
 
-        let host = match &remote.addr.host {
-            crate::sip::Host::Domain(domain) => domain.to_string(),
-            crate::sip::Host::IpAddr(ip) => ip.to_string(),
-        };
+        // `Host` writes an IPv6 address in brackets, as a URL needs it.
+        let host = remote.addr.host.to_string();
 
         let port = remote.addr.port.as_ref().map_or(5060, |p| p.value());
         let ws_path = path.unwrap_or("/");

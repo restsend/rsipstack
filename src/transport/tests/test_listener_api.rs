@@ -168,3 +168,35 @@ async fn test_tcp_dual_stack_listener_reports_ipv4_peer_as_ipv4() -> Result<()> 
     cancel.cancel();
     Ok(())
 }
+
+/// A WebSocket client reaches a server on an IPv6 address: the URL has
+/// the address in brackets (`ws://[::1]:port/`).
+#[cfg(feature = "websocket")]
+#[tokio::test]
+async fn test_websocket_connects_over_ipv6() -> Result<()> {
+    let probe = std::net::TcpListener::bind("[::1]:0").expect("bind probe");
+    let addr = probe.local_addr()?;
+    drop(probe);
+    let cancel = CancellationToken::new();
+    let transport_layer = TransportLayer::new(cancel.clone());
+    transport_layer.add_transport(
+        WebSocketListenerConnection::new(addr, None, false)
+            .await?
+            .into(),
+    );
+    transport_layer.serve_listens().await?;
+    let remote = crate::transport::SipAddr {
+        r#type: Some(crate::sip::transport::Transport::Ws),
+        addr: addr.into(),
+    };
+    let conn = tokio::time::timeout(
+        Duration::from_secs(2),
+        crate::transport::websocket::WebSocketConnection::connect_with_path(&remote, None, None),
+    )
+    .await
+    .expect("connects in time")?;
+    let conn = crate::transport::SipConnection::WebSocket(conn);
+    assert!(conn.get_addr().get_socketaddr()?.is_ipv6());
+    cancel.cancel();
+    Ok(())
+}
