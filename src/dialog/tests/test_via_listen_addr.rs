@@ -74,7 +74,10 @@ async fn attach_client_channel(
         .await
         .expect("channel connection");
     let sip_conn = SipConnection::Channel(conn);
-    endpoint.inner.transport_layer.add_connection(sip_conn.clone());
+    endpoint
+        .inner
+        .transport_layer
+        .add_connection(sip_conn.clone());
     // Keep the fake client's inbound sender alive: dropping it makes the
     // channel's read loop tear the connection down (and remove itself from
     // the transport table). Tests that want teardown cancel the returned
@@ -151,8 +154,7 @@ async fn test_bye_via_ignores_ws_client_connection_addr() -> crate::Result<()> {
         .cloned()
         .expect("udp listener");
 
-    let (conn, _token, out_rx) =
-        attach_client_channel(&endpoint, client_addr(Transport::Ws)).await;
+    let (conn, _token, out_rx) = attach_client_channel(&endpoint, client_addr(Transport::Ws)).await;
     drain(out_rx);
     let dialog = make_server_dialog(&endpoint, Some(conn)).await?;
 
@@ -198,8 +200,7 @@ async fn test_bye_via_stable_with_duplicate_connection_addrs() -> crate::Result<
         .make_request(Method::Bye, None, None, None, None, None)?;
     let via2 = top_via(&bye2);
     assert_eq!(
-        via1.uri.host_with_port.host,
-        via2.uri.host_with_port.host,
+        via1.uri.host_with_port.host, via2.uri.host_with_port.host,
         "listener-derived Via is stable across requests"
     );
     assert_ne!(
@@ -230,8 +231,7 @@ async fn test_bye_via_uses_ws_listener_external_addr() -> crate::Result<()> {
         .with_cancel_token(token.child_token())
         .build();
 
-    let (conn, _token, out_rx) =
-        attach_client_channel(&endpoint, client_addr(Transport::Ws)).await;
+    let (conn, _token, out_rx) = attach_client_channel(&endpoint, client_addr(Transport::Ws)).await;
     drain(out_rx);
     let dialog = make_server_dialog(&endpoint, Some(conn)).await?;
 
