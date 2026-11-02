@@ -937,11 +937,24 @@ impl DialogInner {
         }
         .filter(|t| *t != crate::sip::Transport::Udp)?;
 
-        self.endpoint_inner
-            .transport_layer
-            .get_addrs()
-            .into_iter()
-            .find(|a| a.r#type == Some(transport))
+        // The Via must advertise one of OUR addresses (RFC 3261 §18.1.1).
+        // Search the listeners only: the connection cache holds remote peer
+        // addresses, and a WS/WSS client's channel connection carries the
+        // client's own ip:port — matching it here pointed the Via of every
+        // in-dialog request (BYE / re-INVITE / UPDATE / INFO) back at the
+        // remote client.
+        let listens = self.endpoint_inner.transport_layer.get_listen_addrs();
+        if let Some(addr) = listens.iter().find(|a| a.r#type == Some(transport)) {
+            return Some(addr.clone());
+        }
+        // No listener of this transport (WS served through an HTTP upgrade,
+        // for example): advertise the default listener's address with this
+        // request's transport token, mirroring the manual Via dial-back
+        // requests build. Responses to reliable-transport requests return on
+        // the flow itself, so the token keeps them consistent.
+        let mut addr = listens.first().cloned()?;
+        addr.r#type = Some(transport);
+        Some(addr)
     }
 
     pub(super) fn make_response(
@@ -1205,12 +1218,19 @@ impl DialogInner {
                 // The dial-back can leave on another transport than the one
                 // the Via was built for; keep the Via matching it.
                 let transport = fallback_addr.r#type.unwrap_or_default();
-                let listener = self
-                    .endpoint_inner
-                    .transport_layer
-                    .get_addrs()
-                    .into_iter()
-                    .find(|a| a.r#type.unwrap_or_default() == transport);
+                // Listeners only (see `via_addr_for_send_transport`): a
+                // connection-cache match here advertised the remote peer's
+                // address as our own Via.
+                let listens = self.endpoint_inner.transport_layer.get_listen_addrs();
+                let listener = listens
+                    .iter()
+                    .find(|a| a.r#type.unwrap_or_default() == transport)
+                    .cloned()
+                    .or_else(|| {
+                        let mut addr = listens.first().cloned()?;
+                        addr.r#type = Some(transport);
+                        Some(addr)
+                    });
                 let branch = tx
                     .original
                     .top_via_header()

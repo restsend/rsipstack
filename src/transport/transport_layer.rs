@@ -295,6 +295,24 @@ impl TransportLayer {
         addrs
     }
 
+    /// Addresses of the listeners only — the addresses *this endpoint* is
+    /// reachable at. Safe for "our own address" semantics (Via sent-by,
+    /// Record-Route, Contact): unlike [`Self::get_addrs`], this never
+    /// includes remote peer addresses from the connection cache (trunk
+    /// gateways, NAT'd UAs, WebSocket clients), which must never leak into
+    /// headers that advertise where *we* receive traffic. Notably, the
+    /// channel connection a SIP-over-WebSocket client rides on carries the
+    /// *client's* address, so treating connection addresses as local ones
+    /// made generated Via headers point back at the remote peer.
+    pub fn get_listen_addrs(&self) -> Vec<SipAddr> {
+        self.inner
+            .listens
+            .read()
+            .iter()
+            .map(|t| t.get_addr().to_owned())
+            .collect()
+    }
+
     /// Number of live tracked stream/outbound connections (listeners
     /// excluded): the sum of every remote-address slot in the connection
     /// table. Cheap snapshot for health/metrics endpoints — unlike

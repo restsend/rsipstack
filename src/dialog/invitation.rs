@@ -404,12 +404,19 @@ impl DialogLayer {
             .filter(|t| *t != crate::sip::Transport::Udp);
 
         let transport_addr = target_transport.and_then(|transport| {
-            self.endpoint
-                .transport_layer
-                .get_addrs()
+            // Listeners only (see `DialogInner::via_addr_for_send_transport`):
+            // a connection-cache match advertised the remote peer's address as
+            // our own Via on initial INVITEs toward WS/WSS targets.
+            let listens = self.endpoint.transport_layer.get_listen_addrs();
+            listens
                 .iter()
                 .find(|a| a.r#type == Some(transport))
                 .cloned()
+                .or_else(|| {
+                    let mut addr = listens.first().cloned()?;
+                    addr.r#type = Some(transport);
+                    Some(addr)
+                })
         });
 
         let via = self.endpoint.get_via(transport_addr.clone(), None)?;
