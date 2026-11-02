@@ -1016,9 +1016,13 @@ impl Transaction {
         }
         let new_state = match resp.status_code.kind() {
             StatusCodeKind::Provisional => {
-                if resp.status_code == StatusCode::Trying {
+                if resp.status_code == StatusCode::Trying
+                    && self.transaction_type == TransactionType::ClientInvite
+                {
                     TransactionState::Trying
                 } else {
+                    // Non-INVITE clients enter Proceeding for every 1xx,
+                    // including 100 (RFC 3261 §17.1.2.2).
                     TransactionState::Proceeding
                 }
             }
@@ -1144,7 +1148,10 @@ impl Transaction {
 
     async fn on_timer(&mut self, timer: TransactionTimer) -> Result<()> {
         match self.state {
-            TransactionState::Calling | TransactionState::Trying => {
+            TransactionState::Calling | TransactionState::Trying | TransactionState::Proceeding
+                if self.state != TransactionState::Proceeding
+                    || self.transaction_type == TransactionType::ClientNonInvite =>
+            {
                 if matches!(
                     self.transaction_type,
                     TransactionType::ClientInvite | TransactionType::ClientNonInvite
@@ -1193,8 +1200,20 @@ impl Transaction {
                         } else {
                             debug!(key = %self.key, "timer A: no connection yet");
                         }
-                        // Restart Timer A with an upper limit
-                        let duration = (duration * 2).min(self.endpoint_inner.option.t1x64);
+                        // Timer E shares the Timer A machinery, but non-INVITE
+                        // requests cap at T2 and keep retransmitting at T2 in
+                        // Proceeding (RFC 3261 §17.1.2.2). INVITE keeps its
+                        // existing Timer A backoff; Timer B/F is independent.
+                        let duration = if self.transaction_type == TransactionType::ClientNonInvite
+                        {
+                            if self.state == TransactionState::Proceeding {
+                                self.endpoint_inner.option.t2
+                            } else {
+                                (duration * 2).min(self.endpoint_inner.option.t2)
+                            }
+                        } else {
+                            (duration * 2).min(self.endpoint_inner.option.t1x64)
+                        };
                         let timer_a = self
                             .endpoint_inner
                             .timers
@@ -1211,12 +1230,8 @@ impl Transaction {
                 }
             }
             TransactionState::Proceeding => {
-                // Timer C (client INVITE), or Timer F, run as Timer B, for a
-                // non-INVITE client (RFC 3261 §17.1.2.2).
-                if matches!(timer, TransactionTimer::TimerC(_))
-                    || (matches!(timer, TransactionTimer::TimerB(_))
-                        && self.transaction_type == TransactionType::ClientNonInvite)
-                {
+                // Non-INVITE Timer E/F is handled above, including Proceeding.
+                if matches!(timer, TransactionTimer::TimerC(_)) {
                     // Inform TU about timeout
                     let timeout_response = self.endpoint_inner.make_response(
                         &self.original,
@@ -1343,9 +1358,14 @@ impl Transaction {
                 }
             }
             TransactionState::Trying | TransactionState::Proceeding => {
-                self.timer_a.take().map(|id| -> Option<TransactionTimer> {
-                    self.endpoint_inner.timers.cancel(id)
-                });
+                // A provisional reply stops INVITE retransmissions, but must
+                // preserve non-INVITE Timer E and the original Timer F deadline.
+                // The pending E expiration is retained; on_timer re-arms at T2.
+                if self.transaction_type != TransactionType::ClientNonInvite {
+                    self.timer_a.take().map(|id| -> Option<TransactionTimer> {
+                        self.endpoint_inner.timers.cancel(id)
+                    });
+                }
                 if matches!(self.transaction_type, TransactionType::ClientInvite) {
                     self.timer_b.take().map(|id| -> Option<TransactionTimer> {
                         self.endpoint_inner.timers.cancel(id)

@@ -36,8 +36,8 @@ pub trait TransportEventInspector: Send + Sync {
 
 pub struct EndpointOption {
     pub t1: Duration,
-    /// RFC 3261 T2: the longest interval between retransmissions of a
-    /// response to an INVITE (default 4s).
+    /// RFC 3261 T2: the maximum retransmission interval for non-INVITE
+    /// requests and INVITE responses (default 4s).
     pub t2: Duration,
     pub t4: Duration,
     pub t1x64: Duration,
