@@ -5,3 +5,5 @@ pub mod test_stream_idle_timeout;
 pub mod test_tls_reload;
 pub mod test_udp;
 pub mod test_via_received;
+
+pub mod test_message_framing;

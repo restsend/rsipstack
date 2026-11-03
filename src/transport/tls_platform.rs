@@ -13,6 +13,7 @@
 //! `l:` honoured), messages coalesced or split across reads.
 
 use crate::platform::CancellationToken;
+use crate::sip::HasHeaders;
 use crate::sip::{SipMessage, Transport};
 use crate::transport::connection::{TransportEvent, TransportSender};
 use crate::transport::connection::{KEEPALIVE_REQUEST, KEEPALIVE_RESPONSE};
@@ -199,38 +200,17 @@ fn frame(buf: &[u8]) -> Result<Option<Frame>> {
         }
         return Ok(None);
     };
-    let content_length = content_length(&buf[..headers_end]).unwrap_or(0);
-    let total = headers_end + 4 + content_length;
+    let (message, body_start) = crate::sip::parser::parse_message_head(&buf[..headers_end + 4])?;
+    let content_length = crate::sip::parser::content_length(message.headers())?
+        .ok_or_else(|| Error::Error("Missing Content-Length on SIP stream".into()))?;
+    let total = body_start
+        .checked_add(content_length)
+        .filter(|len| *len <= MAX_SIP_MESSAGE_SIZE)
+        .ok_or_else(|| Error::Error("SIP message too large".into()))?;
     if buf.len() < total {
         return Ok(None);
     }
     Ok(Some(Frame::Message(total)))
-}
-
-/// Parses `Content-Length` (compact form `l:` honoured) from the raw header
-/// block (without the terminating CRLFCRLF).
-fn content_length(headers: &[u8]) -> Option<usize> {
-    let mut start = 0usize;
-    while start < headers.len() {
-        let end = find(&headers[start..], b"\n")
-            .map(|p| start + p)
-            .unwrap_or(headers.len());
-        let mut line = &headers[start..end];
-        if let Some(&b'\r') = line.last() {
-            line = &line[..line.len() - 1];
-        }
-        if let Some(colon) = find(line, b":") {
-            let name = &line[..colon];
-            let is_cl = (name.len() == 14 && name.eq_ignore_ascii_case(b"content-length"))
-                || (name.len() == 1 && (name == b"l" || name == b"L"));
-            if is_cl {
-                let value = core::str::from_utf8(&line[colon + 1..]).ok()?;
-                return value.trim().parse().ok();
-            }
-        }
-        start = if end < headers.len() { end + 1 } else { end };
-    }
-    None
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -261,6 +241,24 @@ mod tests {
             body
         )
         .into_bytes()
+    }
+
+    #[test]
+    fn framing_rejects_missing_invalid_or_duplicate_length() {
+        for length in [
+            "",
+            "Content-Length: +1\r\n",
+            "Content-Length: xyz\r\n",
+            "Content-Length: 0\r\nl: 0\r\n",
+        ] {
+            let raw = format!("OPTIONS sip:a@example.com SIP/2.0\r\n{length}\r\n");
+            assert!(frame(raw.as_bytes()).is_err());
+        }
+        let raw = format!(
+            "OPTIONS sip:a@example.com SIP/2.0\r\nContent-Length: {}\r\n\r\n",
+            usize::MAX
+        );
+        assert!(frame(raw.as_bytes()).is_err());
     }
 
     #[test]

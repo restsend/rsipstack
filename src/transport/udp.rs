@@ -1,7 +1,7 @@
 use super::{connection::TransportSender, SipAddr, SipConnection};
 use crate::platform::net::UdpSocket as PlatformUdpSocket;
 use crate::platform::CancellationToken;
-use crate::sip::prelude::HeadersExt;
+use crate::sip::prelude::{HeadersExt, ToTypedHeader};
 use crate::{
     transport::transport_layer::TransportLayerInnerRef,
     transport::{
@@ -13,6 +13,7 @@ use crate::{
 use alloc::borrow::ToOwned;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
+use alloc::{format, vec};
 use bytes::BytesMut;
 use core::net::SocketAddr;
 #[cfg(feature = "platform-tokio")]
@@ -29,6 +30,7 @@ pub struct UdpConnection {
     remote: Option<SipAddr>,
     cancel_token: Option<CancellationToken>,
     inner: Arc<UdpInner>,
+    framing_error_tag_seed: Arc<String>,
 }
 
 impl UdpConnection {
@@ -45,6 +47,7 @@ impl UdpConnection {
                 addr: SipConnection::resolve_bind_address(addr).into(),
             }),
             remote: None,
+            framing_error_tag_seed: Arc::new(crate::transaction::random_text(32)),
             inner: Arc::new(inner),
             cancel_token,
         }
@@ -68,6 +71,7 @@ impl UdpConnection {
                 addr: addr.into(),
             }),
             remote: None,
+            framing_error_tag_seed: Arc::new(crate::transaction::random_text(32)),
             inner: Arc::new(UdpInner { addr, conn }),
             cancel_token,
         };
@@ -106,6 +110,7 @@ impl UdpConnection {
                 addr: addr.into(),
             }),
             remote: None,
+            framing_error_tag_seed: Arc::new(crate::transaction::random_text(32)),
             inner: Arc::new(UdpInner { addr, conn }),
             cancel_token,
         };
@@ -186,6 +191,13 @@ impl UdpConnection {
                         raw_message = ?raw_message,
                         "error parsing SIP message"
                     );
+                    // RFC 3261 §18.3: discard broken responses; answer broken
+                    // requests with 400 when their routing headers are usable.
+                    if let Ok(Some(response)) = self.framing_error_response(packet, addr) {
+                        if let Err(error) = self.send(response.into(), None).await {
+                            debug!(%addr, %error, "could not send framing error response");
+                        }
+                    }
                     continue;
                 }
             };
@@ -225,10 +237,85 @@ impl UdpConnection {
                     remote: Some(from.clone()),
                     cancel_token: self.cancel_token.clone(),
                     inner: self.inner.clone(),
+                    framing_error_tag_seed: self.framing_error_tag_seed.clone(),
                 }),
                 from,
             ))?;
         }
+    }
+
+    fn framing_error_response(
+        &self,
+        packet: &[u8],
+        source: SocketAddr,
+    ) -> Result<Option<crate::sip::Response>> {
+        use crate::sip::{Header, Method, Param, SipMessage, StatusCode, Transport};
+        use sha2::{Digest, Sha256};
+
+        let (message, body_start) = crate::sip::parser::parse_message_head(packet)?;
+        let SipMessage::Request(mut request) = message else {
+            return Ok(None);
+        };
+        // ACK never gets a response (RFC 3261 §8.2.7).
+        if request.method == Method::Ack {
+            return Ok(None);
+        }
+        request.from_header()?.typed()?;
+        request.to_header()?.typed()?;
+        request.call_id_header()?;
+        if request.cseq_header()?.method()? != request.method {
+            return Ok(None);
+        }
+        request.cseq_header()?.seq()?;
+        let via = request.top_via_header()?.typed()?;
+        // A stateless framing error cannot use a reliable Via connection or
+        // multicast routing. Drop these errors instead of guessing a route.
+        if via.transport != Transport::Udp
+            || via.params.iter().any(|p| matches!(p, Param::Maddr(_)))
+        {
+            return Ok(None);
+        }
+        let wants_rport = via.params.iter().any(|p| matches!(p, Param::Rport(_)));
+        SipConnection::build_via_received(request.via_header_mut()?, source, Transport::Udp)?;
+        if !wants_rport {
+            request.via_header_mut()?.update_first_value(|h| {
+                let mut via = h.typed()?;
+                via.params.retain(|p| !matches!(p, Param::Rport(_)));
+                Ok(via.into())
+            })?;
+        }
+        if request.to_header()?.tag()?.is_none() {
+            // RFC 3261 §8.2.7 requires a repeatable To tag for stateless
+            // responses. A per-listener secret also makes the tag unpredictable.
+            let mut digest = Sha256::new();
+            digest.update(self.framing_error_tag_seed.as_bytes());
+            digest.update(&packet[..body_start]);
+            let tag: String = digest
+                .finalize()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            request.to_header_mut()?.mut_tag(tag.into())?;
+        }
+        let mut headers = request.headers;
+        headers.retain(|h| {
+            matches!(
+                h,
+                Header::Via(_)
+                    | Header::From(_)
+                    | Header::To(_)
+                    | Header::CallId(_)
+                    | Header::CSeq(_)
+            )
+        });
+        headers.push(Header::ContentLength(0u32.into()));
+        Ok(Some(crate::sip::Response {
+            status_code: StatusCode::BadRequest,
+            wire_reason: None,
+            version: request.version,
+            headers,
+            body: vec![],
+        }))
     }
 
     pub async fn send(

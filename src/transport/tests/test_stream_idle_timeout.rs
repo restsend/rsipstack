@@ -126,7 +126,7 @@ async fn serve_loop_still_delivers_messages_under_idle_timeout() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let payload = "OPTIONS sip:service@sip.example.com SIP/2.0\r\n\
-                   Via: SIP/2.0/TCP 127.0.0.1:5060;branch=z9hG4bKtest\r\n\r\n";
+                   Via: SIP/2.0/TCP 127.0.0.1:5060;branch=z9hG4bKtest\r\nContent-Length: 0\r\n\r\n";
     tokio::spawn(async move {
         let (mut sock, _) = listener.accept().await.unwrap();
         use tokio::io::AsyncWriteExt;
