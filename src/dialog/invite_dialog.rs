@@ -11,6 +11,7 @@
 //! [`ServerInviteDialog`]: crate::dialog::server_dialog::ServerInviteDialog
 //! [`ClientInviteDialog`]: crate::dialog::client_dialog::ClientInviteDialog
 
+use super::dialog::DialogInner;
 use super::dialog::{Dialog, DialogInnerRef, DialogState, TerminatedReason, TransactionHandle};
 use super::subscription::{ClientSubscriptionDialog, ServerSubscriptionDialog};
 use super::DialogId;
@@ -815,6 +816,14 @@ impl InviteDialog {
             .ok();
 
         if self.inner.is_confirmed() {
+            // Validate before the application can change its media state or
+            // accept the request. Receiving a Contact alone does not commit it.
+            if DialogInner::is_target_refresh(tx.original.method)
+                && DialogInner::parse_target_refresh_contact(&tx.original).is_err()
+            {
+                tx.reply(StatusCode::BadRequest).await?;
+                return Ok(());
+            }
             match tx.original.method {
                 Method::Cancel => {
                     // UAS replies 200 to a CANCEL in confirmed state; UAC
