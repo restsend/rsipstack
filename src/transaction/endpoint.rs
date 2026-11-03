@@ -119,6 +119,7 @@ pub struct EndpointInner {
     pub transport_layer: TransportLayer,
     pub finished_transactions: RwMap<TransactionKey, Option<SipMessage>>,
     pub transactions: RwMap<TransactionKey, TransactionEventSender>,
+    pub(crate) legacy_ack_tags: RwMap<TransactionKey, Option<String>>,
     pub waiting_ack: RwMap<DialogId, TransactionKey>,
     /// Server INVITE transactions waiting for the ACK of their 2xx, by dialog
     /// and INVITE CSeq number: `waiting_ack` holds only a dialog's latest
@@ -241,6 +242,7 @@ impl EndpointInner {
             timers: Timer::new(),
             transport_layer,
             transactions: RwMap::<TransactionKey, TransactionEventSender>::new(),
+            legacy_ack_tags: RwMap::new(),
             finished_transactions: RwMap::<TransactionKey, Option<SipMessage>>::new(),
             waiting_ack: RwMap::<DialogId, TransactionKey>::new(),
             waiting_ack_cseq: RwMap::new(),
@@ -325,6 +327,7 @@ impl EndpointInner {
                     trace!(%key, "TimerCleanup");
                     self.transactions.remove(&key);
                     self.finished_transactions.remove(&key);
+                    self.legacy_ack_tags.remove(&key);
                     self.waiting_ack.retain(|_, v| v != &key);
                     self.waiting_ack_cseq.retain(|_, v| v != &key);
                     continue;
@@ -383,34 +386,41 @@ impl EndpointInner {
         };
         match &msg {
             SipMessage::Request(req) => {
-                if req.method() == &crate::sip::Method::Ack {
-                    if let Ok(dialog_id) =
-                        DialogId::try_from((req, super::key::TransactionRole::Server))
-                    {
-                        // By dialog AND CSeq number: a late ACK of an earlier
-                        // re-INVITE must reach its own transaction.
-                        let seq = req.cseq_header().and_then(|c| c.seq()).ok();
-                        if let Some(tx_key) =
-                            seq.and_then(|seq| self.waiting_ack_cseq.get(&(dialog_id, seq)))
-                        {
-                            key = tx_key;
-                        }
+                if key.is_legacy() && req.method != crate::sip::Method::Ack {
+                    if let Some(existing) = self.match_legacy_request(&key) {
+                        key = existing;
+                    }
+                }
+                if req.method == crate::sip::Method::Ack {
+                    // A 2xx ACK follows dialog/CSeq rules, even for a legacy
+                    // INVITE. A non-2xx ACK follows transaction rules instead.
+                    let accepted = DialogId::try_from((req, super::key::TransactionRole::Server))
+                        .ok()
+                        .and_then(|id| {
+                            req.cseq_header()
+                                .and_then(|c| c.seq())
+                                .ok()
+                                .and_then(|seq| self.waiting_ack_cseq.get(&(id, seq)))
+                        });
+                    if let Some(accepted) = accepted {
+                        key = accepted;
+                    } else if key.is_legacy() {
+                        let candidate = self.legacy_ack_tags.with(|m| {
+                            key.candidates(m).find_map(|(candidate, tag)| {
+                                key.matches_legacy_ack(candidate, tag)
+                                    .then(|| candidate.clone())
+                            })
+                        });
+                        let Some(candidate) = candidate else {
+                            return Ok(());
+                        };
+                        key = candidate;
                     }
                 }
                 // check is the termination of an existing transaction
                 let last_message = self.finished_transactions.get(&key).and_then(|v| v.clone());
 
-                // A CANCEL shares the INVITE's key but is answered on its own
-                // (RFC 3261 §9.2): 200 once the INVITE had a final response,
-                // else 481 below (dropped unanswered by its TU).
-                if req.method() == &crate::sip::Method::Cancel {
-                    if let Some(SipMessage::Response(r)) = &last_message {
-                        if r.status_code.kind() != crate::sip::StatusCodeKind::Provisional {
-                            let status = crate::sip::StatusCode::OK;
-                            return self.reply_cancel(req, status, Some(r), &connection).await;
-                        }
-                    }
-                } else if let Some(last_message) = last_message {
+                if let Some(last_message) = last_message {
                     // ACK for a completed ServerInvite transaction: absorb it silently
                     // and clean up the waiting_ack entry.
                     if req.method() == &crate::sip::Method::Ack {
@@ -429,6 +439,44 @@ impl EndpointInner {
                     };
                     connection.send(last_message, dest.as_ref()).await?;
                     return Ok(());
+                }
+                if req.method == crate::sip::Method::Cancel && !self.transactions.contains_key(&key)
+                {
+                    // A CANCEL has its own key/cache. Only this explicit lookup
+                    // associates it with a request being cancelled (§9.2).
+                    if let Some(original) = self.transactions.with(|m| {
+                        key.candidates(m)
+                            .map(|(k, _)| k)
+                            .find(|k| key.cancels(k))
+                            .cloned()
+                    }) {
+                        key = original;
+                    } else {
+                        let response = self.finished_transactions.with(|m| {
+                            key.candidates(m).find_map(|(k, v)| {
+                                if !key.cancels(k) {
+                                    return None;
+                                }
+                                match v {
+                                    Some(SipMessage::Response(r))
+                                        if r.status_code.kind()
+                                            != crate::sip::StatusCodeKind::Provisional =>
+                                    {
+                                        Some(r.clone())
+                                    }
+                                    _ => None,
+                                }
+                            })
+                        });
+                        let status = if response.is_some() {
+                            crate::sip::StatusCode::OK
+                        } else {
+                            crate::sip::StatusCode::CallTransactionDoesNotExist
+                        };
+                        return self
+                            .reply_cancel(req, status, response.as_ref(), &connection)
+                            .await;
+                    }
                 }
             }
             SipMessage::Response(resp) => {
@@ -532,6 +580,60 @@ impl EndpointInner {
         Ok(())
     }
 
+    fn match_legacy_request(&self, incoming: &TransactionKey) -> Option<TransactionKey> {
+        self.transactions
+            .with(|m| {
+                incoming
+                    .candidates(m)
+                    .map(|(k, _)| k)
+                    .find(|k| incoming.matches_request(k))
+                    .cloned()
+            })
+            .or_else(|| {
+                self.finished_transactions.with(|m| {
+                    incoming
+                        .candidates(m)
+                        .map(|(k, _)| k)
+                        .find(|k| incoming.matches_request(k))
+                        .cloned()
+                })
+            })
+    }
+
+    pub(crate) fn cached_cancel_response(&self, req: &crate::sip::Request) -> Option<SipMessage> {
+        let key = TransactionKey::from_request(req, super::key::TransactionRole::Server).ok()?;
+        if key.is_legacy() {
+            self.finished_transactions.with(|m| {
+                key.candidates(m)
+                    .find_map(|(k, v)| key.matches_request(k).then(|| v.clone()).flatten())
+            })
+        } else {
+            self.finished_transactions.get(&key).flatten()
+        }
+    }
+
+    /// A CANCEL is immediately answered with a final response. Keep its own
+    /// Completed transaction for Timer J on an unreliable transport (§17.2.2).
+    pub(crate) fn cache_cancel_response(
+        &self,
+        req: &crate::sip::Request,
+        response: &SipMessage,
+        reliable: bool,
+    ) {
+        if reliable {
+            return;
+        }
+        if let Ok(key) = TransactionKey::from_request(req, super::key::TransactionRole::Server) {
+            if self.cached_cancel_response(req).is_some() {
+                return;
+            }
+            self.finished_transactions
+                .insert(key.clone(), Some(response.clone()));
+            self.timers
+                .timeout(self.option.t1x64, TransactionTimer::TimerCleanup(key));
+        }
+    }
+
     /// Answer a CANCEL that no live transaction handles.
     async fn reply_cancel(
         &self,
@@ -551,6 +653,7 @@ impl EndpointInner {
         } else {
             None
         };
+        self.cache_cancel_response(req, &resp, connection.is_reliable());
         connection.send(resp, dest.as_ref()).await
     }
 
@@ -563,6 +666,9 @@ impl EndpointInner {
         trace!(%key, "detach transaction");
         self.transactions.remove(key);
 
+        if last_message.is_none() {
+            self.legacy_ack_tags.remove(key);
+        }
         if let Some(msg) = last_message {
             self.timers.timeout(
                 self.option.t1x64,

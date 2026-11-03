@@ -246,12 +246,13 @@ async fn test_cancel_answers_by_invite_state() {
             assert!(invites
                 .iter()
                 .all(|r| Some(r.0.as_str()) == expected_invite));
-            // The 200 to the CANCEL has the To tag of the INVITE's last
-            // response (§9.2): in Proceeding the 180's (none here) for the
-            // first CANCEL and the 487's for its retransmission.
+            // CANCEL's final response has a To tag even if the prior 180
+            // was untagged (§8.2.6.2). Its UDP retransmission is the same
+            // response (§17.2.2), not a fresh response borrowing a new tag.
             if case == "proceeding" {
-                assert_eq!(cancels[0].1, None, "{row}");
-                assert_eq!(cancels[1].1, invites[0].1, "{row}");
+                assert!(cancels[0].1.is_some(), "{row}");
+                assert_eq!(cancels[0].1, cancels[1].1, "{row}");
+                assert_eq!(cancels[0].1, invites[0].1, "{row}");
             } else if final_tag.is_some() {
                 assert!(cancels.iter().all(|r| r.1 == final_tag), "{row}");
             }

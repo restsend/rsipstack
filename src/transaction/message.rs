@@ -268,6 +268,13 @@ impl EndpointInner {
                 }
             }
         }
+        // Every final response has a To tag (§8.2.6.2), including a 481
+        // for a CANCEL that did not match an original transaction.
+        if let Ok(to) = resp.to_header_mut() {
+            if to.tag().ok().flatten().is_none() {
+                to.mut_tag(super::make_tag()).ok();
+            }
+        }
         resp
     }
 
