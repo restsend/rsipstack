@@ -11,7 +11,12 @@ use tokio::time::{timeout, Duration};
 use tokio_util::codec::Decoder;
 
 fn wire(start: &str, via: &str, length: &str, body: &[u8]) -> Vec<u8> {
-    let mut bytes = format!("{start}\r\nVia: SIP/2.0/UDP {via};branch=z9hG4bK-framing\r\nFrom: <sip:a@example.com>;tag=a\r\nTo: <sip:b@example.com>\r\nCall-ID: framing\r\nCSeq: 1 INVITE\r\nContent-Type: application/sdp\r\n{length}\r\n").into_bytes();
+    let method = if start.starts_with("SIP/") {
+        "INVITE"
+    } else {
+        start.split_whitespace().next().unwrap()
+    };
+    let mut bytes = format!("{start}\r\nVia: SIP/2.0/UDP {via};branch=z9hG4bK-framing\r\nFrom: <sip:a@example.com>;tag=a\r\nTo: <sip:b@example.com>\r\nCall-ID: framing\r\nCSeq: 1 {method}\r\nContent-Type: application/sdp\r\n{length}\r\n").into_bytes();
     bytes.extend_from_slice(body);
     bytes
 }
@@ -240,6 +245,17 @@ async fn udp_truncated_response_is_silently_discarded() {
 async fn udp_malformed_ack_never_gets_response() {
     malformed_udp(
         "ACK sip:b@example.com SIP/2.0",
+        "Content-Length: 3\r\n",
+        false,
+        true,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn udp_malformed_cancel_never_gets_stateless_response() {
+    malformed_udp(
+        "CANCEL sip:b@example.com SIP/2.0",
         "Content-Length: 3\r\n",
         false,
         true,

@@ -256,8 +256,8 @@ impl UdpConnection {
         let SipMessage::Request(mut request) = message else {
             return Ok(None);
         };
-        // ACK never gets a response (RFC 3261 §8.2.7).
-        if request.method == Method::Ack {
+        // Stateless handling must ignore ACK and CANCEL (RFC 3261 §8.2.7).
+        if matches!(request.method, Method::Ack | Method::Cancel) {
             return Ok(None);
         }
         request.from_header()?.typed()?;
