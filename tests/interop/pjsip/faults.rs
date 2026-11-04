@@ -33,7 +33,7 @@ cases! {
     (udp_drop_incoming_cancel_200, true, Cancel, Receive, Cancel, Some(200), Action::Drop),
     (udp_drop_outgoing_cancel_200, false, Cancel, Send, Cancel, Some(200), Action::Drop),
     (udp_drop_incoming_invite_487, true, Cancel, Receive, Invite, Some(487), Action::Drop),
-    (udp_known_gap_drop_outgoing_invite_487, false, Cancel, Send, Invite, Some(487), Action::Drop),
+    (udp_drop_outgoing_invite_487, false, Cancel, Send, Invite, Some(487), Action::Drop),
     (udp_delay_outgoing_ack, true, LocalBye, Send, Ack, None, Action::Delay(150)),
     (udp_delay_incoming_ack, false, LocalBye, Receive, Ack, None, Action::Delay(150)),
     (udp_delay_outgoing_bye, true, LocalBye, Send, Bye, None, Action::Delay(150)),

@@ -12,7 +12,10 @@ use rsipstack::{
         invite_dialog::InviteDialog,
     },
     sip::{prelude::HeadersExt, Method, Request, Response, SipMessage, StatusCode, Uri},
-    transaction::endpoint::{MessageInspector, TransportEventInspector},
+    transaction::{
+        endpoint::{MessageInspector, TransportEventInspector},
+        TransactionState, TransactionType,
+    },
     transport::{
         tcp_listener::TcpListenerConnection, udp::UdpConnection, SipAddr, TransportEvent,
         TransportLayer,
@@ -596,7 +599,19 @@ impl Stack {
                             tx.original.call_id_header().required()?
                         );
                         let task = handler_errors.spawn(context, async move {
-                            dialog.handle(&mut tx).await.required()
+                            dialog.handle(&mut tx).await.required()?;
+                            // CANCEL can finish the dialog before the non-2xx ACK.
+                            // receive() drives retransmission and cleanup timers;
+                            // dropping the transaction here would cancel them.
+                            if tx.transaction_type == TransactionType::ServerInvite
+                                && matches!(
+                                    tx.state,
+                                    TransactionState::Completed | TransactionState::Confirmed
+                                )
+                            {
+                                while tx.receive().await.is_some() {}
+                            }
+                            Ok(())
                         });
                         handlers
                             .lock()

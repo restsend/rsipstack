@@ -20,9 +20,9 @@ brew install cmake pkg-config openssl@3 python
 From the repository root:
 
 ```sh
-bash scripts/interop/run.sh regression                # supported baseline (146 tests)
-bash scripts/interop/run.sh all                       # all 161; includes 15 known-gap probes
-bash scripts/interop/run.sh pjsip                     # 72 PJSUA tests, including one known gap
+bash scripts/interop/run.sh regression                # supported baseline (147 tests)
+bash scripts/interop/run.sh all                       # all 161; includes 14 known-gap probes
+bash scripts/interop/run.sh pjsip                     # 72 PJSUA regression tests
 bash scripts/interop/run.sh pjsip mid_dialog          # 36 mid-dialog PJSUA cases
 bash scripts/interop/run.sh sipp                      # 89 SIPp tests, including known gaps
 bash scripts/interop/run.sh sipp prack                # all 19 PRACK cases, including known gaps
@@ -128,8 +128,8 @@ There are no credentials or external SIP services involved.
 ## Controlled UDP faults and replay
 
 `bash scripts/interop/run.sh faults` selects only the 26 fault scenarios.
-`bash scripts/interop/run.sh regression faults` runs their 23 regression cases;
-`bash scripts/interop/run.sh known-gaps faults` reproduces three known gaps on
+`bash scripts/interop/run.sh regression faults` runs their 24 regression cases;
+`bash scripts/interop/run.sh known-gaps faults` reproduces two known gaps on
 the upstream baseline. Existing local library fixes can change those results.
 The six small fault-engine checks also run under normal `cargo test`; they
 need loopback sockets but no external peer binaries or downloads.
@@ -138,6 +138,13 @@ The fixture wraps the public platform UDP socket interface and still uses a
 real loopback UDP socket. It does not change production code, SIP headers,
 Contact/Via routing or the library's timers. It sees retransmissions that
 bypass the message inspector. TLS/TCP are not covered by this mechanism.
+
+The fixture keeps completed/confirmed server INVITE transactions in their
+owning tasks after `dialog.handle()` returns, driving `receive()` until
+transaction termination. In particular, CANCEL ends the dialog before the
+487 is acknowledged; dropping the transaction at that point would cancel its
+retransmission timer. The lost-487 test checks the real timer-driven retry
+and PJSUA's ACK, with unchanged SIP timers and no injected replacement response.
 
 Each rule selects a direction (`send`/`receive` relative to rsipstack), CSeq
 method, request or exact response status, and a 1-based occurrence. Actions:

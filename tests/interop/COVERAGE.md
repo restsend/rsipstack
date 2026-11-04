@@ -59,9 +59,9 @@ These tests distinguish parsing/accepting a PRACK from implementing the full
 100rel state machine. A passing basic PRACK exchange is not evidence that
 the remaining reliability, validation or offer/answer behavior is complete.
 
-## Known gaps: blocked ACK and lost 487 after CANCEL
+## Known gaps: blocked ACK
 
-`bash scripts/interop/run.sh known-gaps faults` exercises three failures on
+`bash scripts/interop/run.sh known-gaps faults` exercises two failures on
 upstream `03f191d` through the public dialog API:
 
 - `remote_bye_during_blocked_ack`: a valid BYE arrives after 200 while the UDP
@@ -71,12 +71,6 @@ upstream `03f191d` through the public dialog API:
 - `local_bye_waits_for_blocked_ack`: the dialog should already be confirmed
   on receiving 200, and a local BYE must wait for ACK send completion. The
   baseline still exposes Calling at the blocked-ACK checkpoint.
-- `drop_outgoing_invite_487`: PJSUA cancels an incoming call and the fixture
-  drops rsipstack's first 487. No replacement 487 arrives during the 15-second
-  observation window, so PJSUA never sends ACK. In the current public-handler
-  integration, `dialog.handle()` returns after CANCEL and the transaction is
-  dropped; its timer can no longer drive retransmission. This records a gap
-  at that API/integration boundary, without adding a workaround to the fixture.
 
 The blocked-ACK probes deliberately exercise a peer that sends BYE immediately
 after its 200. This is an adversarial timing case, not a claim that a normal
@@ -93,7 +87,7 @@ accepting other response codes.
 ## Executed matrix
 
 There are 161 external-peer test executions:
-146 regression cases and 15 known-gap probes. The lost-PRACK-response and all
+147 regression cases and 14 known-gap probes. The lost-PRACK-response and all
 fault-injection cases are UDP-only; the other families run on both transports.
 
 | Area | Exchanges / assertions | Executions |
@@ -113,9 +107,15 @@ fault-injection cases are UDP-only; the other families run on both transports.
 | Routing | loose Record-Route on ACK/BYE; UPDATE Contact refresh | 4 |
 | Registration | MD5, granted expiry, refresh/unregister, Service-Route, 423 | 6 |
 | Existing subscription | refresh, incoming presence NOTIFY, application reply, unsubscribe | 2 |
-| UDP fault injection with PJSIP | loss in both directions of INVITE, 200, ACK, BYE, CANCEL and their replies; ACK/BYE delays | 19 |
+| UDP fault injection with PJSIP | loss in both directions of INVITE, 200, ACK, BYE, CANCEL and their replies; ACK/BYE delays | 20 |
 | UDP races with SIPp | delayed ACK delivery, wrong-tag BYE during blocked ACK, CANCEL crossing held 200, crossed BYEs | 4 |
-| Known-gap probes | SHA-256; Session-ID; PRACK; blocked ACK/BYE ordering; lost 487 after CANCEL | 15 |
+| Known-gap probes | SHA-256; Session-ID; PRACK; blocked ACK/BYE ordering | 14 |
+
+The lost-487 case is a regression test. An earlier fixture dropped the server
+INVITE transaction when `dialog.handle()` returned after CANCEL, cancelling
+its retransmission timer. Retaining and driving that transaction through
+termination restores the retry and ACK without a library change. This was a
+fixture lifetime issue, not evidence of a PJSIP retransmission defect.
 
 The 36 PJSUA mid-dialog cases run for both initial caller roles and both
 transports. They correlate responses and ACKs with the new request (rather
