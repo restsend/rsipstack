@@ -25,15 +25,17 @@ use crate::Result;
 use core::sync::atomic::Ordering;
 use tracing::{debug, info, trace, warn};
 
-/// Jittered glare backoff: 2.1–4.0 s (RFC 3261 §14.1 wants random spacing).
-/// `AtomicUsize`: xtensa has no 64-bit atomics.
-fn glare_backoff_ms() -> u64 {
-    static COUNTER: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
-    let mut x = (COUNTER.fetch_add(1, Ordering::Relaxed) as u64) ^ 0x9E37_79B9_7F4A_7C15;
-    x ^= x << 13;
-    x ^= x >> 7;
-    x ^= x << 17;
-    2100 + (x % 1900)
+/// RFC 3261 section 14.1 gives the Call-ID owner and its peer disjoint
+/// retry windows, in 10 ms units. The dialog role identifies that owner,
+/// regardless of which party is sending this particular re-INVITE.
+fn glare_backoff_ms(role: TransactionRole) -> u64 {
+    let mut bytes = [0u8; 8];
+    crate::transaction::fill_random_bytes(&mut bytes);
+    let random = u64::from_le_bytes(bytes);
+    match role {
+        TransactionRole::Client => (210 + random % 191) * 10,
+        TransactionRole::Server => (random % 201) * 10,
+    }
 }
 
 /// Unified INVITE dialog that can act as either a UAS (Server) or UAC (Client).
@@ -610,7 +612,8 @@ impl InviteDialog {
     }
 
     /// re-INVITE with glare handling (RFC 3261 §14.1): on 491 retry after a
-    /// jittered 2.1–4.0 s backoff, up to `max_attempts` total.
+    /// jittered backoff, up to `max_attempts` total. The original caller
+    /// (Call-ID owner) waits 2.1–4.0 s; the original callee waits 0–2.0 s.
     pub async fn reinvite_with_glare_retry(
         &self,
         headers: Option<Vec<Header>>,
@@ -631,7 +634,7 @@ impl InviteDialog {
                     "re-INVITE glare: exhausted {max_attempts} retries (491)"
                 )));
             }
-            let backoff_ms = glare_backoff_ms();
+            let backoff_ms = glare_backoff_ms(self.role());
             warn!(
                 id = %self.id(),
                 attempt,
@@ -1142,5 +1145,24 @@ impl TryFrom<InviteDialog> for crate::dialog::client_dialog::ClientInviteDialog 
             ));
         }
         Ok(Self { inner: d.inner })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn glare_backoff_uses_call_id_owner_window_and_ten_ms_units() {
+        for role in [TransactionRole::Client, TransactionRole::Server] {
+            for _ in 0..256 {
+                let delay = glare_backoff_ms(role);
+                match role {
+                    TransactionRole::Client => assert!((2100..=4000).contains(&delay)),
+                    TransactionRole::Server => assert!((0..=2000).contains(&delay)),
+                }
+                assert_eq!(delay % 10, 0, "RFC 3261 section 14.1 uses 10 ms units");
+            }
+        }
     }
 }
