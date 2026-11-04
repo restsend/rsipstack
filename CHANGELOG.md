@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- A final 401/407 for an in-dialog request now returns to its caller without
+  terminating a confirmed dialog when credentials are absent or the retry is
+  rejected. Applications can decide whether to retry, report the failed
+  operation, or explicitly hang up. Initial INVITE authentication and early
+  dialog handling are unchanged; an outgoing BYE still ends the dialog.
+  Public signatures, configuration defaults, and snapshot fields are unchanged.
+
 ## 0.8.0
 
 Four RFC-compliance fixes merged (#216, #217, #218, #219). **No public API

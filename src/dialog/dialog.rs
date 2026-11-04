@@ -1415,6 +1415,14 @@ impl DialogInner {
                                 id = self.id.lock().to_string(),
                                 "received {} response after auth sent", status
                             );
+                            // A failed in-dialog request does not undo the
+                            // established session (RFC 3261 sections 12/14.1).
+                            if self.is_confirmed() {
+                                if method != Method::PRack {
+                                    self.clear_remote_reliable();
+                                }
+                                return Ok(Some(resp));
+                            }
                             self.transition(DialogState::Terminated(
                                 id,
                                 TerminatedReason::ProxyAuthRequired,
@@ -1434,6 +1442,15 @@ impl DialogInner {
                                 id = self.id.lock().to_string(),
                                 "received 407 response without auth option"
                             );
+                            // Return the final challenge to the application;
+                            // the established dialog remains available for
+                            // another operation or normal call teardown.
+                            if self.is_confirmed() {
+                                if method != Method::PRack {
+                                    self.clear_remote_reliable();
+                                }
+                                return Ok(Some(resp));
+                            }
                             self.transition(DialogState::Terminated(
                                 id,
                                 TerminatedReason::ProxyAuthRequired,
