@@ -95,7 +95,15 @@ The runner prints a fresh `target/interop/results/<UTC timestamp>-<pid>/` direct
   `sipp.actions.log`, `sipp.stdout.log`, `sipp.stderr.log`: SIPp traces and counters
   (some files are created only when there is output).
 - `<test>/scenario.xml`: rendered SIPp scenario, including fixed test parameters.
-- `<test>/PASS`: written only after all assertions and peer shutdown succeed.
+- `<test>/background-errors.log`: endpoint, dialog handler and trace-writing errors.
+- `<test>/PASS`: written only after protocol checks, peer shutdown and dialog
+  handlers succeed, with no recorded background errors.
+
+Expected failures return ordinary test errors without unwinding. SIPp failures
+include its error-log excerpt and scenario directory. A secondary transport
+error during teardown (for example, Broken pipe after SIPp times out) is recorded
+in `background-errors.log`; it cannot turn a failed scenario into a pass. Genuine
+panics inside the tested library are not suppressed.
 
 `sip.log` records incoming messages at the transport inspector, including ACKs
 absorbed by the finished-transaction cache. Outgoing messages use the message

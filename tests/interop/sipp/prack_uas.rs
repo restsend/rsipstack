@@ -1,4 +1,5 @@
 use super::{log_dir, sdp, until, Sipp, Stack};
+use crate::interop::{Required, TestResult};
 use rsipstack::{
     dialog::dialog::DialogState,
     sip::{Header, Method},
@@ -10,9 +11,9 @@ async fn scenario(
     rack: Option<&str>,
     expected: u16,
     retransmit: bool,
-) {
-    let dir = log_dir(name);
-    let mut stack = Stack::start(transport, &dir).await;
+) -> TestResult {
+    let dir = log_dir(name)?;
+    let mut stack = Stack::start(transport, &dir).await?;
     let keys = [
         (
             "rack_line",
@@ -34,11 +35,11 @@ async fn scenario(
         &stack.uri,
         &keys,
     )
-    .await;
+    .await?;
     let dialog = peer
         .guarded("incoming INVITE", stack.incoming.recv())
-        .await
-        .unwrap();
+        .await?
+        .required()?;
     dialog
         .ringing(
             Some(vec![
@@ -48,42 +49,41 @@ async fn scenario(
             ]),
             Some(sdp()),
         )
-        .unwrap();
-    peer.marker("PRACK_CHECKED").await;
-    stack.wire.response(true, Method::PRack, expected).await;
+        .required()?;
+    peer.marker("PRACK_CHECKED").await?;
+    stack.wire.response(true, Method::PRack, expected).await?;
     dialog
         .accept(
             Some(vec![Header::ContentType("application/sdp".into())]),
             Some(sdp()),
         )
-        .unwrap();
-    peer.finish().await;
+        .required()?;
+    peer.finish().await?;
     stack
         .state("terminated", |s| matches!(s, DialogState::Terminated(..)))
-        .await;
+        .await?;
     until("empty dialog registry", || {
         stack.layer.is_empty().then_some(())
     })
-    .await;
-    assert_eq!(
+    .await?;
+    check_eq!(
         stack.wire.requests(Method::PRack),
         if expected == 200 { 1 } else { 2 }
     );
-    std::fs::write(
-        dir.join("PASS"),
-        format!("{name}: UAS PRACK over {transport}\n"),
-    )
-    .unwrap();
+    stack
+        .finish(&dir, format!("{name}: UAS PRACK over {transport}\n"))
+        .await?;
+    Ok(())
 }
 
 macro_rules! cases {
     ($(($udp:ident, $tcp:ident, $rack:expr, $status:literal, $retransmit:literal)),* $(,)?) => {$ (
         #[tokio::test]
         #[ignore = "requires SIPp; use scripts/interop/run.sh sipp prack"]
-        async fn $udp() { scenario(stringify!($udp), "udp", $rack, $status, $retransmit).await; }
+        async fn $udp() -> TestResult { scenario(stringify!($udp), "udp", $rack, $status, $retransmit).await }
         #[tokio::test]
         #[ignore = "requires SIPp; use scripts/interop/run.sh sipp prack"]
-        async fn $tcp() { scenario(stringify!($tcp), "tcp", $rack, $status, $retransmit).await; }
+        async fn $tcp() -> TestResult { scenario(stringify!($tcp), "tcp", $rack, $status, $retransmit).await }
     )*};
 }
 cases! {

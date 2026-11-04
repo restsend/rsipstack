@@ -1,4 +1,5 @@
 use super::{bounded, log_dir, sdp, until, Peer, Stack};
+use crate::interop::{Required, TestResult};
 use rsipstack::{
     dialog::{dialog::DialogState, invitation::InviteOption},
     sip::{prelude::HeadersExt, Header, Method, StatusCode},
@@ -12,10 +13,10 @@ enum Outcome {
     Busy,
 }
 
-async fn scenario(name: &str, transport: &str, rsip_calls: bool, outcome: Outcome) {
-    let dir = log_dir(name);
-    let mut peer = Peer::start(transport, &dir).await;
-    let mut stack = Stack::start(transport, &dir).await;
+async fn scenario(name: &str, transport: &str, rsip_calls: bool, outcome: Outcome) -> TestResult {
+    let dir = log_dir(name)?;
+    let mut peer = Peer::start(transport, &dir).await?;
+    let mut stack = Stack::start(transport, &dir).await?;
     let (dialog, invite_task) = if rsip_calls {
         let (d, task) = stack
             .layer
@@ -29,57 +30,57 @@ async fn scenario(name: &str, transport: &str, rsip_calls: bool, outcome: Outcom
                 },
                 stack.sender.clone(),
             )
-            .unwrap();
-        stack.wire.response(false, Method::Invite, 180).await;
+            .required()?;
+        stack.wire.response(false, Method::Invite, 180).await?;
         (d, Some(task))
     } else {
-        peer.command(&format!("m\n{}\n", stack.uri)).await;
+        peer.command(&format!("m\n{}\n", stack.uri)).await?;
         let d = bounded("incoming dialog", stack.incoming.recv())
-            .await
-            .expect("incoming dialog channel");
-        d.ringing(None, None).unwrap();
+            .await?
+            .required()?;
+        d.ringing(None, None).required()?;
         (d, None)
     };
-    peer.wait_text("state changed to EARLY").await;
-    let invite = stack.wire.request(rsip_calls, Method::Invite).await;
-    assert!(invite
+    peer.wait_text("state changed to EARLY").await?;
+    let invite = stack.wire.request(rsip_calls, Method::Invite).await?;
+    check!(invite
         .via_header()
-        .unwrap()
+        .required()?
         .value()
         .contains(&format!("SIP/2.0/{}", transport.to_uppercase())));
 
     let established = matches!(outcome, Outcome::LocalBye | Outcome::PeerBye);
     if established {
         if rsip_calls {
-            peer.command("a\n200\n").await;
+            peer.command("a\n200\n").await?;
         } else {
             dialog
                 .accept(
                     Some(vec![Header::ContentType("application/sdp".into())]),
                     Some(sdp()),
                 )
-                .unwrap();
+                .required()?;
         }
         stack
             .state("confirmed dialog", |s| {
                 matches!(s, DialogState::Confirmed(..))
             })
-            .await;
-        peer.wait_text("state changed to CONFIRMED").await;
+            .await?;
+        peer.wait_text("state changed to CONFIRMED").await?;
     } else {
         match (rsip_calls, outcome) {
-            (true, Outcome::Busy) => peer.command("a\n486\n").await,
-            (false, Outcome::Busy) => dialog.reject(Some(StatusCode::BusyHere), None).unwrap(),
-            (true, Outcome::Cancel) => bounded("send CANCEL", dialog.cancel()).await.unwrap(),
-            (false, Outcome::Cancel) => peer.command("h\n").await,
-            _ => unreachable!(),
+            (true, Outcome::Busy) => peer.command("a\n486\n").await?,
+            (false, Outcome::Busy) => dialog.reject(Some(StatusCode::BusyHere), None).required()?,
+            (true, Outcome::Cancel) => bounded("send CANCEL", dialog.cancel()).await?.required()?,
+            (false, Outcome::Cancel) => peer.command("h\n").await?,
+            _ => return Err(crate::interop::Failure("Invalid harness outcome".into())),
         }
     }
     if let Some(task) = invite_task {
         bounded("INVITE driver", task)
-            .await
-            .expect("INVITE task panicked")
-            .expect("INVITE failed");
+            .await?
+            .required()?
+            .required()?;
     }
 
     let code = match outcome {
@@ -87,104 +88,117 @@ async fn scenario(name: &str, transport: &str, rsip_calls: bool, outcome: Outcom
         Outcome::Cancel => 487,
         _ => 200,
     };
-    let response = stack.wire.response(!rsip_calls, Method::Invite, code).await;
-    let ack = stack.wire.request(rsip_calls, Method::Ack).await;
-    assert_eq!(
-        ack.call_id_header().unwrap(),
-        invite.call_id_header().unwrap()
+    let response = stack
+        .wire
+        .response(!rsip_calls, Method::Invite, code)
+        .await?;
+    let ack = stack.wire.request(rsip_calls, Method::Ack).await?;
+    check_eq!(
+        ack.call_id_header().required()?,
+        invite.call_id_header().required()?
     );
-    assert_eq!(
-        ack.cseq_header().unwrap().seq().unwrap(),
-        invite.cseq_header().unwrap().seq().unwrap()
+    check_eq!(
+        ack.cseq_header().required()?.seq().required()?,
+        invite.cseq_header().required()?.seq().required()?
     );
-    assert_eq!(
-        ack.from_header().unwrap().tag().unwrap(),
-        invite.from_header().unwrap().tag().unwrap()
+    check_eq!(
+        ack.from_header().required()?.tag().required()?,
+        invite.from_header().required()?.tag().required()?
     );
-    assert_eq!(
-        ack.to_header().unwrap().tag().unwrap(),
-        response.to_header().unwrap().tag().unwrap()
+    check_eq!(
+        ack.to_header().required()?.tag().required()?,
+        response.to_header().required()?.tag().required()?
     );
 
     if established {
-        assert!(!response.body.is_empty(), "2xx must carry the SDP answer");
+        check!(!response.body.is_empty(), "2xx must carry the SDP answer");
         let local_bye = matches!(outcome, Outcome::LocalBye);
         if local_bye {
-            bounded("send BYE", dialog.bye()).await.unwrap();
+            bounded("send BYE", dialog.bye()).await?.required()?;
         } else {
-            peer.command("h\n").await;
+            peer.command("h\n").await?;
         }
-        let bye = stack.wire.request(local_bye, Method::Bye).await;
-        assert_eq!(
-            bye.call_id_header().unwrap(),
-            invite.call_id_header().unwrap()
+        let bye = stack.wire.request(local_bye, Method::Bye).await?;
+        check_eq!(
+            bye.call_id_header().required()?,
+            invite.call_id_header().required()?
         );
-        let original_from = invite.from_header().unwrap().tag().unwrap();
-        let original_to = response.to_header().unwrap().tag().unwrap();
+        let original_from = invite.from_header().required()?.tag().required()?;
+        let original_to = response.to_header().required()?.tag().required()?;
         let (from, to) = if local_bye == rsip_calls {
             (original_from, original_to)
         } else {
             (original_to, original_from)
         };
-        assert_eq!(bye.from_header().unwrap().tag().unwrap(), from);
-        assert_eq!(bye.to_header().unwrap().tag().unwrap(), to);
-        let bye_ok = stack.wire.response(!local_bye, Method::Bye, 200).await;
-        assert_eq!(bye_ok.cseq_header().unwrap(), bye.cseq_header().unwrap());
+        check_eq!(bye.from_header().required()?.tag().required()?, from);
+        check_eq!(bye.to_header().required()?.tag().required()?, to);
+        let bye_ok = stack.wire.response(!local_bye, Method::Bye, 200).await?;
+        check_eq!(
+            bye_ok.cseq_header().required()?,
+            bye.cseq_header().required()?
+        );
     } else if matches!(outcome, Outcome::Cancel) {
-        let cancel = stack.wire.request(rsip_calls, Method::Cancel).await;
-        assert_eq!(
-            cancel.call_id_header().unwrap(),
-            invite.call_id_header().unwrap()
+        let cancel = stack.wire.request(rsip_calls, Method::Cancel).await?;
+        check_eq!(
+            cancel.call_id_header().required()?,
+            invite.call_id_header().required()?
         );
-        assert_eq!(
-            cancel.cseq_header().unwrap().seq().unwrap(),
-            invite.cseq_header().unwrap().seq().unwrap()
+        check_eq!(
+            cancel.cseq_header().required()?.seq().required()?,
+            invite.cseq_header().required()?.seq().required()?
         );
-        stack.wire.response(!rsip_calls, Method::Cancel, 200).await;
+        stack
+            .wire
+            .response(!rsip_calls, Method::Cancel, 200)
+            .await?;
     }
     stack
         .state("terminated dialog", |s| {
             matches!(s, DialogState::Terminated(..))
         })
-        .await;
-    peer.wait_text("is DISCONNECTED").await;
+        .await?;
+    peer.wait_text("is DISCONNECTED").await?;
     // PJSUA exits cleanly only after we have observed the expected SIP result.
-    peer.stop().await;
+    peer.stop().await?;
     until("empty dialog registry", || {
         stack.layer.is_empty().then_some(())
     })
-    .await;
-    let states = stack.states.lock().unwrap();
-    assert_eq!(
-        states
-            .iter()
-            .filter(|s| matches!(s, DialogState::Terminated(..)))
-            .count(),
-        1
-    );
-    assert_eq!(
-        states
-            .iter()
-            .filter(|s| matches!(s, DialogState::Confirmed(..)))
-            .count(),
-        usize::from(established)
-    );
-    if !established {
-        assert_eq!(stack.wire.requests(Method::Bye), 0);
+    .await?;
+    {
+        let states = stack.states.lock().unwrap_or_else(|p| p.into_inner());
+        check_eq!(
+            states
+                .iter()
+                .filter(|s| matches!(s, DialogState::Terminated(..)))
+                .count(),
+            1
+        );
+        check_eq!(
+            states
+                .iter()
+                .filter(|s| matches!(s, DialogState::Confirmed(..)))
+                .count(),
+            usize::from(established)
+        );
+        if !established {
+            check_eq!(stack.wire.requests(Method::Bye), 0);
+        }
     }
-    std::fs::write(
-        dir.join("PASS"),
-        format!("{name}: {transport}, rsip_calls={rsip_calls}, {outcome:?}\n"),
-    )
-    .unwrap();
+    stack
+        .finish(
+            &dir,
+            format!("{name}: {transport}, rsip_calls={rsip_calls}, {outcome:?}\n"),
+        )
+        .await?;
+    Ok(())
 }
 
 macro_rules! interop_case {
     ($name:ident, $transport:literal, $caller:literal, $outcome:ident) => {
         #[tokio::test]
         #[ignore = "requires a separate PJSUA process; use scripts/interop/run.sh"]
-        async fn $name() {
-            scenario(stringify!($name), $transport, $caller, Outcome::$outcome).await;
+        async fn $name() -> TestResult {
+            scenario(stringify!($name), $transport, $caller, Outcome::$outcome).await
         }
     };
 }

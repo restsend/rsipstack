@@ -1,4 +1,5 @@
 use super::{bounded, log_dir, sdp, until, Sipp, Stack};
+use crate::interop::{Required, TestResult};
 use rsipstack::{
     dialog::{authenticate::Credential, dialog::DialogState, invitation::InviteOption},
     sip::{prelude::HeadersExt, Header, Method, Request, SipMessage},
@@ -84,7 +85,7 @@ pub(super) fn sent_requests(stack: &Stack, method: Method) -> Vec<Request> {
         .wire
         .0
         .lock()
-        .unwrap()
+        .unwrap_or_else(|p| p.into_inner())
         .iter()
         .filter_map(|p| match &p.message {
             SipMessage::Request(r) if p.sent && r.method == method => Some(r.clone()),
@@ -93,21 +94,22 @@ pub(super) fn sent_requests(stack: &Stack, method: Method) -> Vec<Request> {
         .collect()
 }
 
-fn assert_alive(stack: &Stack) {
-    assert!(!stack
+fn assert_alive(stack: &Stack) -> TestResult {
+    check!(!stack
         .states
         .lock()
-        .unwrap()
+        .unwrap_or_else(|p| p.into_inner())
         .iter()
         .any(|s| matches!(s, DialogState::Terminated(..))));
-    assert!(!stack.layer.is_empty());
+    check!(!stack.layer.is_empty());
+    Ok(())
 }
 
-async fn scenario(name: &str, transport: &str, case: Case) {
-    let dir = log_dir(name);
-    let stack = Stack::start(transport, &dir).await;
+async fn scenario(name: &str, transport: &str, case: Case) -> TestResult {
+    let dir = log_dir(name)?;
+    let stack = Stack::start(transport, &dir).await?;
     let mut peer =
-        Sipp::start_with_keys(case.file(), transport, &dir, &stack.uri, &case.keys()).await;
+        Sipp::start_with_keys(case.file(), transport, &dir, &stack.uri, &case.keys()).await?;
     let credential = matches!(case, Case::Auth(..)).then(|| Credential {
         username: "alice".into(),
         password: "secret".into(),
@@ -130,25 +132,29 @@ async fn scenario(name: &str, transport: &str, case: Case) {
             },
             stack.sender.clone(),
         )
-        .unwrap();
+        .required()?;
     if matches!(case, Case::LateCancel200) {
-        stack.wire.response(false, Method::Invite, 180).await;
-        bounded("CANCEL", dialog.cancel()).await.unwrap();
-        stack.wire.response(false, Method::Cancel, 200).await;
+        stack.wire.response(false, Method::Invite, 180).await?;
+        bounded("CANCEL", dialog.cancel()).await?.required()?;
+        stack.wire.response(false, Method::Cancel, 200).await?;
     }
-    let (_, response) = peer.guarded("INVITE", invite_task).await.unwrap().unwrap();
+    let (_, response) = peer
+        .guarded("INVITE", invite_task)
+        .await?
+        .required()?
+        .required()?;
     let expected = match case {
         Case::Final(code) | Case::NoCredentials(code) => code,
         _ => 200,
     };
-    assert_eq!(response.unwrap().status_code.code(), expected);
+    check_eq!(response.required()?.status_code.code(), expected);
 
     match case {
         Case::EarlyMedia => {
             for code in [100, 180, 183] {
-                let r = stack.wire.response(false, Method::Invite, code).await;
+                let r = stack.wire.response(false, Method::Invite, code).await?;
                 if code == 183 {
-                    assert!(!r.body.is_empty());
+                    check!(!r.body.is_empty());
                 }
             }
             stack
@@ -156,7 +162,7 @@ async fn scenario(name: &str, transport: &str, case: Case) {
                     "early media notification",
                     |s| matches!(s, DialogState::Early(_, r) if r.status_code.code() == 183),
                 )
-                .await;
+                .await?;
         }
         Case::InDialog => {
             for (method, content_type, body) in [
@@ -174,18 +180,18 @@ async fn scenario(name: &str, transport: &str, case: Case) {
             ] {
                 let headers = content_type.map(|c| vec![Header::ContentType(c.into())]);
                 let response = bounded("in-dialog request", dialog.request(method, headers, body))
-                    .await
-                    .unwrap()
-                    .unwrap();
-                assert_eq!(response.status_code.code(), 200);
-                assert!(matches!(dialog.state(), DialogState::Confirmed(..)));
-                assert_alive(&stack);
+                    .await?
+                    .required()?
+                    .required()?;
+                check_eq!(response.status_code.code(), 200);
+                check!(matches!(dialog.state(), DialogState::Confirmed(..)));
+                assert_alive(&stack)?;
             }
         }
         Case::HoldResume => {
             for (version, direction) in [(2, "sendonly"), (3, "sendrecv")] {
                 let offer = String::from_utf8(sdp())
-                    .unwrap()
+                    .required()?
                     .replace("o=- 1 1", &format!("o=- 1 {version}"))
                     .replace("a=inactive", &format!("a={direction}"));
                 let response = bounded(
@@ -195,13 +201,13 @@ async fn scenario(name: &str, transport: &str, case: Case) {
                         Some(offer.into_bytes()),
                     ),
                 )
-                .await
-                .unwrap()
-                .unwrap();
-                assert_eq!(response.status_code.code(), 200);
-                assert!(!response.body.is_empty());
-                assert!(matches!(dialog.state(), DialogState::Confirmed(..)));
-                assert_alive(&stack);
+                .await?
+                .required()?
+                .required()?;
+                check_eq!(response.status_code.code(), 200);
+                check!(!response.body.is_empty());
+                check!(matches!(dialog.state(), DialogState::Confirmed(..)));
+                assert_alive(&stack)?;
             }
         }
         Case::ReinviteRejected => {
@@ -212,12 +218,12 @@ async fn scenario(name: &str, transport: &str, case: Case) {
                     Some(sdp()),
                 ),
             )
-            .await
-            .unwrap()
-            .unwrap();
-            assert_eq!(response.status_code.code(), 488);
-            assert!(matches!(dialog.state(), DialogState::Confirmed(..)));
-            assert_alive(&stack);
+            .await?
+            .required()?
+            .required()?;
+            check_eq!(response.status_code.code(), 488);
+            check!(matches!(dialog.state(), DialogState::Confirmed(..)));
+            assert_alive(&stack)?;
         }
         Case::Update | Case::TargetRefresh => {
             let response = bounded(
@@ -227,32 +233,32 @@ async fn scenario(name: &str, transport: &str, case: Case) {
                     Some(sdp()),
                 ),
             )
-            .await
-            .unwrap()
-            .unwrap();
-            assert_eq!(response.status_code.code(), 200);
-            assert_alive(&stack);
+            .await?
+            .required()?
+            .required()?;
+            check_eq!(response.status_code.code(), 200);
+            assert_alive(&stack)?;
         }
         Case::Forked200 => {
             let response = bounded("release forked answer", dialog.options(None))
-                .await
-                .unwrap()
-                .unwrap();
-            assert_eq!(response.status_code.code(), 200);
-            peer.marker("FORK_ENDED").await;
-            assert_eq!(dialog.id().remote_tag, "sipp-test");
-            assert_eq!(stack.layer.len(), 1);
-            assert_alive(&stack);
+                .await?
+                .required()?
+                .required()?;
+            check_eq!(response.status_code.code(), 200);
+            peer.marker("FORK_ENDED").await?;
+            check_eq!(dialog.id().remote_tag, "sipp-test");
+            check_eq!(stack.layer.len(), 1);
+            assert_alive(&stack)?;
             let response = bounded("primary branch OPTIONS", dialog.options(None))
-                .await
-                .unwrap()
-                .unwrap();
-            assert_eq!(response.status_code.code(), 200);
+                .await?
+                .required()?
+                .required()?;
+            check_eq!(response.status_code.code(), 200);
         }
         _ => {}
     }
     if case.established() {
-        bounded("BYE", dialog.bye()).await.unwrap();
+        bounded("BYE", dialog.bye()).await?.required()?;
         stack
             .wire
             .response(
@@ -264,16 +270,16 @@ async fn scenario(name: &str, transport: &str, case: Case) {
                     200
                 },
             )
-            .await;
+            .await?;
     }
-    peer.finish().await;
+    peer.finish().await?;
     stack
         .state("terminated", |s| matches!(s, DialogState::Terminated(..)))
-        .await;
+        .await?;
     until("empty dialog registry", || {
         stack.layer.is_empty().then_some(())
     })
-    .await;
+    .await?;
 
     // ACK every final INVITE response with the corresponding CSeq and Call-ID.
     let invites = sent_requests(&stack, Method::Invite);
@@ -290,77 +296,90 @@ async fn scenario(name: &str, transport: &str, case: Case) {
         Case::ReinviteRejected => 2,
         _ => 1,
     };
-    assert_eq!(invites.len(), expected_invites);
+    check_eq!(invites.len(), expected_invites);
     if matches!(case, Case::Auth(407, ..)) {
-        verify_proxy_digest(invites.last().unwrap());
+        verify_proxy_digest(invites.last().required()?)?;
     }
-    assert_eq!(
+    check_eq!(
         acks.len(),
         invites.len() + usize::from(matches!(case, Case::Forked200))
     );
     if matches!(case, Case::Forked200) {
         let byes = sent_requests(&stack, Method::Bye);
-        assert_eq!(byes.len(), 2);
-        assert!(byes[0].uri.to_string().contains("sip:fork@"));
-        assert_eq!(
-            byes[0].to_header().unwrap().tag().unwrap().unwrap().value(),
+        check_eq!(byes.len(), 2);
+        check!(byes[0].uri.to_string().contains("sip:fork@"));
+        check_eq!(
+            byes[0]
+                .to_header()
+                .required()?
+                .tag()
+                .required()?
+                .required()?
+                .value(),
             "fork-b"
         );
-        assert_eq!(
-            byes[1].to_header().unwrap().tag().unwrap().unwrap().value(),
+        check_eq!(
+            byes[1]
+                .to_header()
+                .required()?
+                .tag()
+                .required()?
+                .required()?
+                .value(),
             "sipp-test"
         );
     }
     for (invite, ack) in invites.iter().zip(&acks) {
-        assert_eq!(
-            invite.call_id_header().unwrap(),
-            ack.call_id_header().unwrap()
+        check_eq!(
+            invite.call_id_header().required()?,
+            ack.call_id_header().required()?
         );
-        assert_eq!(
-            invite.cseq_header().unwrap().seq().unwrap(),
-            ack.cseq_header().unwrap().seq().unwrap()
+        check_eq!(
+            invite.cseq_header().required()?.seq().required()?,
+            ack.cseq_header().required()?.seq().required()?
         );
-        assert_eq!(
-            invite.from_header().unwrap().tag().unwrap(),
-            ack.from_header().unwrap().tag().unwrap()
+        check_eq!(
+            invite.from_header().required()?.tag().required()?,
+            ack.from_header().required()?.tag().required()?
         );
     }
     for pair in invites.windows(2) {
-        assert_eq!(
-            pair[0].call_id_header().unwrap(),
-            pair[1].call_id_header().unwrap()
+        check_eq!(
+            pair[0].call_id_header().required()?,
+            pair[1].call_id_header().required()?
         );
-        assert!(
-            pair[1].cseq_header().unwrap().seq().unwrap()
-                > pair[0].cseq_header().unwrap().seq().unwrap()
+        check!(
+            pair[1].cseq_header().required()?.seq().required()?
+                > pair[0].cseq_header().required()?.seq().required()?
         );
     }
     if matches!(case, Case::Final(_) | Case::NoCredentials(_)) {
-        assert_eq!(stack.wire.requests(Method::Bye), 0);
+        check_eq!(stack.wire.requests(Method::Bye), 0);
     }
-    let states = stack.states.lock().unwrap();
-    assert_eq!(
-        states
-            .iter()
-            .filter(|s| matches!(s, DialogState::Terminated(..)))
-            .count(),
-        1
-    );
-    assert_eq!(
-        states
-            .iter()
-            .filter(|s| matches!(s, DialogState::Confirmed(..)))
-            .count(),
-        usize::from(case.established())
-    );
-    std::fs::write(
-        dir.join("PASS"),
-        format!("{name}: {case:?} over {transport}\n"),
-    )
-    .unwrap();
+    {
+        let states = stack.states.lock().unwrap_or_else(|p| p.into_inner());
+        check_eq!(
+            states
+                .iter()
+                .filter(|s| matches!(s, DialogState::Terminated(..)))
+                .count(),
+            1
+        );
+        check_eq!(
+            states
+                .iter()
+                .filter(|s| matches!(s, DialogState::Confirmed(..)))
+                .count(),
+            usize::from(case.established())
+        );
+    }
+    stack
+        .finish(&dir, format!("{name}: {case:?} over {transport}\n"))
+        .await?;
+    Ok(())
 }
 
-fn verify_proxy_digest(request: &Request) {
+fn verify_proxy_digest(request: &Request) -> TestResult {
     use std::{
         io::Write,
         process::{Command, Stdio},
@@ -371,27 +390,28 @@ fn verify_proxy_digest(request: &Request) {
         )
         .stdin(Stdio::piped())
         .spawn()
-        .expect("start independent digest verifier");
+        .required()?;
     verifier
         .stdin
         .take()
-        .unwrap()
+        .required()?
         .write_all(request.to_string().as_bytes())
-        .unwrap();
-    assert!(
-        verifier.wait().unwrap().success(),
+        .required()?;
+    check!(
+        verifier.wait().required()?.success(),
         "Invalid Proxy-Authorization digest"
     );
+    Ok(())
 }
 
 macro_rules! cases {
     ($(($udp:ident, $tcp:ident, $case:expr)),* $(,)?) => {$ (
         #[tokio::test]
         #[ignore = "requires SIPp; use scripts/interop/run.sh sipp"]
-        async fn $udp() { scenario(stringify!($udp), "udp", $case).await; }
+        async fn $udp() -> TestResult { scenario(stringify!($udp), "udp", $case).await }
         #[tokio::test]
         #[ignore = "requires SIPp; use scripts/interop/run.sh sipp"]
-        async fn $tcp() { scenario(stringify!($tcp), "tcp", $case).await; }
+        async fn $tcp() -> TestResult { scenario(stringify!($tcp), "tcp", $case).await }
     )*};
 }
 cases! {
@@ -428,11 +448,11 @@ cases! {
 
 #[tokio::test]
 #[ignore = "requires SIPp; use scripts/interop/run.sh sipp prack_lost_response"]
-async fn udp_prack_lost_response() {
+async fn udp_prack_lost_response() -> TestResult {
     scenario(
         "udp_prack_lost_response",
         "udp",
         Case::Prack("prack_lost_response"),
     )
-    .await;
+    .await
 }
