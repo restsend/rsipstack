@@ -12,6 +12,7 @@
 //! [`ClientInviteDialog`]: crate::dialog::client_dialog::ClientInviteDialog
 
 use super::dialog::DialogInner;
+use super::dialog::InitialInviteAck;
 use super::dialog::{Dialog, DialogInnerRef, DialogState, TerminatedReason, TransactionHandle};
 use super::subscription::{ClientSubscriptionDialog, ServerSubscriptionDialog};
 use super::DialogId;
@@ -45,6 +46,16 @@ fn glare_backoff_ms() -> u64 {
 #[derive(Clone)]
 pub struct InviteDialog {
     pub(super) inner: DialogInnerRef,
+}
+
+// Wake local teardown if the INVITE driver is dropped during ACK. It must
+// report an interrupted ACK instead of waiting forever or sending BYE first.
+struct InitialAckGuard(Arc<InitialInviteAck>);
+
+impl Drop for InitialAckGuard {
+    fn drop(&mut self) {
+        self.0.done.cancel();
+    }
 }
 
 impl InviteDialog {
@@ -326,9 +337,20 @@ impl InviteDialog {
 
     /// Drive the outbound INVITE transaction until a final response arrives.
     /// Only meaningful for UAC dialogs.
+    /// `Confirmed` is notified before sending the initial ACK, allowing an
+    /// incoming BYE immediately. This method returns after the ACK attempt;
+    /// local `bye()`/`hangup()` calls wait for that attempt to complete.
     pub async fn process_invite(
         &self,
         tx: &mut Transaction,
+    ) -> Result<(DialogId, Option<Response>)> {
+        self.process_invite_with_registration(tx, |_| {}).await
+    }
+
+    pub(super) async fn process_invite_with_registration(
+        &self,
+        tx: &mut Transaction,
+        mut register: impl FnMut(&DialogId) + Send,
     ) -> Result<(DialogId, Option<Response>)> {
         if self.role() != TransactionRole::Client {
             return Err(crate::Error::DialogError(
@@ -348,7 +370,23 @@ impl InviteDialog {
         self.inner.set_server_connection(tx.connection.clone());
         let mut dialog_id = self.id();
         let mut final_response = None;
-        while let Some(msg) = tx.receive().await {
+        loop {
+            let ack = InitialInviteAck::new();
+            let _ack_guard = InitialAckGuard(ack.clone());
+            let mut established = Ok(false);
+            let msg = tx
+                .receive_with_response_observer(|resp| {
+                    let peer_uuid = resp.session_id_header().and_then(|s| s.local_uuid());
+                    self.inner.observe_peer_session_uuid(peer_uuid);
+                    if resp.status_code.kind() == StatusCodeKind::Successful {
+                        self.inner.initial_ack.lock().replace(ack.clone());
+                        established = self.establish_from_2xx(resp, &mut register);
+                    }
+                })
+                .await;
+            ack.finish();
+            let cancelled = established?;
+            let Some(msg) = msg else { break };
             match msg {
                 SipMessage::Request(_) => {}
                 SipMessage::Response(resp) => {
@@ -431,10 +469,10 @@ impl InviteDialog {
                         {
                             self.inner.update_route_set_from_response(&resp);
                         }
-                        StatusCode::OK => {
-                            self.update_remote_target_from_2xx(&resp)?;
-                            let confirmed = DialogState::Confirmed(dialog_id.clone(), resp.clone());
-                            if self.inner.confirm_unless_cancelled(confirmed) {
+                        _ if resp.status_code.kind() == StatusCodeKind::Successful => {
+                            // Already established before the ACK. Never confirm
+                            // again: an incoming BYE may have terminated it.
+                            if cancelled {
                                 self.bye_2xx_of_cancelled(resp);
                             }
                         }
@@ -450,6 +488,22 @@ impl InviteDialog {
             }
         }
         Ok((dialog_id, final_response))
+    }
+
+    fn establish_from_2xx(
+        &self,
+        resp: &Response,
+        register: &mut impl FnMut(&DialogId),
+    ) -> Result<bool> {
+        if let Some(tag) = resp.to_header()?.tag()? {
+            self.inner.update_remote_tag(tag.value())?;
+        }
+        self.update_remote_target_from_2xx(resp)?;
+        let id = self.id();
+        let confirmed = DialogState::Confirmed(id.clone(), resp.clone());
+        Ok(self
+            .inner
+            .confirm_unless_cancelled(confirmed, || register(&id)))
     }
 
     /// Take the route set, Contact and remote target from a 2xx to the INVITE.
@@ -544,6 +598,7 @@ impl InviteDialog {
     /// Send a BYE request with custom headers (role-aware termination reason).
     ///
     /// BYE can only be sent from `Confirmed` (or `WaitAck` for a server dialog).
+    /// A UAC waits for its initial ACK attempt before sending the BYE.
     /// Calling BYE in any other non-terminated state returns an error; terminated
     /// dialogs remain a silent no-op.
     ///

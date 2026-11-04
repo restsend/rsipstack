@@ -203,6 +203,11 @@ pub(super) struct DialogGuardForUnconfirmed {
 
 impl Drop for DialogGuardForUnconfirmed {
     fn drop(&mut self) {
+        // Normal completion has handed ownership to the caller, even when
+        // the confirmed key equals the early key (a tag-less 2xx).
+        if self.dialog.is_none() {
+            return;
+        }
         let client_dialog = match self.dialog_layer_inner.dialogs.remove(&self.id.to_string()) {
             Some(Dialog::Invite(client_dialog)) => client_dialog,
             Some(_) => return,
@@ -686,9 +691,19 @@ impl DialogLayer {
             .as_mut()
             .expect("transcation should be avaible");
 
-        let r = dialog.process_invite(tx).boxed().await;
+        let r = dialog
+            .process_invite_with_registration(tx, |new_id| {
+                self.inner.dialogs.with_mut(|dialogs| {
+                    dialogs.remove(&id.to_string());
+                    dialogs.insert(new_id.to_string(), Dialog::Invite(dialog.clone()));
+                });
+            })
+            .boxed()
+            .await;
         guard.dialog = None;
-        self.inner.dialogs.remove(&id.to_string());
+        if !dialog.inner.is_confirmed() {
+            self.inner.dialogs.remove(&id.to_string());
+        }
 
         match r {
             Ok((new_dialog_id, resp)) => {
@@ -696,17 +711,8 @@ impl DialogLayer {
                     Some(ref r)
                         if r.status_code.kind() == crate::sip::StatusCodeKind::Successful =>
                     {
-                        // A cancelled INVITE's 2xx was BYE'd: nothing to register.
-                        if !dialog.inner.is_terminated() {
-                            debug!(
-                                "client invite dialog confirmed: {} => {}",
-                                id, new_dialog_id
-                            );
-                            self.inner
-                                .dialogs
-                                .insert(new_dialog_id.to_string(), Dialog::Invite(dialog.clone()));
-                        }
-
+                        // Registration happened before ACK, and must not be
+                        // repeated after a concurrent BYE/remove_dialog.
                         // RFC 6026 §7.2: the client transaction is in Accepted
                         // with Timer M (64*T1) armed. Keep receiving until it
                         // ends so retransmitted 2xx keep being re-ACKed and
@@ -737,8 +743,8 @@ impl DialogLayer {
     /// Asynchronously executes an INVITE transaction in the background.
     ///
     /// Registers the dialog under an early dialog ID while the INVITE is in progress.
-    /// Once completed, the early entry is removed and, on 2xx response,
-    /// the dialog is re-registered under the confirmed dialog ID.
+    /// On a 2xx response, the early entry is replaced by the confirmed dialog
+    /// ID before sending ACK, so incoming requests can be handled immediately.
     /// Returns a JoinHandle resolving to the final dialog ID and response.
     ///
     /// # Important: Cleanup Required
@@ -787,15 +793,24 @@ impl DialogLayer {
                 .invite_tx
                 .as_mut()
                 .expect("transaction should be available");
-            let r = dialog_clone.process_invite(invite_tx).boxed().await;
+            let r = dialog_clone
+                .process_invite_with_registration(invite_tx, |new_id| {
+                    inner.dialogs.with_mut(|dialogs| {
+                        dialogs.remove(&id0.to_string());
+                        dialogs.insert(new_id.to_string(), Dialog::Invite(dialog_clone.clone()));
+                    });
+                })
+                .boxed()
+                .await;
             guard.dialog = None;
             let mut tx = guard
                 .invite_tx
                 .take()
                 .expect("transaction should be available");
 
-            // remove early key
-            inner.dialogs.remove(&id0.to_string());
+            if !dialog_clone.inner.is_confirmed() {
+                inner.dialogs.remove(&id0.to_string());
+            }
 
             match &r {
                 Ok((new_id, resp_opt)) => {
@@ -807,14 +822,8 @@ impl DialogLayer {
                         .unwrap_or(false);
 
                     if is_2xx {
-                        // A cancelled INVITE's 2xx was BYE'd: nothing to register.
-                        if !dialog_clone.inner.is_terminated() {
-                            debug!("client invite dialog confirmed: {} => {}", id0, new_id);
-                            inner
-                                .dialogs
-                                .insert(new_id.to_string(), Dialog::Invite(dialog_clone.clone()));
-                        }
-
+                        // The full key was registered before ACK. Do not
+                        // resurrect a dialog the application already removed.
                         // RFC 6026 §7.2: keep draining the Accepted transaction
                         // until Timer M ends it (re-ACKs retransmitted 2xx,
                         // observes forked 2xx, and detaches it from the
