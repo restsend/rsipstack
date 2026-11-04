@@ -510,6 +510,18 @@ impl Transaction {
             SipMessage::Response(resp) => self.last_response.replace(resp),
             _ => None,
         };
+        if self.key.is_legacy() && self.transaction_type == TransactionType::ServerInvite {
+            if let Some(resp) = self
+                .last_response
+                .as_ref()
+                .filter(|r| r.status_code.code() >= 300)
+            {
+                self.endpoint_inner.legacy_ack_tags.insert(
+                    self.key.clone(),
+                    resp.to_header()?.tag()?.map(|t| t.to_string()),
+                );
+            }
+        }
         // The peer can ACK the 2xx before the transition below runs: add
         // the route the ACK takes (new branch, matched by dialog and CSeq)
         // before sending, so that ACK waits in this transaction's queue.
@@ -868,11 +880,27 @@ impl Transaction {
         }
 
         if self.connection.is_none() && connection.is_some() {
-            self.connection = connection;
+            self.connection = connection.clone();
         }
         if req.method == Method::Cancel {
+            let cancel_connection = connection.as_ref().or(self.connection.as_ref());
+            let cancel_destination = if cancel_connection.is_some_and(|c| !c.is_reliable()) {
+                self.endpoint_inner.get_destination_from_request(&req).await
+            } else {
+                None
+            };
+            // Two retransmissions may already be queued in the INVITE TU.
+            // Only the first CANCEL is delivered to the application.
+            if let Some(response) = self.endpoint_inner.cached_cancel_response(&req) {
+                if let Some(conn) = cancel_connection {
+                    conn.send(response, cancel_destination.as_ref()).await.ok();
+                }
+                return None;
+            }
             let forward_to_tu = match self.state {
-                TransactionState::Proceeding | TransactionState::Trying => true,
+                TransactionState::Proceeding | TransactionState::Trying => {
+                    self.transaction_type == TransactionType::ServerInvite
+                }
                 // RFC 3261 Section 9.2: after a final response, CANCEL has no
                 // effect on the original request, its responses, or session state.
                 // A 2xx keeps the transaction in Accepted (RFC 6026 §7.1).
@@ -880,37 +908,77 @@ impl Transaction {
                 | TransactionState::Confirmed
                 | TransactionState::Accepted => false,
                 _ => {
-                    if let Some(connection) = &self.connection {
-                        let resp = self.endpoint_inner.make_response(
+                    if let Some(connection) = cancel_connection {
+                        let resp = self.endpoint_inner.make_cancel_response(
                             &req,
                             StatusCode::CallTransactionDoesNotExist,
                             None,
                         );
                         let resp =
                             if let Some(ref inspector) = self.endpoint_inner.message_inspector {
-                                inspector.before_send(resp.into(), self.destination.as_ref())
+                                inspector.before_send(resp.into(), cancel_destination.as_ref())
                             } else {
                                 resp.into()
                             };
 
-                        connection.send(resp, self.destination.as_ref()).await.ok();
+                        self.endpoint_inner.cache_cancel_response(
+                            &req,
+                            &resp,
+                            connection.is_reliable(),
+                        );
+                        connection
+                            .send(resp, cancel_destination.as_ref())
+                            .await
+                            .ok();
                     }
                     return None;
                 }
             };
 
-            if let Some(connection) = &self.connection {
-                let resp = self.endpoint_inner.make_cancel_response(
+            if let Some(connection) = cancel_connection {
+                let mut resp = self.endpoint_inner.make_cancel_response(
                     &req,
                     StatusCode::OK,
                     self.last_response.as_ref(),
                 );
+                // Prefer the original response's tag. Before a tagged INVITE
+                // response exists, keep a tag on the original for subsequent
+                // reply() and CANCEL responses (§9.2).
+                let tag = self
+                    .last_response
+                    .as_ref()
+                    .and_then(|r| r.to_header().ok()?.tag().ok().flatten())
+                    .or_else(|| self.original.to_header().ok()?.tag().ok().flatten())
+                    .or_else(|| resp.to_header().ok()?.tag().ok().flatten());
+                if let Some(tag) = tag {
+                    resp.to_header_mut()
+                        .and_then(|h| h.mut_tag(tag.clone()))
+                        .ok();
+                    if self
+                        .original
+                        .to_header()
+                        .ok()
+                        .and_then(|h| h.tag().ok())
+                        .flatten()
+                        .is_none()
+                    {
+                        self.original
+                            .to_header_mut()
+                            .and_then(|h| h.mut_tag(tag))
+                            .ok();
+                    }
+                }
                 let resp = if let Some(ref inspector) = self.endpoint_inner.message_inspector {
-                    inspector.before_send(resp.into(), self.destination.as_ref())
+                    inspector.before_send(resp.into(), cancel_destination.as_ref())
                 } else {
                     resp.into()
                 };
-                connection.send(resp, self.destination.as_ref()).await.ok();
+                self.endpoint_inner
+                    .cache_cancel_response(&req, &resp, connection.is_reliable());
+                connection
+                    .send(resp, cancel_destination.as_ref())
+                    .await
+                    .ok();
             }
             return forward_to_tu.then(|| req.into());
         }
