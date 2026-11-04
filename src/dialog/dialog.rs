@@ -266,7 +266,14 @@ impl Dialog {
 #[derive(Clone)]
 pub(super) struct RemoteReliableState {
     last_rseq: u32,
+    invite_cseq: u32,
     prack_request: Request,
+}
+
+/// A validated Contact, kept separate from the dialog until its refresh is accepted.
+pub(super) struct RemoteTarget {
+    uri: crate::sip::Uri,
+    contact: crate::sip::headers::untyped::Contact,
 }
 
 /// Internal Dialog State and Management
@@ -313,6 +320,9 @@ pub struct DialogInner {
 
     pub remote_seq: AtomicU32,
     pub remote_uri: Mutex<crate::sip::Uri>,
+    // Latest accepted incoming target refresh. A slow older transaction must
+    // not overwrite a newer refresh when its application finally responds.
+    remote_target_cseq: Mutex<Option<u32>>,
 
     pub from: crate::sip::typed::From,
     pub to: Mutex<crate::sip::typed::To>,
@@ -489,6 +499,7 @@ impl DialogInner {
             to: Mutex::new(to),
             local_seq: AtomicU32::new(cseq),
             remote_uri: Mutex::new(remote_uri),
+            remote_target_cseq: Mutex::new(None),
             remote_seq: AtomicU32::new(0),
             credential,
             route_set: Mutex::new(route_set),
@@ -621,23 +632,35 @@ impl DialogInner {
             );
             return Ok(None);
         };
+        if rseq == 0 || rseq > 0x7fff_ffff {
+            return Ok(None);
+        }
 
         let cseq_header = resp.cseq_header()?;
         let cseq = cseq_header.seq()?;
         let method = cseq_header.method()?;
+        if method != Method::Invite {
+            return Ok(None);
+        }
 
         {
             let state_guard = self.remote_reliable.lock();
             if let Some(state) = state_guard.as_ref() {
-                if state.last_rseq == rseq {
+                if state.invite_cseq == cseq && state.last_rseq == rseq {
                     return Ok(Some(state.prack_request.clone()));
                 }
 
-                if state.last_rseq > rseq {
+                if cseq < state.invite_cseq || (state.invite_cseq == cseq && state.last_rseq > rseq)
+                {
                     return Ok(None);
                 }
             }
         }
+
+        // RFC 6141 §4.7/4.9: a reliable INVITE provisional response refreshes
+        // the target before PRACK is built. Duplicates/older RSeqs above must
+        // not replay an old Contact. Initial-dialog route learning is separate.
+        self.refresh_target_from_response(resp)?;
 
         let rack_value = format!("{} {} {}", rseq, cseq, method);
         let mut headers = vec![Header::RAck(rack_value.into())];
@@ -656,6 +679,7 @@ impl DialogInner {
 
         let state = RemoteReliableState {
             last_rseq: rseq,
+            invite_cseq: cseq,
             prack_request: prack_request.clone(),
         };
 
@@ -778,6 +802,69 @@ impl DialogInner {
     ) {
         *self.remote_uri.lock() = uri;
         *self.remote_contact.lock() = contact;
+    }
+
+    pub(super) fn is_target_refresh(method: Method) -> bool {
+        matches!(method, Method::Invite | Method::Update)
+    }
+
+    /// Parse without changing any dialog state. A refresh never learns a new
+    /// route set; that only happens when the dialog is established (RFC 3261 §12.2).
+    pub(super) fn parse_target_refresh_contact(
+        message: &impl HeadersExt,
+    ) -> Result<Option<RemoteTarget>> {
+        let headers = message.contact_headers();
+        if headers.is_empty() {
+            return Ok(None);
+        }
+        let contacts = message.typed_contact_headers()?;
+        if headers.len() != 1 || contacts.len() != 1 {
+            return Err(crate::Error::Error(
+                "target refresh requires a single Contact URI".into(),
+            ));
+        }
+        let uri = contacts[0].uri.clone();
+        if !matches!(
+            uri.scheme,
+            Some(crate::sip::Scheme::Sip | crate::sip::Scheme::Sips)
+        ) || uri.host_with_port.host.to_string().is_empty()
+        {
+            return Err(crate::Error::Error(
+                "target refresh requires a SIP or SIPS Contact URI".into(),
+            ));
+        }
+        Ok(Some(RemoteTarget {
+            uri,
+            contact: headers[0].clone(),
+        }))
+    }
+
+    fn refresh_target_from_response(&self, response: &Response) -> Result<()> {
+        if let Some(target) = Self::parse_target_refresh_contact(response)? {
+            self.set_remote_target(target.uri, Some(target.contact));
+        }
+        Ok(())
+    }
+
+    fn accept_target_refresh(&self, cseq: u32, target: &RemoteTarget) {
+        let mut last = self.remote_target_cseq.lock();
+        if last.is_some_and(|accepted| cseq <= accepted) {
+            return;
+        }
+        self.set_remote_target(target.uri.clone(), Some(target.contact.clone()));
+        *last = Some(cseq);
+    }
+
+    fn accepts_target_refresh(method: Method, response: &Response) -> bool {
+        Self::is_target_refresh(method)
+            && (response.status_code.kind() == StatusCodeKind::Successful
+                || (method == Method::Invite
+                    && response.status_code.kind() == StatusCodeKind::Provisional
+                    && response.status_code != StatusCode::Trying
+                    && response.header_contains_token("Require", "100rel")
+                    && response
+                        .rseq_value()
+                        .is_some_and(|rseq| (1..=0x7fff_ffff).contains(&rseq))))
     }
 
     /// Update the stored route set from Record-Route headers present in a response.
@@ -1285,6 +1372,17 @@ impl DialogInner {
                         continue;
                     }
 
+                    // In-dialog responses cannot establish a different dialog.
+                    // Do not let a mismatched tag rewrite either the target or
+                    // the tag used for the next PRACK/request.
+                    if Self::is_target_refresh(method)
+                        && !DialogId::try_from((&resp, TransactionRole::Client))
+                            .is_ok_and(|id| id == *self.id.lock())
+                    {
+                        warn!(id = %self.id.lock(), "ignoring target refresh response for another dialog");
+                        continue;
+                    }
+
                     if status.kind() == StatusCodeKind::Provisional {
                         if method == Method::Invite {
                             self.handle_provisional_response(&resp).await?;
@@ -1349,6 +1447,11 @@ impl DialogInner {
                         method = %method,
                         "dialog do_request done: {:?}", status
                     );
+                    if Self::is_target_refresh(method)
+                        && status.kind() == StatusCodeKind::Successful
+                    {
+                        self.refresh_target_from_response(&resp)?;
+                    }
                     if !matches!(method, Method::PRack) {
                         self.clear_remote_reliable();
                     }
@@ -1575,6 +1678,7 @@ impl DialogInner {
 
             local_contact: snapshot.local_contact,
             remote_uri: Mutex::new(snapshot.remote_uri),
+            remote_target_cseq: Mutex::new(Some(snapshot.remote_cseq)),
             remote_contact: Mutex::new(snapshot.remote_contact),
 
             from,
@@ -1744,6 +1848,15 @@ impl DialogInner {
         tx: &mut Transaction,
         mut rx: TransactionCommandReceiver,
     ) -> Result<()> {
+        let target = if Self::is_target_refresh(tx.original.method) {
+            match Self::parse_target_refresh_contact(&tx.original) {
+                Ok(target) => target,
+                Err(_) => return tx.reply(StatusCode::BadRequest).await,
+            }
+        } else {
+            None
+        };
+        let cseq = tx.original.cseq_header()?.seq()?;
         let timeout_duration = self.endpoint_inner.option.t1x64;
         let result = crate::platform::timeout(timeout_duration, async {
             while let Some(cmd) = rx.recv().await {
@@ -1755,7 +1868,20 @@ impl DialogInner {
                     } => {
                         let is_final = status.kind() != StatusCodeKind::Provisional;
                         let response = self.make_response(&tx.original, status, headers, body);
+                        let accepts_refresh =
+                            Self::accepts_target_refresh(tx.original.method, &response);
                         tx.respond(response).await?;
+
+                        // Commit only once the accepting response was sent.
+                        // An error (including a later 488 after reliable 183)
+                        // never rolls back an already accepted refresh.
+                        // Non-INVITE respond() can terminate the transaction
+                        // and move last_response into the finished cache.
+                        if let Some(target) = &target {
+                            if accepts_refresh {
+                                self.accept_target_refresh(cseq, target);
+                            }
+                        }
 
                         if is_final {
                             return Ok(());
