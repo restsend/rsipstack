@@ -418,8 +418,10 @@ impl DialogLayer {
     }
 
     pub fn increment_last_seq(&self) -> u32 {
-        self.inner.last_seq.fetch_add(1, Ordering::Relaxed);
-        self.inner.last_seq.load(Ordering::Relaxed)
+        self.inner
+            .last_seq
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_add(1)
     }
 
     pub fn len(&self) -> usize {
