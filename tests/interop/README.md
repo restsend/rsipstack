@@ -20,9 +20,10 @@ brew install cmake pkg-config openssl@3 python
 From the repository root:
 
 ```sh
-bash scripts/interop/run.sh regression                # supported baseline (87 tests)
-bash scripts/interop/run.sh all                       # all 99; includes 12 known-gap probes
-bash scripts/interop/run.sh pjsip                     # 16 PJSUA tests
+bash scripts/interop/run.sh regression                # supported baseline (123 tests)
+bash scripts/interop/run.sh all                       # all 135; includes 12 known-gap probes
+bash scripts/interop/run.sh pjsip                     # 52 PJSUA tests
+bash scripts/interop/run.sh pjsip mid_dialog          # 36 mid-dialog PJSUA cases
 bash scripts/interop/run.sh sipp                      # 83 SIPp tests, including known gaps
 bash scripts/interop/run.sh sipp prack                # all 19 PRACK cases, including known gaps
 bash scripts/interop/run.sh regression prack          # 11 passing PRACK regression cases
@@ -62,15 +63,19 @@ explicitly reports and excludes them; it does not change their assertions.
 The documented counts describe the baseline commit; results can differ when
 run against another revision or with uncommitted application changes.
 
-PJSUA checks calls in both directions. SIPp covers final responses, Digest,
+PJSUA checks calls in both directions, hold/resume and UPDATE initiated by
+both peers, DTMF INFO in both directions, MESSAGE delivery, OPTIONS rejection,
+and recovery after a failed re-INVITE. SIPp covers final responses, Digest,
 PRACK on both sides, retransmission, forking, re-INVITE/UPDATE, in-dialog
 methods, routing, registration and an established subscription. Cases assert
 wire messages and application-visible results; INVITE cases also check dialog
 state events and registry cleanup. The fixture removes terminated dialogs
 from the registry, as an application must do. SIPp must exit with code 0.
 
-Most cases use an inactive PCMU SDP. Hold/resume changes the SDP direction,
-without generating media. RTP/audio quality, scale and downstream application
+Most cases use an inactive PCMU SDP. The PJSUA mid-dialog cases start with
+sendrecv PCMU and change direction for hold/resume; PJSUA uses null audio and
+may send RTP to loopback discard port 9. No test asserts media delivery or
+quality. RTP/audio quality, scale and downstream application
 behavior (such as CDR/billing) require separate tests.
 
 SIPp's repeated-200 and lost-PRACK-response cases use `-nr` so its UDP duplicate

@@ -61,13 +61,15 @@ the remaining reliability, validation or offer/answer behavior is complete.
 
 ## Executed matrix
 
-Each test family below runs on UDP and TCP. There are 99 test executions:
-87 regression cases and 12 known-gap probes. The lost-PRACK-response case is
+Each test family below runs on UDP and TCP. There are 135 test executions:
+123 regression cases and 12 known-gap probes. The lost-PRACK-response case is
 UDP-only; the other families run on both transports.
 
 | Area | Exchanges / assertions | Executions |
 | --- | --- | ---: |
 | PJSIP calls | rsipstack as caller/callee; local/remote BYE, CANCEL, 486 | 16 |
+| PJSIP session changes | hold/resume and UPDATE initiated by either peer; failed re-INVITE followed by a valid one | 20 |
+| PJSIP in-dialog methods | INFO in both directions, MESSAGE delivery, OPTIONS rejection without losing the call | 16 |
 | SIPp final responses | 403, 404, 408, 480, 488, 500, 503, 603; ACK and cleanup | 16 |
 | SIPp authentication | 401, 407, stale nonce; no credentials for 401/407 | 10 |
 | Reliable provisional responses | UAC PRACK RAck, duplicate 183, successive RSeq; UDP retry; UAS valid/missing RAck | 11 |
@@ -81,6 +83,20 @@ UDP-only; the other families run on both transports.
 | Registration | MD5, granted expiry, refresh/unregister, Service-Route, 423 | 6 |
 | Existing subscription | refresh, incoming presence NOTIFY, application reply, unsubscribe | 2 |
 | Known-gap probes | SHA-256 digest; Session-ID on BYE; PRACK RSeq gaps, invalid RAck and UAS reliability | 12 |
+
+The 36 PJSUA mid-dialog cases run for both initial caller roles and both
+transports. They correlate responses and ACKs with the new request (rather
+than accepting the initial INVITE's response), check dialog tags, CSeq progress,
+SDP directions and cleanup. INFO/MESSAGE checks also inspect PJSUA's application
+output. For incoming modifications, the fixture acts as the application and
+explicitly answers the emitted event.
+
+The pinned PJSUA returns 500 for in-dialog OPTIONS (unhandled by its dialog
+usages) and 500 for the unsupported-codec re-INVITE (SDP negotiation failure).
+Those cases explicitly check rsipstack's handling of rejection; they do not
+claim successful OPTIONS negotiation. The failed re-INVITE must receive ACK,
+then a valid re-INVITE must succeed before BYE. SIPp separately tests OPTIONS
+200 and re-INVITE 488.
 
 PRACK tests include UAC and UAS exchanges with an SDP offer in INVITE. The
 sequential case checks RAck values `1 1 INVITE` and `2 1 INVITE`. The UDP loss
@@ -115,3 +131,42 @@ features. No finite suite covers every SIP message sequence or peer behavior.
 Add focused XML scenarios and public-API assertions for these areas as the
 harness grows; retain unexpected failures as reproducible tests and document
 their status instead of changing the expected protocol to fit the library.
+
+## Reference suites and next priorities
+
+These projects provide useful examples of test structure and scenario selection;
+our harness does not run their full suites or claim their coverage.
+
+- [PJSIP's PJSUA suite](https://github.com/pjsip/pjproject/tree/master/tests/pjsua)
+  combines process-driven calls with [SIPp scenarios](https://github.com/pjsip/pjproject/tree/master/tests/pjsua/scripts-sipp).
+  Examples include early BYE, CANCEL without a final INVITE response, forked 200,
+  re-INVITE glare, PRACK with SDP and subscription failure/recovery. Its local
+  pinned source is available under `target/interop/pjproject-<revision>/tests/pjsua`
+  after building the peer.
+- [Asterisk Test Suite](https://docs.asterisk.org/Test-Suite-Documentation/)
+  orchestrates Asterisk instances and external protocol tools. Its
+  [PJSIP tests](https://github.com/asterisk/testsuite/tree/master/tests/channels/pjsip)
+  include early/pending re-INVITEs, 100rel, session timers, transports,
+  registration, subscriptions and transfers. These are application tests,
+  so adapting their scenario ideas requires rsipstack-specific API checks.
+- [Sofia-SIP tests](https://github.com/freeswitch/sofia-sip/tree/master/tests)
+  separate calls, cancellation, hold, offer/answer, NAT and session timers.
+  [test_100rel.c](https://github.com/freeswitch/sofia-sip/blob/master/tests/test_100rel.c)
+  also exercises PRACK authentication/failure, cancellation during reliable
+  provisional handling and UPDATE interactions.
+- [Kamailio tests](https://github.com/kamailio/kamailio-tests)
+  use containerized units driven by `ktestsctl`, with SIPp, sipsak and sipexer
+  available. This is a useful pattern for future multi-process proxy/routing
+  tests, beyond the current two-peer loopback setup.
+
+Priorities beyond the executed matrix above:
+
+1. Deterministic loss/delay/reordering and disconnect injection, then crossed
+   BYE, delayed ACK, CANCEL/200 and re-INVITE glare. Keep injected schedules in
+   the artifacts so each failure can be replayed.
+2. PRACK offer/answer, authentication and timeout exhaustion; session timer
+   negotiation, 422 retry, refresh failure and cleanup.
+3. Initial SUBSCRIBE and final NOTIFY, REFER/NOTIFY transfers, redirect chains,
+   DNS failover and transport reconnection.
+4. Separate longer stress/soak and parser fuzzing jobs, with explicit resource
+   limits and reproducible seeds. These are not enabled by the current runner.

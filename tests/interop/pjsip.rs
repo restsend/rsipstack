@@ -1,5 +1,7 @@
+mod mid_dialog;
 use super::{bounded, log_dir, sdp, until, Peer, Stack};
 use crate::interop::{Required, TestResult};
+use mid_dialog::Activity;
 use rsipstack::{
     dialog::{dialog::DialogState, invitation::InviteOption},
     sip::{prelude::HeadersExt, Header, Method, StatusCode},
@@ -11,12 +13,18 @@ enum Outcome {
     PeerBye,
     Cancel,
     Busy,
+    Activity(Activity),
 }
 
 async fn scenario(name: &str, transport: &str, rsip_calls: bool, outcome: Outcome) -> TestResult {
     let dir = log_dir(name)?;
     let mut peer = Peer::start(transport, &dir).await?;
     let mut stack = Stack::start(transport, &dir).await?;
+    let initial_sdp = if matches!(outcome, Outcome::Activity(_)) {
+        mid_dialog::offer(1, "sendrecv")?
+    } else {
+        sdp()
+    };
     let (dialog, invite_task) = if rsip_calls {
         let (d, task) = stack
             .layer
@@ -25,7 +33,7 @@ async fn scenario(name: &str, transport: &str, rsip_calls: bool, outcome: Outcom
                     caller: stack.uri.clone(),
                     callee: peer.uri.clone(),
                     contact: stack.uri.clone(),
-                    offer: Some(sdp()),
+                    offer: Some(initial_sdp.clone()),
                     ..Default::default()
                 },
                 stack.sender.clone(),
@@ -49,7 +57,7 @@ async fn scenario(name: &str, transport: &str, rsip_calls: bool, outcome: Outcom
         .value()
         .contains(&format!("SIP/2.0/{}", transport.to_uppercase())));
 
-    let established = matches!(outcome, Outcome::LocalBye | Outcome::PeerBye);
+    let established = !matches!(outcome, Outcome::Cancel | Outcome::Busy);
     if established {
         if rsip_calls {
             peer.command("a\n200\n").await?;
@@ -57,7 +65,7 @@ async fn scenario(name: &str, transport: &str, rsip_calls: bool, outcome: Outcom
             dialog
                 .accept(
                     Some(vec![Header::ContentType("application/sdp".into())]),
-                    Some(sdp()),
+                    Some(initial_sdp),
                 )
                 .required()?;
         }
@@ -112,7 +120,10 @@ async fn scenario(name: &str, transport: &str, rsip_calls: bool, outcome: Outcom
 
     if established {
         check!(!response.body.is_empty(), "2xx must carry the SDP answer");
-        let local_bye = matches!(outcome, Outcome::LocalBye);
+        if let Outcome::Activity(activity) = outcome {
+            mid_dialog::exercise(activity, &dialog, &stack, &mut peer).await?;
+        }
+        let local_bye = !matches!(outcome, Outcome::PeerBye);
         if local_bye {
             bounded("send BYE", dialog.bye()).await?.required()?;
         } else {
@@ -179,6 +190,10 @@ async fn scenario(name: &str, transport: &str, rsip_calls: bool, outcome: Outcom
                 .filter(|s| matches!(s, DialogState::Confirmed(..)))
                 .count(),
             usize::from(established)
+                + match outcome {
+                    Outcome::Activity(activity) => activity.extra_confirmations(),
+                    _ => 0,
+                }
         );
         if !established {
             check_eq!(stack.wire.requests(Method::Bye), 0);

@@ -193,6 +193,10 @@ impl Peer {
         self.wait_text_after(text, 0).await
     }
 
+    pub fn output_len(&self) -> usize {
+        self.output.borrow().len()
+    }
+
     pub async fn wait_text_after(&mut self, text: &str, offset: usize) -> TestResult {
         bounded(
             &format!("PJSUA output {text:?}"),
@@ -293,7 +297,20 @@ impl MessageInspector for Sent {
 }
 
 impl Wire {
+    pub fn checkpoint(&self) -> usize {
+        self.0.lock().unwrap_or_else(|p| p.into_inner()).len()
+    }
+
     pub async fn request(&self, sent: bool, method: Method) -> TestResult<Request> {
+        self.request_after(sent, method, 0).await
+    }
+
+    pub async fn request_after(
+        &self,
+        sent: bool,
+        method: Method,
+        offset: usize,
+    ) -> TestResult<Request> {
         until(
             &format!("{} {method}", if sent { "TX" } else { "RX" }),
             || {
@@ -301,6 +318,7 @@ impl Wire {
                     .lock()
                     .unwrap_or_else(|p| p.into_inner())
                     .iter()
+                    .skip(offset)
                     .find_map(|p| match &p.message {
                         SipMessage::Request(r) if p.sent == sent && r.method == method => {
                             Some(r.clone())
