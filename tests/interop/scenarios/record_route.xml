@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<scenario name="Loose Record-Route is used by ACK and BYE">
+  <recv request="INVITE"/>
+  <send><![CDATA[
+SIP/2.0 200 OK
+[last_Via:]
+[last_From:]
+[last_To:];tag=sipp-test
+[last_Call-ID:]
+[last_CSeq:]
+Contact: <[sipp_uri]>
+Record-Route: <sip:proxy@[local_ip]:[local_port];transport=[transport];lr>
+Content-Type: application/sdp
+Content-Length: [len]
+
+v=0
+o=sipp 1 1 IN IP4 127.0.0.1
+s=interop
+c=IN IP4 127.0.0.1
+t=0 0
+m=audio 9 RTP/AVP 0
+a=rtpmap:0 PCMU/8000
+a=inactive
+]]></send>
+  <recv request="ACK"><action><ereg regexp="sip:proxy@" search_in="hdr" header="Route:" check_it="true" assign_to="_"/></action></recv>
+  <recv request="BYE"><action><ereg regexp="sip:proxy@" search_in="hdr" header="Route:" check_it="true" assign_to="_"/></action></recv>
+  <send><![CDATA[
+SIP/2.0 200 OK
+[last_Via:]
+[last_From:]
+[last_To:]
+[last_Call-ID:]
+[last_CSeq:]
+Content-Length: 0
+
+]]></send>
+</scenario>

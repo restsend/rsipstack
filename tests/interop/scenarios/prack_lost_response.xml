@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<scenario name="UDP PRACK retransmission after lost response">
+  <recv request="INVITE"/>
+  <nop><action>
+    <assignstr assign_to="via" value="[last_Via:]"/>
+    <assignstr assign_to="from" value="[last_From:]"/>
+    <assignstr assign_to="to" value="[last_To:]"/>
+    <assignstr assign_to="call_id" value="[last_Call-ID:]"/>
+    <assignstr assign_to="cseq" value="[last_CSeq:]"/>
+  </action></nop>
+  <send><![CDATA[
+SIP/2.0 183 Session Progress
+[$via]
+[$from]
+[$to];tag=sipp-test
+[$call_id]
+[$cseq]
+Require: 100rel
+RSeq: 1
+Contact: <[sipp_uri]>
+Content-Type: application/sdp
+Content-Length: [len]
+
+v=0
+o=sipp 1 1 IN IP4 127.0.0.1
+s=interop
+c=IN IP4 127.0.0.1
+t=0 0
+m=audio 9 RTP/AVP 0
+a=rtpmap:0 PCMU/8000
+a=inactive
+]]></send>
+  <recv request="PRACK"><action>
+    <ereg regexp="^ *1 1 INVITE" search_in="hdr" header="RAck:" check_it="true" assign_to="_"/>
+  </action></recv>
+  <!-- Deliberately drop the first PRACK response. Require a retry of the
+       same transaction, including Via branch and CSeq. -->
+  <nop><action>
+    <assignstr assign_to="first_via" value="[last_Via:]"/>
+    <assignstr assign_to="first_cseq" value="[last_CSeq:]"/>
+  </action></nop>
+  <recv request="PRACK"/>
+  <nop><action>
+    <assignstr assign_to="second_via" value="[last_Via:]"/>
+    <assignstr assign_to="second_cseq" value="[last_CSeq:]"/>
+    <strcmp assign_to="via_cmp" variable="first_via" variable2="second_via"/>
+    <strcmp assign_to="cseq_cmp" variable="first_cseq" variable2="second_cseq"/>
+    <test variable="via_cmp" compare="equal" value="0" check_it="true"/>
+    <test variable="cseq_cmp" compare="equal" value="0" check_it="true"/>
+  </action></nop>
+  <send><![CDATA[
+SIP/2.0 200 OK
+[last_Via:]
+[last_From:]
+[last_To:]
+[last_Call-ID:]
+[last_CSeq:]
+Content-Length: 0
+
+]]></send>
+  <send><![CDATA[
+SIP/2.0 200 OK
+[$via]
+[$from]
+[$to];tag=sipp-test
+[$call_id]
+[$cseq]
+Contact: <[sipp_uri]>
+Content-Type: application/sdp
+Content-Length: [len]
+
+v=0
+o=sipp 1 1 IN IP4 127.0.0.1
+s=interop
+c=IN IP4 127.0.0.1
+t=0 0
+m=audio 9 RTP/AVP 0
+a=rtpmap:0 PCMU/8000
+a=inactive
+]]></send>
+  <recv request="ACK"/>
+  <recv request="BYE"/>
+  <send><![CDATA[
+SIP/2.0 200 OK
+[last_Via:]
+[last_From:]
+[last_To:]
+[last_Call-ID:]
+[last_CSeq:]
+Content-Length: 0
+
+]]></send>
+</scenario>

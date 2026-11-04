@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<scenario name="prack_uas_retransmit.xml">
+  <send><![CDATA[
+INVITE [rsip_uri] SIP/2.0
+Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=z9hG4bK-invite-[pid]
+From: <[sipp_uri]>;tag=sipp-test
+To: <[rsip_uri]>
+Call-ID: [call_id]
+CSeq: 1 INVITE
+Max-Forwards: 70
+Supported: 100rel
+Contact: <[sipp_uri]>
+Content-Type: application/sdp
+Content-Length: [len]
+
+v=0
+o=sipp 1 1 IN IP4 127.0.0.1
+s=interop
+c=IN IP4 127.0.0.1
+t=0 0
+m=audio 9 RTP/AVP 0
+a=rtpmap:0 PCMU/8000
+a=inactive
+]]></send>
+  <recv response="100" optional="true"/>
+  <recv response="183"/>
+  <!-- No PRACK yet: the UAS must retransmit its reliable provisional. -->
+  <recv response="183" timeout="3000"/>
+  <send><![CDATA[
+PRACK [rsip_uri] SIP/2.0
+Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=z9hG4bK-prack-[pid]
+[last_From:]
+[last_To:]
+[last_Call-ID:]
+CSeq: 2 PRACK
+[rack_line]Max-Forwards: 70
+Content-Length: 0
+
+]]></send>
+  <recv response="[prack_status]"/>
+  <nop><action><log message="PRACK_CHECKED"/></action></nop>
+  <recv response="200"/>
+  <send><![CDATA[
+ACK [rsip_uri] SIP/2.0
+Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=z9hG4bK-ack-[pid]
+[last_From:]
+[last_To:]
+[last_Call-ID:]
+CSeq: 1 ACK
+Max-Forwards: 70
+Content-Length: 0
+
+]]></send>
+  <send><![CDATA[
+BYE [rsip_uri] SIP/2.0
+Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=z9hG4bK-bye-[pid]
+[last_From:]
+[last_To:]
+[last_Call-ID:]
+CSeq: [bye_cseq] BYE
+Max-Forwards: 70
+Content-Length: 0
+
+]]></send>
+  <recv response="200"/>
+</scenario>

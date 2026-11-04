@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<scenario name="REGISTER MD5 authentication">
+  <recv request="REGISTER"/>
+  <send><![CDATA[
+SIP/2.0 401 Unauthorized
+[last_Via:]
+[last_From:]
+[last_To:]
+[last_Call-ID:]
+[last_CSeq:]
+WWW-Authenticate: Digest realm="interop.test", nonce="interop-1", algorithm=MD5, qop="auth"
+Content-Length: 0
+
+]]></send>
+  <recv request="REGISTER"><action>
+    <verifyauth assign_to="valid" username="alice" password="secret"/>
+  </action></recv>
+  <nop test="valid" next="accepted"/>
+  <nop><action><exec int_cmd="stop_call"/></action></nop>
+  <label id="accepted"/>
+  <send><![CDATA[
+SIP/2.0 200 OK
+[last_Via:]
+[last_From:]
+[last_To:]
+[last_Call-ID:]
+[last_CSeq:]
+Contact: <[rsip_uri]>;expires=90
+Content-Length: 0
+
+]]></send>
+</scenario>
