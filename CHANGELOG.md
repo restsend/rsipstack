@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Atomically validate and advance the remote CSeq for incoming INVITE-dialog
+  requests. Concurrent requests cannot lose a newer sequence number or pass
+  using a stale comparison. ACK/CANCEL keep their INVITE's CSeq and do not
+  advance the dialog counter; equal CSeq values retain their existing behavior.
+
 ## 0.8.0
 
 Four RFC-compliance fixes merged (#216, #217, #218, #219). **No public API
