@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.7.14
+## 0.8.0
 
 Four RFC-compliance fixes merged (#216, #217, #218, #219). **No public API
 signature changed** — `TransactionKey::from_request` / `from_response`,
