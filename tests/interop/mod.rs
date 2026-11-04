@@ -2,6 +2,7 @@
 #[macro_use]
 mod failure;
 pub use failure::{Failure, Required, TestResult};
+mod faults;
 mod pjsip;
 mod sipp;
 use rsipstack::{
@@ -421,6 +422,7 @@ pub struct Stack {
     pub incoming: mpsc::UnboundedReceiver<InviteDialog>,
     pub uri: Uri,
     pub wire: Wire,
+    pub faults: Option<faults::Control>,
 }
 
 impl Drop for Stack {
@@ -439,9 +441,34 @@ impl Drop for Stack {
 
 impl Stack {
     pub async fn start(transport: &str, dir: &Path) -> TestResult<Self> {
+        Self::start_inner(transport, dir, None).await
+    }
+
+    pub async fn with_faults(dir: &Path, rules: Vec<faults::Rule>) -> TestResult<Self> {
+        Self::start_inner("udp", dir, Some(rules)).await
+    }
+
+    async fn start_inner(
+        transport: &str,
+        dir: &Path,
+        rules: Option<Vec<faults::Rule>>,
+    ) -> TestResult<Self> {
         let cancel = CancellationToken::new();
         let layer = TransportLayer::new(cancel.child_token());
-        let addr = if transport == "udp" {
+        let errors = Diagnostics::new(dir)?;
+        let mut tasks = Vec::new();
+        let mut faults = None;
+        let addr = if let Some(rules) = rules {
+            let (socket, control, task) = faults::socket(dir, rules, errors.clone()).await?;
+            tasks.push(task);
+            faults = Some(control);
+            let udp = UdpConnection::from_socket(socket, None, Some(cancel.child_token()))
+                .await
+                .required()?;
+            let addr = udp.get_addr().get_socketaddr().required()?;
+            layer.add_transport(udp.into());
+            addr
+        } else if transport == "udp" {
             let udp = UdpConnection::create_connection(
                 "127.0.0.1:0".parse().required()?,
                 None,
@@ -466,7 +493,6 @@ impl Stack {
             .parse()
             .required()?;
         let wire = Wire(Arc::new(Mutex::new(Vec::new())));
-        let errors = Diagnostics::new(dir)?;
         let inspector = Arc::new(Inspector {
             errors: errors.clone(),
             wire: wire.clone(),
@@ -482,9 +508,9 @@ impl Stack {
             .build();
         let layer = Arc::new(DialogLayer::new(endpoint.inner.clone()));
         let mut transactions = endpoint.incoming_transactions().required()?;
-        let tasks = vec![errors.spawn("endpoint serve", async move {
+        tasks.push(errors.spawn("endpoint serve", async move {
             endpoint.inner.serve().await.required()
-        })];
+        }));
         // Construct the owner before awaiting startup so an early return
         // cancels every task and releases the listening socket.
         let handlers = Arc::new(Mutex::new(Vec::new()));
@@ -502,6 +528,7 @@ impl Stack {
             incoming,
             uri: uri.clone(),
             wire,
+            faults,
         };
         if transport == "tcp" {
             bounded("rsipstack TCP listener", async {
@@ -608,6 +635,9 @@ impl Stack {
                 !task.is_finished(),
                 "Background service ended before fixture shutdown; inspect background-errors.log"
             );
+        }
+        if let Some(faults) = &self.faults {
+            faults.check()?;
         }
         std::fs::write(dir.join("PASS"), summary).required()
     }

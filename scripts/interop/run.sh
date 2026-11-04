@@ -3,13 +3,13 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$ROOT"
 usage() {
-    echo "Usage: bash scripts/interop/run.sh [all|regression|pjsip|sipp|known-gaps] [test-name-filter]"
+    echo "Usage: bash scripts/interop/run.sh [all|regression|pjsip|sipp|faults|known-gaps] [test-name-filter]"
 }
 if [[ ${1:-} == --help ]]; then usage; exit 0; fi
 if [[ $# -gt 2 ]]; then usage >&2; exit 2; fi
 SUITE=${1:-all}
 case "$SUITE" in
-    all|regression|known-gaps) PREFIX=interop:: ;;
+    all|regression|known-gaps|faults) PREFIX=interop:: ;;
     pjsip|sipp) PREFIX="interop::$SUITE::" ;;
     *) usage >&2; exit 2 ;;
 esac
@@ -22,10 +22,12 @@ echo "Interop logs: $RSIPSTACK_INTEROP_LOG_DIR"
 cargo test --test interop_tests -- "$PREFIX" --ignored --list \
     > "$RSIPSTACK_INTEROP_LOG_DIR/test-list.txt"
 python3 - "$RSIPSTACK_INTEROP_LOG_DIR/test-list.txt" "$FILTER" "$SUITE" <<'PY'
-import pathlib, sys
+import os, pathlib, sys
 path = pathlib.Path(sys.argv[1])
 names = [line.removesuffix(": test") for line in path.read_text().splitlines()
          if line.endswith(": test") and sys.argv[2] in line.removesuffix(": test")]
+if sys.argv[3] == "faults":
+    names = [name for name in names if "::faults::" in name]
 gaps = [name for name in names if "known_gap_" in name]
 if sys.argv[3] == "regression":
     names = [name for name in names if name not in gaps]
@@ -36,11 +38,13 @@ elif gaps:
     print(f"Including {len(gaps)} documented known-gap probes: failures are currently expected (see COVERAGE.md).")
 if not names:
     sys.exit("No interoperability tests match this filter.")
+if os.environ.get("RSIPSTACK_FAULT_PLAN") and (len(names) != 1 or "::faults::" not in names[0]):
+    sys.exit("RSIPSTACK_FAULT_PLAN requires exactly one fault scenario; supply its full test-name filter.")
 path.with_name("test-names.txt").write_text("\n".join(names) + "\n")
 PY
 TESTS=()
 while IFS= read -r name; do TESTS+=("$name"); done < "$RSIPSTACK_INTEROP_LOG_DIR/test-names.txt"
-if [[ "$SUITE" != sipp && "$SUITE" != known-gaps ]]; then
+if python3 -c 'import pathlib,sys; sys.exit(not any("::pjsip::" in n for n in pathlib.Path(sys.argv[1]).read_text().splitlines()))' "$RSIPSTACK_INTEROP_LOG_DIR/test-names.txt"; then
     if [[ -z ${PJSUA_BIN:-} ]]; then
         bash scripts/interop/build-pjsua.sh
         export PJSUA_BIN="$ROOT/target/interop/pjsua"
@@ -48,7 +52,7 @@ if [[ "$SUITE" != sipp && "$SUITE" != known-gaps ]]; then
     [[ -x "$PJSUA_BIN" ]] || { echo "PJSUA_BIN is not executable: $PJSUA_BIN" >&2; exit 1; }
     export PJSUA_BIN=$(python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$PJSUA_BIN")
 fi
-if [[ "$SUITE" != pjsip ]]; then
+if python3 -c 'import pathlib,sys; sys.exit(not any("::sipp::" in n for n in pathlib.Path(sys.argv[1]).read_text().splitlines()))' "$RSIPSTACK_INTEROP_LOG_DIR/test-names.txt"; then
     if [[ -z ${SIPP_BIN:-} ]]; then
         bash scripts/interop/build-sipp.sh
         export SIPP_BIN="$ROOT/target/interop/sipp"

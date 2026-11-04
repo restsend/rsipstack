@@ -10,7 +10,7 @@ on:
       suite:
         type: choice
         default: regression
-        options: [regression, all, pjsip, sipp, known-gaps]
+        options: [regression, all, pjsip, sipp, faults, known-gaps]
         description: Suite to run (all includes documented known gaps)
 
 permissions:

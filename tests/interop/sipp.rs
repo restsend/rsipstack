@@ -11,6 +11,7 @@ use std::{
 };
 use tokio::process::{Child, Command};
 mod extended;
+mod faults;
 mod prack_uas;
 mod registration;
 mod subscription;

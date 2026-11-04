@@ -59,11 +59,42 @@ These tests distinguish parsing/accepting a PRACK from implementing the full
 100rel state machine. A passing basic PRACK exchange is not evidence that
 the remaining reliability, validation or offer/answer behavior is complete.
 
+## Known gaps: blocked ACK and lost 487 after CANCEL
+
+`bash scripts/interop/run.sh known-gaps faults` exercises three failures on
+upstream `03f191d` through the public dialog API:
+
+- `remote_bye_during_blocked_ack`: a valid BYE arrives after 200 while the UDP
+  ACK send is blocked. The peer expects 200 but receives 481. The required
+  lifecycle events are one Confirmed followed by one Terminated, with no
+  resurrection when ACK completes.
+- `local_bye_waits_for_blocked_ack`: the dialog should already be confirmed
+  on receiving 200, and a local BYE must wait for ACK send completion. The
+  baseline still exposes Calling at the blocked-ACK checkpoint.
+- `drop_outgoing_invite_487`: PJSUA cancels an incoming call and the fixture
+  drops rsipstack's first 487. No replacement 487 arrives during the 15-second
+  observation window, so PJSUA never sends ACK. In the current public-handler
+  integration, `dialog.handle()` returns after CANCEL and the transaction is
+  dropped; its timer can no longer drive retransmission. This records a gap
+  at that API/integration boundary, without adding a workaround to the fixture.
+
+The blocked-ACK probes deliberately exercise a peer that sends BYE immediately
+after its 200. This is an adversarial timing case, not a claim that a normal
+callee should initiate BYE before receiving ACK. The caller must still handle
+the established dialog consistently. The companion wrong-tag case expects 481
+and checks that the valid call survives. See [RFC 3261 sections 12 and 15](https://www.rfc-editor.org/rfc/rfc3261.html#section-15).
+
+The crossed-BYE scenario holds both datagrams before crossing them. It checks
+200 if the receiving dialog is still live, or 481 if local termination already
+removed it, then verifies a single terminal event and an empty registry. This
+covers both registry lifetimes permitted by the tested API without silently
+accepting other response codes.
+
 ## Executed matrix
 
-Each test family below runs on UDP and TCP. There are 135 test executions:
-123 regression cases and 12 known-gap probes. The lost-PRACK-response case is
-UDP-only; the other families run on both transports.
+There are 161 external-peer test executions:
+146 regression cases and 15 known-gap probes. The lost-PRACK-response and all
+fault-injection cases are UDP-only; the other families run on both transports.
 
 | Area | Exchanges / assertions | Executions |
 | --- | --- | ---: |
@@ -82,7 +113,9 @@ UDP-only; the other families run on both transports.
 | Routing | loose Record-Route on ACK/BYE; UPDATE Contact refresh | 4 |
 | Registration | MD5, granted expiry, refresh/unregister, Service-Route, 423 | 6 |
 | Existing subscription | refresh, incoming presence NOTIFY, application reply, unsubscribe | 2 |
-| Known-gap probes | SHA-256 digest; Session-ID on BYE; PRACK RSeq gaps, invalid RAck and UAS reliability | 12 |
+| UDP fault injection with PJSIP | loss in both directions of INVITE, 200, ACK, BYE, CANCEL and their replies; ACK/BYE delays | 19 |
+| UDP races with SIPp | delayed ACK delivery, wrong-tag BYE during blocked ACK, CANCEL crossing held 200, crossed BYEs | 4 |
+| Known-gap probes | SHA-256; Session-ID; PRACK; blocked ACK/BYE ordering; lost 487 after CANCEL | 15 |
 
 The 36 PJSUA mid-dialog cases run for both initial caller roles and both
 transports. They correlate responses and ACKs with the new request (rather
@@ -120,8 +153,8 @@ features. No finite suite covers every SIP message sequence or peer behavior.
 | --- | --- |
 | Transports | TLS/WSS certificates, WS, IPv6, DNS SRV/NAPTR, reconnects and NAT |
 | PRACK | Offer in PRACK, offerless INVITE, malformed/overflow RSeq, full timer exhaustion |
-| Dialog races | blocked ACK send, simultaneous BYEs, early BYE, overlapping re-INVITEs/glare |
-| Transactions | systematic packet loss/reordering, timer exhaustion, crash/restart recovery |
+| Dialog races | overlapping re-INVITEs/glare, additional forking and cancellation schedules |
+| Transactions | multi-packet loss bursts, long timer exhaustion, crash/restart recovery |
 | Authentication | multiple challenges, auth-int, sess algorithms, SHA-512/256, rejected credentials |
 | Routing | strict routes, several proxies, redirects, Path/Outbound flows |
 | Event packages | initial SUBSCRIBE/NOTIFY races, terminal NOTIFY, PUBLISH, REFER/Replaces |
@@ -161,9 +194,8 @@ our harness does not run their full suites or claim their coverage.
 
 Priorities beyond the executed matrix above:
 
-1. Deterministic loss/delay/reordering and disconnect injection, then crossed
-   BYE, delayed ACK, CANCEL/200 and re-INVITE glare. Keep injected schedules in
-   the artifacts so each failure can be replayed.
+1. Extend the existing UDP fault schedules to loss bursts, re-INVITE glare
+   and forking. Add a separate stream disconnect/reconnect fixture for TCP/TLS.
 2. PRACK offer/answer, authentication and timeout exhaustion; session timer
    negotiation, 422 retry, refresh failure and cleanup.
 3. Initial SUBSCRIBE and final NOTIFY, REFER/NOTIFY transfers, redirect chains,

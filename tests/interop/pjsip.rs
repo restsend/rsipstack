@@ -1,3 +1,4 @@
+mod faults;
 mod mid_dialog;
 use super::{bounded, log_dir, sdp, until, Peer, Stack};
 use crate::interop::{Required, TestResult};
@@ -17,9 +18,23 @@ enum Outcome {
 }
 
 async fn scenario(name: &str, transport: &str, rsip_calls: bool, outcome: Outcome) -> TestResult {
+    scenario_with_faults(name, transport, rsip_calls, outcome, None).await
+}
+
+async fn scenario_with_faults(
+    name: &str,
+    transport: &str,
+    rsip_calls: bool,
+    outcome: Outcome,
+    rules: Option<Vec<crate::interop::faults::Rule>>,
+) -> TestResult {
     let dir = log_dir(name)?;
     let mut peer = Peer::start(transport, &dir).await?;
-    let mut stack = Stack::start(transport, &dir).await?;
+    let mut stack = if let Some(rules) = rules {
+        Stack::with_faults(&dir, rules).await?
+    } else {
+        Stack::start(transport, &dir).await?
+    };
     let initial_sdp = if matches!(outcome, Outcome::Activity(_)) {
         mid_dialog::offer(1, "sendrecv")?
     } else {
@@ -170,6 +185,9 @@ async fn scenario(name: &str, transport: &str, rsip_calls: bool, outcome: Outcom
         .await?;
     peer.wait_text("is DISCONNECTED").await?;
     // PJSUA exits cleanly only after we have observed the expected SIP result.
+    if let Some(control) = &stack.faults {
+        control.check_retransmissions().await?;
+    }
     peer.stop().await?;
     until("empty dialog registry", || {
         stack.layer.is_empty().then_some(())

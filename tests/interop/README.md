@@ -20,13 +20,14 @@ brew install cmake pkg-config openssl@3 python
 From the repository root:
 
 ```sh
-bash scripts/interop/run.sh regression                # supported baseline (123 tests)
-bash scripts/interop/run.sh all                       # all 135; includes 12 known-gap probes
-bash scripts/interop/run.sh pjsip                     # 52 PJSUA tests
+bash scripts/interop/run.sh regression                # supported baseline (146 tests)
+bash scripts/interop/run.sh all                       # all 161; includes 15 known-gap probes
+bash scripts/interop/run.sh pjsip                     # 72 PJSUA tests, including one known gap
 bash scripts/interop/run.sh pjsip mid_dialog          # 36 mid-dialog PJSUA cases
-bash scripts/interop/run.sh sipp                      # 83 SIPp tests, including known gaps
+bash scripts/interop/run.sh sipp                      # 89 SIPp tests, including known gaps
 bash scripts/interop/run.sh sipp prack                # all 19 PRACK cases, including known gaps
 bash scripts/interop/run.sh regression prack          # 11 passing PRACK regression cases
+bash scripts/interop/run.sh faults                    # 26 UDP loss/delay/race cases
 bash scripts/interop/run.sh known-gaps                # reproduce documented failures
 bash scripts/interop/run.sh pjsip udp_uac_peer_bye     # one test
 bash scripts/interop/run.sh sipp wrong_tag_bye         # UDP and TCP
@@ -63,7 +64,7 @@ explicitly reports and excludes them; it does not change their assertions.
 The documented counts describe the baseline commit; results can differ when
 run against another revision or with uncommitted application changes.
 
-PJSUA checks calls in both directions, hold/resume and UPDATE initiated by
+PJSUA checks calls in both directions, UDP loss/retransmission, hold/resume and UPDATE initiated by
 both peers, DTMF INFO in both directions, MESSAGE delivery, OPTIONS rejection,
 and recovery after a failed re-INVITE. SIPp covers final responses, Digest,
 PRACK on both sides, retransmission, forking, re-INVITE/UPDATE, in-dialog
@@ -100,6 +101,8 @@ The runner prints a fresh `target/interop/results/<UTC timestamp>-<pid>/` direct
   `sipp.actions.log`, `sipp.stdout.log`, `sipp.stderr.log`: SIPp traces and counters
   (some files are created only when there is output).
 - `<test>/scenario.xml`: rendered SIPp scenario, including fixed test parameters.
+- `<test>/fault-plan.tsv`, `fault-events.tsv`, `fault-packets.log`: the fault
+  schedule, observed/applied/delivered events and raw UDP datagrams (fault cases).
 - `<test>/background-errors.log`: endpoint, dialog handler and trace-writing errors.
 - `<test>/PASS`: written only after protocol checks, peer shutdown and dialog
   handlers succeed, with no recorded background errors.
@@ -121,6 +124,56 @@ The separate GitHub Actions workflow runs `regression` on PRs and main pushes.
 Manual dispatch also allows `all` and `known-gaps`. It caches pinned peers and
 uploads logs even on failure.
 There are no credentials or external SIP services involved.
+
+## Controlled UDP faults and replay
+
+`bash scripts/interop/run.sh faults` selects only the 26 fault scenarios.
+`bash scripts/interop/run.sh regression faults` runs their 23 regression cases;
+`bash scripts/interop/run.sh known-gaps faults` reproduces three known gaps on
+the upstream baseline. Existing local library fixes can change those results.
+The six small fault-engine checks also run under normal `cargo test`; they
+need loopback sockets but no external peer binaries or downloads.
+
+The fixture wraps the public platform UDP socket interface and still uses a
+real loopback UDP socket. It does not change production code, SIP headers,
+Contact/Via routing or the library's timers. It sees retransmissions that
+bypass the message inspector. TLS/TCP are not covered by this mechanism.
+
+Each rule selects a direction (`send`/`receive` relative to rsipstack), CSeq
+method, request or exact response status, and a 1-based occurrence. Actions:
+
+- `drop`: discard the selected datagram; a send still completes successfully.
+- `delay`: queue delivery for the specified milliseconds; other traffic flows.
+- `hold`: queue delivery until the scenario explicitly releases the rule ID;
+  a local send completes immediately, as if the datagram were in the network.
+- `block_send`: hold both the outgoing datagram and completion of `send_to`;
+  receiving and unrelated sends continue. This reproduces a blocked ACK send.
+
+Gate releases are coordinated with observed packets/events, not guessed sleeps.
+Rules affect only the selected occurrence, so subsequent retransmissions follow
+their own rules or pass normally. The loss scenarios verify that a later retry
+arrives with the same transaction/dialog identifiers. `fault-events.tsv` uses
+columns: elapsed microseconds, packet ID, direction, phase, rule ID, peer address,
+and byte count. The packet ID joins it to `fault-packets.log`; `sip.log` records
+what the library saw, which can differ from what the socket delivered.
+
+Every configured rule must fire, all held/delayed packets must be resolved, and
+background checks must succeed before PASS is written. A missing rule match is
+a failure, not a skipped injection. The plan parser rejects duplicate IDs,
+overlapping selectors, invalid actions and delays outside 1..10000 ms.
+
+To replay a saved plan, select exactly the same single scenario:
+
+```sh
+RSIPSTACK_FAULT_PLAN="$PWD/target/interop/results/<run>/udp_delay_outgoing_ack/fault-plan.tsv" \
+  bash scripts/interop/run.sh faults udp_delay_outgoing_ack
+```
+
+The runner rejects a plan override matching multiple tests. The plan preserves
+selectors and delay values; the test supplies its gate-release sequence. This
+replays the injection schedule with fresh SIP identifiers, not a recording of
+OS scheduling or original wall-clock timing. Scenarios and binary revisions
+must match for a meaningful comparison.
 
 ## Revisions and other branches
 
