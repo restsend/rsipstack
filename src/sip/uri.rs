@@ -127,6 +127,9 @@ impl FromStr for Host {
         if s.is_empty() {
             return Err(Error::ParseError("empty host".into()));
         }
+        if s.chars().any(char::is_whitespace) {
+            return Err(Error::ParseError("invalid host".into()));
+        }
         if let Ok(ip) = s.parse::<IpAddr>() {
             Ok(Host::IpAddr(ip))
         } else {
@@ -326,9 +329,23 @@ impl fmt::Display for Param {
     }
 }
 
+fn is_token(s: &str) -> bool {
+    !s.is_empty()
+        && s.bytes().all(|b| {
+            b.is_ascii_alphanumeric()
+                || matches!(
+                    b,
+                    b'-' | b'.' | b'!' | b'%' | b'*' | b'_' | b'+' | b'`' | b'\'' | b'~'
+                )
+        })
+}
+
 impl TryFrom<(&str, Option<&str>)> for Param {
     type Error = Error;
     fn try_from((name, value): (&str, Option<&str>)) -> Result<Self, Self::Error> {
+        if !is_token(name) {
+            return Err(Error::ParseError("invalid parameter name".into()));
+        }
         match (name, value) {
             (n, Some(v)) if n.eq_ignore_ascii_case("transport") => Ok(Param::Transport(v.parse()?)),
             (n, Some(v)) if n.eq_ignore_ascii_case("user") => Ok(Param::User(User::new(v))),
@@ -341,6 +358,8 @@ impl TryFrom<(&str, Option<&str>)> for Param {
             }
             (n, Some(v)) if n.eq_ignore_ascii_case("tag") => Ok(Param::Tag(Tag::new(v))),
             (n, Some(v)) if n.eq_ignore_ascii_case("expires") => {
+                v.parse::<u32>()
+                    .map_err(|_| Error::ParseError("invalid expires".into()))?;
                 Ok(Param::Expires(Expires::new(v)))
             }
             (n, Some(v)) if n.eq_ignore_ascii_case("q") => Ok(Param::Q(Q::new(v))),
@@ -365,9 +384,12 @@ impl FromStr for Param {
     type Err = Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let s = s.trim_start_matches(';').trim();
+        if s.is_empty() {
+            return Err(Error::ParseError("empty parameter".into()));
+        }
         if let Some(eq) = s.find('=') {
-            let name = &s[..eq];
-            let value = &s[eq + 1..];
+            let name = s[..eq].trim();
+            let value = s[eq + 1..].trim();
             Param::try_from((name, Some(value)))
         } else {
             Param::try_from((s, None))
@@ -536,43 +558,69 @@ impl FromStr for Uri {
     }
 }
 
+fn is_scheme(s: &str) -> bool {
+    let mut chars = s.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+}
+
 pub fn parse_uri(s: &str) -> Result<Uri, Error> {
     let s = s.trim();
     let s = s.trim_start_matches('<');
     let s = s.trim_end_matches('>');
     let s = s.trim();
 
-    let (main, hdrs_str) = if let Some(q) = s.find('?') {
-        (&s[..q], Some(&s[q + 1..]))
-    } else {
-        (s, None)
-    };
-
-    let (host_part, params_str) = split_at_first_semicolon(main);
-
-    let (scheme, user_host) = if let Some(colon) = host_part.find(':') {
-        let potential_scheme = &host_part[..colon];
-        if potential_scheme.chars().all(|c| c.is_ascii_alphabetic()) {
-            (
-                Some(potential_scheme.parse::<Scheme>()?),
-                &host_part[colon + 1..],
-            )
+    let scheme_end = s.find(['@', ';', '?']).unwrap_or(s.len());
+    let (scheme, after_scheme) = if let Some(colon) = s[..scheme_end].find(':') {
+        let potential_scheme = &s[..colon];
+        if is_scheme(potential_scheme) {
+            (Some(potential_scheme.parse::<Scheme>()?), &s[colon + 1..])
         } else {
-            (None, host_part)
+            (None, s)
         }
     } else {
-        (None, host_part)
+        (None, s)
     };
 
-    let (auth, host_str) = if let Some(at) = user_host.rfind('@') {
-        (Some(Auth::from(&user_host[..at])), &user_host[at + 1..])
+    let is_opaque = matches!(scheme, Some(Scheme::Other(_))) && !after_scheme.starts_with("//");
+
+    let (auth, rest) = if is_opaque {
+        (None, after_scheme)
+    } else if let Some(at) = after_scheme.rfind('@') {
+        (
+            Some(Auth::from(&after_scheme[..at])),
+            &after_scheme[at + 1..],
+        )
     } else {
-        (None, user_host)
+        (None, after_scheme)
     };
 
-    let host_with_port = parse_host_with_port(host_str)?;
+    let (main, hdrs_str) = if let Some(q) = rest.find('?') {
+        (&rest[..q], Some(&rest[q + 1..]))
+    } else {
+        (rest, None)
+    };
 
-    let params = parse_params(params_str.unwrap_or(""))?;
+    let (host_str, params_str) = split_at_first_semicolon(main);
+
+    let host_with_port = if is_opaque {
+        HostWithPort {
+            host: host_str.parse()?,
+            port: None,
+        }
+    } else {
+        parse_host_with_port(host_str)?
+    };
+
+    let params = match params_str {
+        Some(p) => {
+            if p.trim().is_empty() {
+                return Err(Error::ParseError("empty parameter".into()));
+            }
+            parse_params(p)?
+        }
+        None => vec![],
+    };
 
     let headers = if let Some(h) = hdrs_str {
         h.split('&')
@@ -605,14 +653,19 @@ fn split_at_first_semicolon(s: &str) -> (&str, Option<&str>) {
 }
 
 pub fn parse_params(s: &str) -> Result<Vec<Param>, Error> {
+    let s = s.trim();
     if s.is_empty() {
         return Ok(vec![]);
+    }
+    let s = s.strip_suffix(';').map(str::trim).unwrap_or(s);
+    if s.is_empty() {
+        return Err(Error::ParseError("empty parameter".into()));
     }
     let mut params = Vec::new();
     for part in s.split(';') {
         let part = part.trim();
         if part.is_empty() {
-            continue;
+            return Err(Error::ParseError("empty parameter".into()));
         }
         let param = part.parse::<Param>()?;
         params.push(param);
@@ -1048,5 +1101,36 @@ mod tests {
     fn uri_anonymous() {
         let uri = parse_uri("sip:anonymous@anonymous.invalid").unwrap();
         assert_eq!(uri.auth.unwrap().user, "anonymous");
+    }
+
+    #[test]
+    fn uri_preserves_semicolons_in_user_part() {
+        let uri = parse_uri("sip:user;par=u%40example.net@example.com;transport=udp?subject=test")
+            .unwrap();
+        assert_eq!(uri.auth.as_ref().unwrap().user, "user;par=u%40example.net");
+        assert_eq!(uri.host_with_port.host, Host::Domain("example.com".into()));
+        assert_eq!(uri.params.len(), 1);
+        assert_eq!(uri.headers, vec![("subject".into(), "test".into())]);
+    }
+
+    #[test]
+    fn uri_params_allow_whitespace_around_equals_and_reject_empty_segments() {
+        let uri = parse_uri("sip:alice@example.com;tag = 123 ;lr").unwrap();
+        assert_eq!(uri.tag(), Some("123"));
+        assert!(uri.has_lr());
+
+        assert!(parse_uri("sip:alice@example.com;;tag=123").is_err());
+        assert!(parse_uri("sip:alice@example.com;;;;").is_err());
+        assert!(parse_uri("sip:alice@example.com;expires=99999999999999999999").is_err());
+    }
+
+    #[test]
+    fn opaque_non_sip_uri_preserves_colons_without_port_split() {
+        for raw in ["urn:service:sos", "urn:3gpp:ns:1", "urn:example:id:100000"] {
+            let uri = parse_uri(raw).unwrap();
+            assert_eq!(uri.scheme, Some(Scheme::Other("urn".into())));
+            assert_eq!(uri.host_with_port.port, None);
+            assert_eq!(uri.to_string(), raw);
+        }
     }
 }
