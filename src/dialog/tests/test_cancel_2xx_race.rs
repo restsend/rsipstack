@@ -970,7 +970,7 @@ async fn test_confirmed_dialog_survives_invite_task_completion() -> crate::Resul
         peer,
     } = setup(&token).await?;
     let (state_sender, mut states) = unbounded_channel();
-    let (dialog, join) = dialog_layer.do_invite_async(option, state_sender)?;
+    let (_dialog, join) = dialog_layer.do_invite_async(option, state_sender)?;
     let (inv, uac) = recv_request(&peer, Method::Invite, Duration::from_secs(2)).await;
     calling_id(&mut states).await;
 

@@ -94,18 +94,10 @@ async fn recv_message(
     buf: &mut [u8],
     wait: Duration,
 ) -> Option<(String, SocketAddr)> {
-    let deadline = Instant::now() + wait;
-    loop {
-        let now = Instant::now();
-        if now >= deadline {
-            return None;
-        }
-        let Ok(Ok((len, src))) = tokio::time::timeout(deadline - now, socket.recv_from(buf)).await
-        else {
-            return None;
-        };
-        return Some((String::from_utf8_lossy(&buf[..len]).to_string(), src));
-    }
+    let Ok(Ok((len, src))) = tokio::time::timeout(wait, socket.recv_from(buf)).await else {
+        return None;
+    };
+    Some((String::from_utf8_lossy(&buf[..len]).to_string(), src))
 }
 
 /// Confirm a call, then REFER it: the dialog must answer 202, return to

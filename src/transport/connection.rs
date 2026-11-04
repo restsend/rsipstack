@@ -340,6 +340,7 @@ impl SipConnection {
         }
     }
     pub async fn serve_loop(&self, sender: TransportSender, idle_timeout: Duration) -> Result<()> {
+        let _ = idle_timeout;
         match self {
             SipConnection::Channel(transport) => transport.serve_loop(sender).await,
             SipConnection::Udp(transport) => transport.serve_loop(sender).await,

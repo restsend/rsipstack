@@ -8,6 +8,7 @@ A RFC 3261/3262 compliant SIP stack written in Rust. The goal of this project is
 
 - **RFC 3261/3262 Compliant**: Full compliance with SIP specification
 - **Multiple Transport Support**: UDP, TCP, TLS, WebSocket (TLS/WebSocket require the `rustls` and `websocket` features, enabled by default). The TLS client goes through a backend seam (`platform::tls`) — host default is the built-in rustls; embedded stacks can register their own connector
+- **IPv6 & Dual-Stack**: listeners on `::` serve IPv4 and IPv6 (explicit `IPV6_V6ONLY`), IPv4-mapped peer addresses are canonicalized, and UDP sends pick a listener that can reach the target's address family (see [Behavior & Compatibility Notes](#behavior--compatibility-notes))
 - **Transaction Layer**: Complete SIP transaction state machine
 - **Dialog Layer**: SIP dialog management
 - **Reliable Provisionals**: PRACK (RFC 3262 / 100rel) support
@@ -56,6 +57,26 @@ cargo check --no-default-features --features platform-embassy
 - [x] Dialog Layer
 - [ ] WASM target
 - [x] no_std embassy-based targets
+
+## Behavior & Compatibility Notes
+
+rsipstack targets RFC 3261 strictly; where peers are lenient, rsipstack stays
+compliant. Recent releases tightened a few behaviours — if you upgrade from
+0.7.8 or earlier, review the [CHANGELOG](CHANGELOG.md). The most visible
+points:
+
+- **Stream transports require `Content-Length`** (RFC 3261 §18.3): TCP/TLS/WS
+  messages without a valid, single `Content-Length` (compact `l:` counts) are
+  rejected instead of assumed body-less. UDP treats a missing header as "the
+  rest of the datagram is the body".
+- **`Via received` is bare for IPv6** (§20.42): `received=2001:db8::7`, no
+  brackets; bracketed input (RFC 5118) is still parsed.
+- **Dialogs follow target refreshes**: an in-dialog INVITE/UPDATE (or a
+  reliable INVITE provisional) with a valid Contact retargets the dialog;
+  rejected refreshes keep the old target, malformed Contacts get 400.
+- **Transactions match per RFC**: server = Via branch + sent-by + method,
+  client = branch + CSeq method; RFC 2543 (cookie-less branch) requests are
+  still matched, and unmatched CANCELs are answered 481.
 
 ## Use Cases
 

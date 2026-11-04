@@ -192,8 +192,13 @@ fn test_ipv6_sockets_set_v6only_explicitly() -> Result<()> {
         assert!(!any.only_v6()?, "`::` is dual-stack");
         let one = socket_for("[::1]:0".parse()?, ty, proto)?;
         assert!(one.only_v6()?, "a given IPv6 address is IPv6 only");
+        // An IPv4-family socket cannot bind an IPv6 address.
         let v4 = socket_for("127.0.0.1:0".parse()?, ty, proto)?;
-        assert_eq!(v4.domain()?, socket2::Domain::IPV4);
+        let ipv6: std::net::SocketAddr = "[::1]:0".parse()?;
+        assert!(
+            v4.bind(&ipv6.into()).is_err(),
+            "an IPv4 socket must not accept an IPv6 address"
+        );
     }
     Ok(())
 }
