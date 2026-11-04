@@ -3,10 +3,53 @@ use crate::sip::{
     headers::{make_header, Headers},
     message::{Request, Response, SipMessage},
     uri::parse_uri,
-    Error, Method, StatusCode, Uri, Version,
+    Error, HasHeaders, Header, Method, StatusCode, Uri, Version,
 };
 use memchr::{memchr, memmem};
+/// Parse one complete message-oriented packet. Without Content-Length, all
+/// remaining octets are the body (RFC 3261 §18.3). Stream transports must frame
+/// their input using Content-Length before calling this function.
 pub fn parse_message(data: &[u8]) -> Result<SipMessage, Error> {
+    let (mut message, body_start) = parse_message_head(data)?;
+    let available = data.len() - body_start;
+    let length = content_length(message.headers())?.unwrap_or(available);
+    if length > available {
+        return Err(Error::ParseError("SIP message: truncated body".into()));
+    }
+    let body = data[body_start..body_start + length].to_vec();
+    match &mut message {
+        SipMessage::Request(r) => r.body = body,
+        SipMessage::Response(r) => r.body = body,
+    }
+    Ok(message)
+}
+
+/// Shared by datagram parsing and stream framing; absence is distinct from zero.
+pub(crate) fn content_length(headers: &Headers) -> Result<Option<usize>, Error> {
+    let mut length = None;
+    for header in headers.iter() {
+        if let Header::ContentLength(value) = header {
+            if length.is_some() {
+                return Err(Error::ParseError(
+                    "SIP message: duplicate Content-Length".into(),
+                ));
+            }
+            let value = value.value().trim();
+            // RFC 3261 §25.1: 1*DIGIT, not a signed Rust integer.
+            if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
+                return Err(Error::ParseError(
+                    "SIP message: invalid Content-Length".into(),
+                ));
+            }
+            length = Some(value.parse::<usize>()?);
+        }
+    }
+    Ok(length)
+}
+
+/// Parse only the start line and headers, never an incomplete body. UDP may use
+/// these headers to answer a framing error; they must not reach the application.
+pub(crate) fn parse_message_head(data: &[u8]) -> Result<(SipMessage, usize), Error> {
     let sep = find_double_crlf(data)
         .ok_or_else(|| Error::ParseError("SIP message: missing \\r\\n\\r\\n separator".into()))?;
 
@@ -19,7 +62,6 @@ pub fn parse_message(data: &[u8]) -> Result<SipMessage, Error> {
         .ok_or_else(|| Error::ParseError("SIP message: empty start line".into()))?;
 
     let mut headers = Headers::default();
-    let mut content_length: usize = 0;
     let mut pending: Option<(String, String)> = None;
 
     for line in lines {
@@ -42,9 +84,6 @@ pub fn parse_message(data: &[u8]) -> Result<SipMessage, Error> {
         }
 
         if let Some((name, val)) = pending.take() {
-            if name.eq_ignore_ascii_case("content-length") || name.eq_ignore_ascii_case("l") {
-                content_length = val.trim().parse().unwrap_or(0);
-            }
             headers.push(make_header(&name, val));
         }
 
@@ -56,28 +95,18 @@ pub fn parse_message(data: &[u8]) -> Result<SipMessage, Error> {
     }
 
     if let Some((name, val)) = pending {
-        if name.eq_ignore_ascii_case("content-length") || name.eq_ignore_ascii_case("l") {
-            content_length = val.trim().parse().unwrap_or(0);
-        }
         headers.push(make_header(&name, val));
     }
-
-    let body: Vec<u8> = if body_start < data.len() {
-        let available = data.len() - body_start;
-        let take = available.min(content_length);
-        data[body_start..body_start + take].to_vec()
-    } else {
-        vec![]
-    };
 
     let start_str = core::str::from_utf8(start_line.as_bytes())
         .map_err(|_| Error::ParseError("SIP start line: invalid UTF-8".into()))?;
 
-    if start_str.starts_with("SIP/") {
-        parse_response_line(start_str, headers, body)
+    let message = if start_str.starts_with("SIP/") {
+        parse_response_line(start_str, headers, vec![])?
     } else {
-        parse_request_line(start_str, headers, body)
-    }
+        parse_request_line(start_str, headers, vec![])?
+    };
+    Ok((message, body_start))
 }
 
 fn parse_request_line(line: &str, headers: Headers, body: Vec<u8>) -> Result<SipMessage, Error> {
@@ -198,7 +227,7 @@ mod tests {
             "Call-ID: call-id-1\r\n",
             "CSeq: 1 INVITE\r\n",
             "Content-Type: application/sdp\r\n",
-            "Content-Length: 27\r\n",
+            "Content-Length: 26\r\n",
             "\r\n",
             "a=rtcp:4000 IN IP4 1.2.3.4"
         )

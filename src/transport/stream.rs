@@ -1,4 +1,4 @@
-use crate::sip::prelude::HeadersExt;
+use crate::sip::prelude::{HasHeaders, HeadersExt};
 use crate::sip::SipMessage;
 use crate::{
     transport::{
@@ -9,7 +9,7 @@ use crate::{
 };
 use bytes::{Buf, BytesMut};
 use core::time::Duration;
-use memchr::{memchr, memmem};
+use memchr::memmem;
 use tokio::{
     io::{AsyncRead, AsyncWrite, AsyncWriteExt},
     sync::Mutex,
@@ -18,8 +18,6 @@ use tokio_util::codec::{Decoder, Encoder};
 use tracing::{debug, info, warn};
 
 pub(super) const MAX_SIP_MESSAGE_SIZE: usize = 65535;
-const CL_FULL_NAME: &[u8] = b"content-length";
-const CL_SHORT_NAME: &[u8] = b"l";
 
 pub struct SipCodec {}
 
@@ -68,62 +66,24 @@ impl Decoder for SipCodec {
         }
 
         if let Some(headers_end) = memmem::find(src, b"\r\n\r\n") {
-            let headers = &src[..headers_end + 4]; // include CRLFCRLF
-
-            // Parse Content-Length as u32 without UTF-8 conversion
-            let mut content_length: usize = 0;
-            let mut start = 0;
-            while start < headers.len() {
-                // find end of line with memchr
-                let end = memchr(b'\n', &headers[start..])
-                    .map(|p| start + p)
-                    .unwrap_or(headers.len());
-
-                let mut line = &headers[start..end];
-                if let Some(&b'\r') = line.last() {
-                    line = &line[..line.len().saturating_sub(1)];
-                }
-
-                if let Some(colon) = memchr(b':', line) {
-                    let header = &line[..colon];
-                    let is_cl = if header.len() == CL_FULL_NAME.len()
-                        && header
-                            .iter()
-                            .zip(CL_FULL_NAME.iter())
-                            .all(|(&a, &b)| a.to_ascii_lowercase() == b)
-                    {
-                        true
-                    } else {
-                        header.len() == CL_SHORT_NAME.len()
-                            && header
-                                .iter()
-                                .zip(CL_SHORT_NAME.iter())
-                                .all(|(&a, &b)| a.to_ascii_lowercase() == b)
-                    };
-
-                    if is_cl {
-                        // parse value
-                        let value_buf = &line[colon + 1..];
-                        content_length = std::str::from_utf8(value_buf)
-                            .map_err(|_| crate::Error::Error("Invalid Content-Length".to_string()))?
-                            .trim()
-                            .parse()
-                            .map_err(|_| {
-                                crate::Error::Error("Invalid Content-Length value".to_string())
-                            })?;
-                        break;
-                    }
-                }
-
-                start = if end < headers.len() { end + 1 } else { end };
-            }
-
-            let total_len = headers_end + 4 + content_length;
-
+            let (mut message, body_start) =
+                crate::sip::parser::parse_message_head(&src[..headers_end + 4])?;
+            let content_length = crate::sip::parser::content_length(message.headers())?
+                .ok_or_else(|| {
+                    crate::Error::Error("Missing Content-Length on SIP stream".into())
+                })?;
+            let total_len = body_start
+                .checked_add(content_length)
+                .filter(|len| *len <= MAX_SIP_MESSAGE_SIZE)
+                .ok_or_else(|| crate::Error::Error("SIP message too large".into()))?;
             if src.len() >= total_len {
-                let msg_data = src.split_to(total_len); // consume full message
-                let msg = SipMessage::try_from(&msg_data[..])?;
-                return Ok(Some(SipCodecType::Message(msg)));
+                let msg_data = src.split_to(total_len);
+                let body = msg_data[body_start..].to_vec();
+                match &mut message {
+                    SipMessage::Request(r) => r.body = body,
+                    SipMessage::Response(r) => r.body = body,
+                }
+                return Ok(Some(SipCodecType::Message(message)));
             }
         }
 

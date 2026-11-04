@@ -902,7 +902,7 @@ mod tests {
             "CSeq: 314159 INVITE\r\n",
             "Contact: <sip:bob@192.0.2.4>\r\n",
             "Content-Type: application/sdp\r\n",
-            "Content-Length: 131\r\n",
+            "Content-Length: 127\r\n",
             "\r\n",
             "v=0\r\no=bob 2890844527 2890844527 IN IP4 192.0.2.4\r\ns=-\r\nc=IN IP4 192.0.2.4\r\nt=0 0\r\nm=audio 3456 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000"
         )
