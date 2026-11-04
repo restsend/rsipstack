@@ -891,6 +891,7 @@ impl DialogLayer {
             *dlg_inner.remote_uri.lock() = uri;
         }
         let dialog = InviteDialog::from_inner(Arc::new(dlg_inner));
+        dialog.inner.reserve_invite(&tx)?;
         Ok((dialog, tx))
     }
 }

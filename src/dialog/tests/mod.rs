@@ -10,6 +10,7 @@ mod test_forked_2xx_bye;
 mod test_in_dialog_provisional;
 mod test_in_dialog_via;
 mod test_invite_auth_challenge;
+mod test_invite_overlap;
 mod test_prack;
 mod test_proxy_headers;
 mod test_refer;

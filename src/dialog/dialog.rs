@@ -18,6 +18,7 @@ use crate::sip::{
 use crate::{
     transaction::{
         endpoint::EndpointInnerRef,
+        invite_usage::InviteUsage,
         key::{TransactionKey, TransactionRole},
         make_uuid_v4,
         transaction::{Transaction, TransactionEventSender},
@@ -309,6 +310,7 @@ pub(super) struct RemoteTarget {
 /// * `tu_sender` - Transaction user sender
 /// * `initial_request` - The initial request that created this dialog
 pub struct DialogInner {
+    pub(super) invite_usage: Arc<Mutex<InviteUsage>>,
     pub role: TransactionRole,
     pub cancel_token: CancellationToken,
     pub id: Mutex<DialogId>,
@@ -492,6 +494,7 @@ impl DialogInner {
         let session_id = Self::extract_session_id(&initial_request, role);
 
         Ok(Self {
+            invite_usage: Arc::new(Mutex::new(InviteUsage::default())),
             role,
             cancel_token: CancellationToken::new(),
             id: Mutex::new(id.clone()),
@@ -1237,6 +1240,7 @@ impl DialogInner {
             self.endpoint_inner.clone(),
             affinity_connection,
         );
+        self.reserve_invite(&tx)?;
 
         if let Some(route) = tx.original.route_header() {
             if let Ok(first_route) = route.typed() {
@@ -1427,6 +1431,7 @@ impl DialogInner {
                                 _ => self.increment_local_seq(),
                             };
                             tx = handle_client_authenticate(new_seq, &tx, resp, cred).await?;
+                            self.reserve_invite(&tx)?;
                             tx.send().await?;
                             continue;
                         } else {
@@ -1465,6 +1470,16 @@ impl DialogInner {
 
     pub(super) async fn do_request(&self, request: Request) -> Result<Option<Response>> {
         self.send_dialog_request(request).boxed().await
+    }
+
+    pub(super) fn reserve_invite(&self, tx: &Transaction) -> Result<()> {
+        tx.reserve_invite(&self.invite_usage).map_err(|_| {
+            crate::Error::DialogError(
+                "an INVITE transaction is already in progress".into(),
+                self.id.lock().clone(),
+                StatusCode::RequestPending,
+            )
+        })
     }
 
     /// Send the BYE that ends this dialog. RFC 3261 §15.1.1: the session ends
@@ -1664,6 +1679,7 @@ impl DialogInner {
         ));
 
         Ok(Some(Self {
+            invite_usage: Arc::new(Mutex::new(InviteUsage::default())),
             role,
             cancel_token: CancellationToken::new(),
 
