@@ -16,7 +16,7 @@ use alloc::sync::Arc;
 use bytes::BytesMut;
 use core::net::SocketAddr;
 #[cfg(feature = "platform-tokio")]
-use socket2::{Domain, Protocol, Socket, Type};
+use socket2::{Protocol, Type};
 use tracing::{debug, info, warn};
 pub struct UdpInner {
     pub conn: Arc<dyn PlatformUdpSocket>,
@@ -84,12 +84,7 @@ impl UdpConnection {
         external: Option<SocketAddr>,
         cancel_token: Option<CancellationToken>,
     ) -> Result<Self> {
-        let domain = if local.is_ipv6() {
-            Domain::IPV6
-        } else {
-            Domain::IPV4
-        };
-        let socket = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP))?;
+        let socket = crate::platform::net::socket_for(local, Type::DGRAM, Protocol::UDP)?;
         socket.set_nonblocking(true)?;
         socket.bind(&local.into())?;
         let conn: Arc<dyn PlatformUdpSocket> =
@@ -280,6 +275,18 @@ impl UdpConnection {
                 addr: addr.into(),
             },
         ))
+    }
+
+    /// Whether this socket can send to `ip`: one on an IPv4 address only to
+    /// IPv4, one on `::` (dual-stack, see
+    /// [`crate::platform::net::socket_for`]) to both, one on a given IPv6
+    /// address only to IPv6.
+    pub fn can_send_to(&self, ip: core::net::IpAddr) -> bool {
+        match self.inner.conn.local_addr() {
+            Ok(core::net::SocketAddr::V4(_)) => ip.is_ipv4(),
+            Ok(core::net::SocketAddr::V6(local)) => local.ip().is_unspecified() || ip.is_ipv6(),
+            Err(_) => true,
+        }
     }
 
     pub fn get_addr(&self) -> &SipAddr {

@@ -62,7 +62,7 @@ impl TcpConnection {
         local_addr: SipAddr,
         cancel_token: Option<CancellationToken>,
     ) -> Result<Self> {
-        let remote_addr = stream.peer_addr()?;
+        let remote_addr = crate::platform::net::canonical_socket_addr(stream.peer_addr()?);
         let remote_sip_addr = SipAddr {
             r#type: Some(crate::sip::transport::Transport::Tcp),
             addr: remote_addr.into(),

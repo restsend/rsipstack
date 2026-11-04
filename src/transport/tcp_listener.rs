@@ -4,7 +4,7 @@ use crate::transport::transport_layer::TransportLayerInnerRef;
 use crate::transport::SipAddr;
 use crate::transport::SipConnection;
 use crate::Result;
-use socket2::{Domain, Protocol, Socket, Type};
+use socket2::{Protocol, Type};
 use std::fmt;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::net::{TcpListener, TcpStream};
@@ -41,12 +41,7 @@ impl TcpListenerConnection {
         transport_layer_inner: TransportLayerInnerRef,
     ) -> Result<()> {
         let local = self.inner.local_addr.get_socketaddr()?;
-        let domain = if local.is_ipv6() {
-            Domain::IPV6
-        } else {
-            Domain::IPV4
-        };
-        let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
+        let socket = crate::platform::net::socket_for(local, Type::STREAM, Protocol::TCP)?;
         if let Err(e) = socket.set_reuse_address(true) {
             warn!(error = %e, "failed to set SO_REUSEADDR on TCP listener");
         }
@@ -108,7 +103,10 @@ pub(crate) async fn accept_or_cancelled(
     let mut accept_f = core::pin::pin!(listener.accept());
     match crate::platform::select::select2(&mut cancel_f, &mut accept_f).await {
         crate::platform::select::Either::A(()) => None,
-        crate::platform::select::Either::B(accepted) => Some(accepted),
+        crate::platform::select::Either::B(accepted) => Some(
+            accepted
+                .map(|(stream, addr)| (stream, crate::platform::net::canonical_socket_addr(addr))),
+        ),
     }
 }
 

@@ -13,7 +13,7 @@ use crate::{
 };
 use core::time::Duration;
 use futures_util::{SinkExt, StreamExt};
-use socket2::{Domain, Protocol, Socket, Type};
+use socket2::{Protocol, Type};
 use std::{fmt, net::SocketAddr, sync::Arc};
 use tokio::{net::TcpListener, sync::Mutex};
 use tokio_tungstenite::{
@@ -80,12 +80,7 @@ impl WebSocketListenerConnection {
         transport_layer_inner: TransportLayerInnerRef,
     ) -> Result<()> {
         let local = self.inner.local_addr.get_socketaddr()?;
-        let domain = if local.is_ipv6() {
-            Domain::IPV6
-        } else {
-            Domain::IPV4
-        };
-        let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
+        let socket = crate::platform::net::socket_for(local, Type::STREAM, Protocol::TCP)?;
         if let Err(e) = socket.set_reuse_address(true) {
             warn!(error = %e, "failed to set SO_REUSEADDR on WebSocket listener");
         }
@@ -243,10 +238,8 @@ impl WebSocketConnection {
             _ => "ws",
         };
 
-        let host = match &remote.addr.host {
-            crate::sip::Host::Domain(domain) => domain.to_string(),
-            crate::sip::Host::IpAddr(ip) => ip.to_string(),
-        };
+        // `Host` writes an IPv6 address in brackets, as a URL needs it.
+        let host = remote.addr.host.to_string();
 
         let port = remote.addr.port.as_ref().map_or(5060, |p| p.value());
         let ws_path = path.unwrap_or("/");

@@ -127,3 +127,76 @@ async fn test_tls_listener_closed_on_cancel() -> Result<()> {
     assert_listener_closed_on_cancel(listener.into(), addr).await;
     Ok(())
 }
+
+/// A listener on `::` accepts IPv4 clients too; their connections have the
+/// IPv4 address, not `::ffff:a.b.c.d`.
+#[tokio::test]
+async fn test_tcp_dual_stack_listener_reports_ipv4_peer_as_ipv4() -> Result<()> {
+    let probe = std::net::TcpListener::bind("[::]:0").expect("bind probe");
+    let port = probe.local_addr()?.port();
+    drop(probe);
+    let cancel = CancellationToken::new();
+    let transport_layer = TransportLayer::new(cancel.clone());
+    let mut events = transport_layer
+        .inner
+        .transport_rx
+        .lock()
+        .take()
+        .expect("transport events");
+    transport_layer.add_transport(
+        TcpListenerConnection::new(SocketAddr::from(([0u16; 8], port)), None)
+            .await?
+            .into(),
+    );
+    transport_layer.serve_listens().await?;
+    let client = tokio::net::TcpStream::connect(("127.0.0.1", port)).await?;
+    let remote = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            match events.recv().await {
+                Some(crate::transport::TransportEvent::New(conn)) => {
+                    break conn.get_remote_addr().cloned();
+                }
+                Some(_) => continue,
+                None => break None,
+            }
+        }
+    })
+    .await
+    .expect("a new connection");
+    let remote = remote.expect("remote address").get_socketaddr()?;
+    assert_eq!(remote, client.local_addr()?);
+    cancel.cancel();
+    Ok(())
+}
+
+/// A WebSocket client reaches a server on an IPv6 address: the URL has
+/// the address in brackets (`ws://[::1]:port/`).
+#[cfg(feature = "websocket")]
+#[tokio::test]
+async fn test_websocket_connects_over_ipv6() -> Result<()> {
+    let probe = std::net::TcpListener::bind("[::1]:0").expect("bind probe");
+    let addr = probe.local_addr()?;
+    drop(probe);
+    let cancel = CancellationToken::new();
+    let transport_layer = TransportLayer::new(cancel.clone());
+    transport_layer.add_transport(
+        WebSocketListenerConnection::new(addr, None, false)
+            .await?
+            .into(),
+    );
+    transport_layer.serve_listens().await?;
+    let remote = crate::transport::SipAddr {
+        r#type: Some(crate::sip::transport::Transport::Ws),
+        addr: addr.into(),
+    };
+    let conn = tokio::time::timeout(
+        Duration::from_secs(2),
+        crate::transport::websocket::WebSocketConnection::connect_with_path(&remote, None, None),
+    )
+    .await
+    .expect("connects in time")?;
+    let conn = crate::transport::SipConnection::WebSocket(conn);
+    assert!(conn.get_addr().get_socketaddr()?.is_ipv6());
+    cancel.cancel();
+    Ok(())
+}
