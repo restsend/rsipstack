@@ -69,6 +69,7 @@ fn make_request(
     cseq: u32,
 ) -> Result<crate::sip::Request> {
     let uri = crate::sip::Uri::try_from(format!("sip:{};transport=tcp", peer).as_str())?;
+    let cseq_header = CSeq::new(format!("{cseq} {method}")).into();
     Ok(crate::sip::Request {
         method,
         uri,
@@ -77,7 +78,7 @@ fn make_request(
                 "SIP/2.0/TCP 127.0.0.1:5060;branch=z9hG4bK-reconnect-{cseq}"
             ))
             .into(),
-            CSeq::new(format!("{cseq} {method}")).into(),
+            cseq_header,
             From::new("<sip:alice@127.0.0.1>;tag=reconnect").into(),
             To::new("<sip:bob@127.0.0.1>").into(),
             CallId::new("stream-reconnect@127.0.0.1").into(),
@@ -202,7 +203,7 @@ async fn test_send_failure_on_stream_is_reported_at_once() -> Result<()> {
         dead.close().await.ok();
 
         let inner = endpoint.inner.clone();
-        let request = make_request(method, peer, 1)?;
+        let request = make_request(method.clone(), peer, 1)?;
         let client = async move {
             let key = TransactionKey::from_request(&request, TransactionRole::Client)?;
             let mut tx = Transaction::new_client(key, request, inner.clone(), Some(dead));
