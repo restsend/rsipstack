@@ -106,7 +106,173 @@ pub(crate) fn parse_message_head(data: &[u8]) -> Result<(SipMessage, usize), Err
     } else {
         parse_request_line(start_str, headers, vec![])?
     };
+    validate_message_headers(&message)?;
     Ok((message, body_start))
+}
+
+fn is_token(s: &str) -> bool {
+    !s.is_empty()
+        && s.bytes().all(|b| {
+            b.is_ascii_alphanumeric()
+                || matches!(
+                    b,
+                    b'-' | b'.' | b'!' | b'%' | b'*' | b'_' | b'+' | b'`' | b'\'' | b'~'
+                )
+        })
+}
+
+fn validate_via_header(s: &str) -> Result<(), Error> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Err(Error::ParseError("Via: empty header".into()));
+    }
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut escaped = false;
+    let mut paren_depth = 0usize;
+    let mut entries = Vec::new();
+    for ch in s.chars() {
+        if escaped {
+            escaped = false;
+            current.push(ch);
+            continue;
+        }
+        if (in_quotes || paren_depth > 0) && ch == '\\' {
+            escaped = true;
+            current.push(ch);
+            continue;
+        }
+        match ch {
+            '"' if paren_depth == 0 => {
+                in_quotes = !in_quotes;
+                current.push(ch);
+            }
+            '(' if !in_quotes => {
+                paren_depth += 1;
+                current.push(ch);
+            }
+            ')' if !in_quotes => {
+                if paren_depth == 0 {
+                    return Err(Error::ParseError("Via: unmatched ')'".into()));
+                }
+                paren_depth -= 1;
+                current.push(ch);
+            }
+            ',' if !in_quotes && paren_depth == 0 => {
+                let entry = current.trim();
+                if entry.is_empty() {
+                    return Err(Error::ParseError("Via: empty entry".into()));
+                }
+                entries.push(entry.to_string());
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+    if in_quotes || paren_depth != 0 {
+        return Err(Error::ParseError(
+            "Via: unbalanced quotes or comment".into(),
+        ));
+    }
+    let entry = current.trim();
+    if entry.is_empty() {
+        return Err(Error::ParseError("Via: empty entry".into()));
+    }
+    entries.push(entry.to_string());
+
+    for entry in entries {
+        let mut slashes = entry.splitn(3, '/');
+        let proto = slashes
+            .next()
+            .ok_or_else(|| Error::ParseError("Via: missing protocol".into()))?
+            .trim();
+        let ver = slashes
+            .next()
+            .ok_or_else(|| Error::ParseError("Via: missing version".into()))?
+            .trim();
+        if !proto.eq_ignore_ascii_case("SIP") || ver != "2.0" {
+            return Err(Error::ParseError("Via: invalid protocol/version".into()));
+        }
+        let rest = slashes
+            .next()
+            .ok_or_else(|| Error::ParseError("Via: missing transport+host".into()))?
+            .trim();
+        let (transport_str, addr_and_params) = rest
+            .split_once(|c: char| c.is_whitespace())
+            .ok_or_else(|| Error::ParseError("Via: missing host after transport".into()))?;
+        if !is_token(transport_str.trim()) {
+            return Err(Error::ParseError("Via: invalid transport token".into()));
+        }
+        let addr_and_params = addr_and_params.trim();
+        let (addr_str, params_str) = match addr_and_params.split_once(';') {
+            Some((a, p)) => (a.trim(), Some(p)),
+            None => (addr_and_params, None),
+        };
+        crate::sip::uri::HostWithPort::try_from(addr_str)?;
+        if let Some(p) = params_str {
+            if p.trim().is_empty() {
+                return Err(Error::ParseError("Via: empty parameter".into()));
+            }
+            crate::sip::uri::parse_params(p)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_message_headers(message: &SipMessage) -> Result<(), Error> {
+    let request_method = match message {
+        SipMessage::Request(req) => Some(&req.method),
+        SipMessage::Response(_) => None,
+    };
+    for header in message.headers().iter() {
+        match header {
+            Header::Via(v) => validate_via_header(v.value())?,
+            Header::From(f) => {
+                crate::sip::headers::typed::From::parse(f.value())?;
+            }
+            Header::To(t) => {
+                crate::sip::headers::typed::To::parse(t.value())?;
+            }
+            Header::Contact(c) => {
+                crate::sip::headers::typed::Contact::parse_header_list(c.value())?;
+            }
+            Header::CSeq(c) => {
+                let cseq = crate::sip::headers::typed::CSeq::parse(c.value())?;
+                if let Some(req_method) = request_method {
+                    if &cseq.method != req_method {
+                        return Err(Error::ParseError(
+                            "SIP message: CSeq method does not match Request-Line".into(),
+                        ));
+                    }
+                }
+            }
+            Header::MaxForwards(m) => {
+                m.value()
+                    .trim()
+                    .parse::<u8>()
+                    .map_err(|_| Error::ParseError("Max-Forwards: invalid value".into()))?;
+            }
+            Header::Expires(e) => {
+                e.value()
+                    .trim()
+                    .parse::<u32>()
+                    .map_err(|_| Error::ParseError("Expires: invalid value".into()))?;
+            }
+            Header::RetryAfter(r) => {
+                let delta = r.value().split([';', '(']).next().unwrap_or("").trim();
+                delta
+                    .parse::<u32>()
+                    .map_err(|_| Error::ParseError("Retry-After: invalid value".into()))?;
+            }
+            Header::Date(d) => {
+                if !d.value().trim().ends_with(" GMT") {
+                    return Err(Error::ParseError("Date: must end with GMT".into()));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn parse_request_line(line: &str, headers: Headers, body: Vec<u8>) -> Result<SipMessage, Error> {
@@ -119,11 +285,30 @@ fn parse_request_line(line: &str, headers: Headers, body: Vec<u8>) -> Result<Sip
         .ok_or_else(|| Error::ParseError("Request-Line: missing URI".into()))?;
     let version_str = parts
         .next()
-        .ok_or_else(|| Error::ParseError("Request-Line: missing version".into()))?
-        .trim();
+        .ok_or_else(|| Error::ParseError("Request-Line: missing version".into()))?;
+
+    if uri_str.is_empty()
+        || uri_str.starts_with('<')
+        || uri_str.ends_with('>')
+        || uri_str.chars().any(char::is_whitespace)
+    {
+        return Err(Error::ParseError(
+            "Request-Line: invalid Request-URI".into(),
+        ));
+    }
+    if !version_str.eq_ignore_ascii_case("SIP/2.0") {
+        return Err(Error::ParseError(
+            "Request-Line: unsupported version".into(),
+        ));
+    }
 
     let method: Method = method_str.parse()?;
-    let uri: Uri = parse_uri(uri_str.trim())?;
+    let uri: Uri = parse_uri(uri_str)?;
+    if !uri.headers.is_empty() || uri.scheme.is_none() {
+        return Err(Error::ParseError(
+            "Request-Line: invalid Request-URI".into(),
+        ));
+    }
     let version: Version = version_str.parse()?;
 
     Ok(SipMessage::Request(Request {
@@ -144,6 +329,10 @@ fn parse_response_line(line: &str, headers: Headers, body: Vec<u8>) -> Result<Si
         .next()
         .ok_or_else(|| Error::ParseError("Status-Line: missing status code".into()))?;
     let reason = parts.next().unwrap_or("").trim();
+
+    if !version_str.eq_ignore_ascii_case("SIP/2.0") {
+        return Err(Error::ParseError("Status-Line: unsupported version".into()));
+    }
 
     let version: Version = version_str.parse()?;
     let code: u16 = code_str
@@ -246,10 +435,11 @@ mod tests {
     }
 
     fn parse_request_line(request_line: &str) -> Result<SipMessage, crate::sip::Error> {
+        let method = request_line.split_whitespace().next().unwrap_or("BYE");
         let raw = format!(
             "{request_line}\r\nVia: SIP/2.0/UDP a.example:5060;branch=z9hG4bK-1\r\n\
              From: <sip:a@a.example>;tag=1\r\nTo: <sip:b@b.example>;tag=2\r\n\
-             Call-ID: c1\r\nCSeq: 2 BYE\r\nContent-Length: 0\r\n\r\n"
+             Call-ID: c1\r\nCSeq: 2 {method}\r\nContent-Length: 0\r\n\r\n"
         );
         SipMessage::try_from(raw.as_str())
     }
@@ -314,5 +504,59 @@ mod tests {
         assert_eq!(r.wire_reason, None);
         assert_eq!(r.status_code.text(), "Odd Thing");
         assert_eq!(crate::sip::Response::default().wire_reason, None);
+    }
+
+    #[test]
+    fn rejects_rfc4475_malformed_request_lines_and_headers() {
+        // Angle-bracketed Request-URI (ltgtruri), trailing/embedded whitespace (trws, lwsruri),
+        // header parameters in Request-URI (escruri), or unsupported version (badvers).
+        for bad_line in [
+            "INVITE <sip:bob@example.com> SIP/2.0",
+            "OPTIONS sip:bob@example.com SIP/2.0 ",
+            "INVITE sip:bob@example.com?Route=sip:proxy.example.com SIP/2.0",
+            "INVITE sip:bob@example.com SIP/7.0",
+        ] {
+            assert!(
+                parse_request_line(bad_line).is_err(),
+                "{bad_line:?} was accepted"
+            );
+        }
+
+        // Mismatched CSeq method (mismatch01/mismatch02).
+        let mismatch = concat!(
+            "INVITE sip:bob@example.com SIP/2.0\r\n",
+            "Via: SIP/2.0/UDP a.example:5060;branch=z9hG4bK-1\r\n",
+            "From: <sip:a@a.example>;tag=1\r\n",
+            "To: <sip:b@b.example>\r\n",
+            "Call-ID: c1\r\n",
+            "CSeq: 1 OPTIONS\r\n",
+            "Content-Length: 0\r\n\r\n"
+        );
+        assert!(SipMessage::try_from(mismatch).is_err());
+
+        // Out-of-range Max-Forwards / Expires (scalar02) and non-GMT Date (baddate).
+        let bad_max_forwards = concat!(
+            "OPTIONS sip:bob@example.com SIP/2.0\r\n",
+            "Via: SIP/2.0/UDP a.example:5060;branch=z9hG4bK-1\r\n",
+            "From: <sip:a@a.example>;tag=1\r\n",
+            "To: <sip:b@b.example>\r\n",
+            "Call-ID: c1\r\n",
+            "CSeq: 1 OPTIONS\r\n",
+            "Max-Forwards: 300\r\n",
+            "Content-Length: 0\r\n\r\n"
+        );
+        assert!(SipMessage::try_from(bad_max_forwards).is_err());
+
+        let bad_date = concat!(
+            "INVITE sip:bob@example.com SIP/2.0\r\n",
+            "Via: SIP/2.0/UDP a.example:5060;branch=z9hG4bK-1\r\n",
+            "From: <sip:a@a.example>;tag=1\r\n",
+            "To: <sip:b@b.example>\r\n",
+            "Call-ID: c1\r\n",
+            "CSeq: 1 INVITE\r\n",
+            "Date: Fri, 01 Jan 2010 16:00:00 EST\r\n",
+            "Content-Length: 0\r\n\r\n"
+        );
+        assert!(SipMessage::try_from(bad_date).is_err());
     }
 }
