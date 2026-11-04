@@ -15,6 +15,7 @@ use crate::transport::SipConnection;
 
 /// Test helper to create a mock request
 fn create_test_request(method: crate::sip::Method, branch: &str) -> crate::sip::Request {
+    let cseq_header = CSeq::new(format!("1 {}", method)).into();
     crate::sip::Request {
         method,
         uri: crate::sip::Uri::try_from("sip:test.example.com:5060").unwrap(),
@@ -24,7 +25,7 @@ fn create_test_request(method: crate::sip::Method, branch: &str) -> crate::sip::
                 branch
             ))
             .into(),
-            CSeq::new(format!("1 {}", method)).into(),
+            cseq_header,
             From::new("Alice <sip:alice@example.com>;tag=1928301774").into(),
             To::new("Bob <sip:bob@example.com>").into(),
             CallId::new("a84b4c76e66710@pc33.atlanta.com").into(),
@@ -470,5 +471,72 @@ async fn test_rfc6026_server_invite_accepted_rejects_3xx_transition() -> crate::
         err.is_err(),
         "reply() must reject Accepted → Completed (no such edge in can_transition matrix)",
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_server_non_invite_timer_j_is_zero_on_reliable_transport() -> crate::Result<()> {
+    // RFC 3261 §17.2.2: When the server non-INVITE transaction enters the
+    // "Completed" state, it MUST set Timer J to fire in 64*T1 seconds for
+    // unreliable transports, and zero seconds for reliable transports.
+    use crate::transport::{channel::ChannelConnection, SipAddr};
+    use tokio::sync::mpsc::unbounded_channel;
+
+    // Reliable transport (ChannelConnection has is_reliable() == true).
+    let endpoint_tcp = create_test_endpoint(Some("127.0.0.1:0")).await?;
+    let (to_net_tx, _to_net_rx) = unbounded_channel();
+    let (_from_net_tx, from_net_rx) = unbounded_channel();
+    let tcp_conn: SipConnection = ChannelConnection::create_connection(
+        from_net_rx,
+        to_net_tx,
+        SipAddr {
+            r#type: Some(crate::sip::Transport::Tcp),
+            addr: "127.0.0.1:5060".try_into()?,
+        },
+        None,
+    )
+    .await?
+    .into();
+    assert!(tcp_conn.is_reliable());
+
+    let register_req = create_test_request(crate::sip::Method::Register, "z9hG4bKtimerjtcp");
+    let key_tcp = TransactionKey::from_request(&register_req, TransactionRole::Server)?;
+    let mut tx_tcp = Transaction::new_server(
+        key_tcp,
+        register_req.clone(),
+        endpoint_tcp.inner.clone(),
+        Some(tcp_conn),
+    );
+    tx_tcp.reply(crate::sip::StatusCode::OK).await?;
+    assert_eq!(tx_tcp.state, TransactionState::Terminated);
+    assert_eq!(
+        endpoint_tcp.inner.get_stats().finished_transactions,
+        0,
+        "Timer J must be 0 on reliable transports (RFC 3261 §17.2.2)"
+    );
+
+    // Unreliable transport (UDP has is_reliable() == false).
+    let endpoint_udp = create_test_endpoint(Some("127.0.0.1:0")).await?;
+    let udp_conn = mock_udp_connection().await?;
+    assert!(!udp_conn.is_reliable());
+
+    let key_udp = TransactionKey::from_request(&register_req, TransactionRole::Server)?;
+    let mut tx_udp = Transaction::new_server(
+        key_udp,
+        register_req,
+        endpoint_udp.inner.clone(),
+        Some(udp_conn),
+    );
+    tx_udp.destination = Some(SipAddr::from(
+        "127.0.0.1:1".parse::<std::net::SocketAddr>()?,
+    ));
+    tx_udp.reply(crate::sip::StatusCode::OK).await?;
+    assert_eq!(tx_udp.state, TransactionState::Terminated);
+    assert_eq!(
+        endpoint_udp.inner.get_stats().finished_transactions,
+        1,
+        "Timer J must retain the final response for 64*T1 on UDP (RFC 3261 §17.2.2)"
+    );
+
     Ok(())
 }
