@@ -53,23 +53,83 @@ pub fn param_value(params: &[Param], key: &str) -> Option<String> {
     })
 }
 
+pub(crate) fn find_unquoted_lt(s: &str) -> Result<Option<usize>, Error> {
+    let mut in_quotes = false;
+    let mut escaped = false;
+    let mut lt_pos = None;
+    for (i, ch) in s.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if in_quotes && ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if ch == '"' {
+            in_quotes = !in_quotes;
+            continue;
+        }
+        if !in_quotes && ch == '<' && lt_pos.is_none() {
+            lt_pos = Some(i);
+        }
+    }
+    if in_quotes {
+        return Err(Error::ParseError("unclosed quote in display name".into()));
+    }
+    Ok(lt_pos)
+}
+
+fn is_token(s: &str) -> bool {
+    !s.is_empty()
+        && s.bytes().all(|b| {
+            b.is_ascii_alphanumeric()
+                || matches!(
+                    b,
+                    b'-' | b'.' | b'!' | b'%' | b'*' | b'_' | b'+' | b'`' | b'\'' | b'~'
+                )
+        })
+}
+
+pub(crate) fn validate_display_name(display_raw: &str) -> Result<Option<String>, Error> {
+    let display_raw = display_raw.trim();
+    if display_raw.is_empty() {
+        return Ok(None);
+    }
+    if display_raw.starts_with('"') && display_raw.ends_with('"') && display_raw.len() >= 2 {
+        return Ok(Some(display_raw[1..display_raw.len() - 1].to_string()));
+    }
+    if !display_raw.split_whitespace().all(is_token) {
+        return Err(Error::ParseError("invalid display name".into()));
+    }
+    Ok(Some(display_raw.to_string()))
+}
+
 pub fn parse_display_uri_params_str(s: &str) -> Result<(Option<String>, Uri, Vec<Param>), Error> {
     let s = s.trim();
-    if let Some(lt) = s.find('<') {
-        let display_name = s[..lt].trim().trim_matches('"').to_string();
+    if let Some(lt) = find_unquoted_lt(s)? {
+        let display = validate_display_name(&s[..lt])?;
         let rest = &s[lt + 1..];
         let gt = rest
             .find('>')
-            .ok_or_else(|| Error::ParseError(format!("missing '>' in: {}", s)))?;
+            .ok_or_else(|| Error::ParseError("missing '>' in name-addr".into()))?;
         let uri_str = &rest[..gt];
-        let params_str = rest[gt + 1..].trim().trim_start_matches(';');
-        let uri = parse_uri(uri_str)?;
-        let params = parse_params(params_str)?;
-        let display = if display_name.is_empty() {
-            None
+        if uri_str.is_empty() || uri_str.chars().any(char::is_whitespace) {
+            return Err(Error::ParseError("invalid URI in <>".into()));
+        }
+        let after_gt = rest[gt + 1..].trim();
+        let params = if after_gt.is_empty() {
+            vec![]
         } else {
-            Some(display_name)
+            let params_str = after_gt
+                .strip_prefix(';')
+                .ok_or_else(|| Error::ParseError("expected ';' after '>'".into()))?;
+            if params_str.trim().is_empty() {
+                return Err(Error::ParseError("empty parameter".into()));
+            }
+            parse_params(params_str)?
         };
+        let uri = parse_uri(uri_str)?;
         return Ok((display, uri, params));
     }
 
@@ -101,17 +161,25 @@ pub fn parse_display_uri_params_str(s: &str) -> Result<(Option<String>, Uri, Vec
         }
     }
 
-    if let Some(end) = uri_end {
+    let (uri, params) = if let Some(end) = uri_end {
         let uri_str = &s[..end];
         let params_str = &s[end + 1..];
+        if params_str.trim().is_empty() {
+            return Err(Error::ParseError("empty parameter".into()));
+        }
         let uri = parse_uri(uri_str)?;
         let params = parse_params(params_str)?;
-        return Ok((None, uri, params));
-    }
+        (uri, params)
+    } else {
+        // No header params, entire string is URI
+        let uri = parse_uri(s)?;
+        (uri, vec![])
+    };
 
-    // No header params, entire string is URI
-    let uri = parse_uri(s)?;
-    Ok((None, uri, vec![]))
+    if !uri.headers.is_empty() || uri.scheme.is_none() {
+        return Err(Error::ParseError("invalid unbracketed addr-spec".into()));
+    }
+    Ok((None, uri, params))
 }
 
 #[cfg(test)]

@@ -29,26 +29,32 @@ impl Contact {
         }
 
         let trimmed = s.trim();
-        let (display_name, uri_part, header_params_part) = if let Some(start) = trimmed.find('<') {
+        let has_angle_brackets;
+        let (display_name, uri_part, header_params_part) = if let Some(start) =
+            super::parse_helpers::find_unquoted_lt(trimmed)?
+        {
+            has_angle_brackets = true;
             let end = trimmed[start..]
                 .find('>')
                 .map(|offset| start + offset)
                 .ok_or_else(|| Error::ParseError("invalid Contact header: missing '>'".into()))?;
-            let display = trimmed[..start].trim();
-            let display_name = if display.is_empty() {
-                None
-            } else {
-                Some(display.trim_matches('"').to_string())
-            };
+            let display_name = super::parse_helpers::validate_display_name(&trimmed[..start])?;
             let uri = &trimmed[start + 1..end];
+            if uri.is_empty() || uri.chars().any(char::is_whitespace) {
+                return Err(Error::ParseError("invalid Contact URI in <>".into()));
+            }
             let params = trimmed[end + 1..].trim();
             (display_name, uri, params)
         } else {
+            has_angle_brackets = false;
             let (uri, params) = split_uri_and_header_params(trimmed);
             (None, uri, params)
         };
 
         let mut uri = crate::sip::parse_uri(uri_part)?;
+        if !has_angle_brackets && (!uri.headers.is_empty() || uri.scheme.is_none()) {
+            return Err(Error::ParseError("invalid unbracketed Contact URI".into()));
+        }
         uri.params.retain(|param| {
             !matches!(
                 param,
@@ -144,9 +150,20 @@ fn split_contact_header_values(line: &str) -> Result<Vec<String>, Error> {
     let mut values = Vec::new();
     let mut current = String::new();
     let mut in_quotes = false;
+    let mut escaped = false;
     let mut angle_depth = 0usize;
 
     for ch in trimmed.chars() {
+        if escaped {
+            escaped = false;
+            current.push(ch);
+            continue;
+        }
+        if in_quotes && ch == '\\' {
+            escaped = true;
+            current.push(ch);
+            continue;
+        }
         match ch {
             '"' => {
                 in_quotes = !in_quotes;
@@ -162,23 +179,25 @@ fn split_contact_header_values(line: &str) -> Result<Vec<String>, Error> {
             }
             ',' if !in_quotes && angle_depth == 0 => {
                 let value = current.trim();
-                if !value.is_empty() {
-                    values.push(value.to_string());
+                if value.is_empty() {
+                    return Err(Error::ParseError("empty Contact header entry".into()));
                 }
+                values.push(value.to_string());
                 current.clear();
             }
             _ => current.push(ch),
         }
     }
 
-    let value = current.trim();
-    if !value.is_empty() {
-        values.push(value.to_string());
+    if in_quotes || angle_depth != 0 {
+        return Err(Error::ParseError("unbalanced Contact header".into()));
     }
 
-    if values.is_empty() {
-        return Err(Error::ParseError("empty Contact header".into()));
+    let value = current.trim();
+    if value.is_empty() {
+        return Err(Error::ParseError("empty Contact header entry".into()));
     }
+    values.push(value.to_string());
 
     Ok(values)
 }
@@ -197,7 +216,13 @@ fn parse_contact_header_params(input: &str) -> Result<Vec<Param>, Error> {
     if trimmed.is_empty() {
         return Ok(Vec::new());
     }
-    crate::sip::parse_params(trimmed.trim_start_matches(';'))
+    let rest = trimmed
+        .strip_prefix(';')
+        .ok_or_else(|| Error::ParseError("invalid Contact header parameters".into()))?;
+    if rest.trim().is_empty() {
+        return Err(Error::ParseError("empty Contact parameter".into()));
+    }
+    crate::sip::parse_params(rest)
 }
 
 #[cfg(test)]
@@ -235,5 +260,20 @@ mod tests {
         let contact = Contact::parse("sip:alice@restsend.com;expires=120").unwrap();
         assert_eq!(contact.uri.to_string(), "sip:alice@restsend.com");
         assert_eq!(contact.expires(), Some(120));
+    }
+
+    #[test]
+    fn rejects_malformed_name_addr_contact_and_via() {
+        use crate::sip::headers::typed::{From, To, Via};
+
+        // Unbalanced quotes (quotbal), unquoted non-token display name (baddn),
+        // whitespace inside <...> (badaspec), missing semicolon after > (regbadct),
+        // and empty parameters (badinv01).
+        assert!(To::parse("\"Mr. J. <sip:j@example.com>").is_err());
+        assert!(From::parse("Bob, Smith <sip:bob@example.com>;tag=1").is_err());
+        assert!(To::parse("Bob < sip:bob@example.com>").is_err());
+        assert!(Contact::parse("<sip:bob@example.com>expires=3600").is_err());
+        assert!(Contact::parse("<sip:bob@example.com>;;;;").is_err());
+        assert!(Via::parse("SIP/7.0/UDP example.com;branch=z9hG4bK1").is_err());
     }
 }

@@ -14,12 +14,19 @@ impl Via {
     pub fn parse(s: &str) -> Result<Self, Error> {
         let s = s.trim();
         let mut slashes = s.splitn(3, '/');
-        let _proto = slashes
+        let proto = slashes
             .next()
-            .ok_or_else(|| Error::ParseError("Via: missing protocol".into()))?;
-        let _ver = slashes
+            .ok_or_else(|| Error::ParseError("Via: missing protocol".into()))?
+            .trim();
+        let ver = slashes
             .next()
-            .ok_or_else(|| Error::ParseError("Via: missing version".into()))?;
+            .ok_or_else(|| Error::ParseError("Via: missing version".into()))?
+            .trim();
+        if !proto.eq_ignore_ascii_case("SIP") || ver != "2.0" {
+            return Err(Error::ParseError(
+                "Via: unsupported protocol/version".into(),
+            ));
+        }
         let rest = slashes
             .next()
             .ok_or_else(|| Error::ParseError("Via: missing transport+host".into()))?
@@ -47,6 +54,9 @@ impl Via {
         };
 
         let params = if let Some(p) = params_str {
+            if p.trim().is_empty() {
+                return Err(Error::ParseError("Via: empty parameter".into()));
+            }
             crate::sip::uri::parse_params(p)
         } else {
             Ok(vec![])
