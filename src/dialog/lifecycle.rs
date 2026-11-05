@@ -32,8 +32,9 @@
 //! application. An accepted CANCEL followed by a late 2xx is cleanup, not a new
 //! accepted call. Fork branches discarded by the dialog are not reported.
 //!
-//! Subscriptions apply to newly created dialogs, not previously created or
-//! restored ones. The existing `DialogState` channel is unchanged. An unbounded
+//! Subscriptions apply to subsequently created or restored dialogs. Restoring
+//! a snapshot retains fact sequence numbers without replaying notifications.
+//! The existing `DialogState` channel is unchanged. An unbounded
 //! receiver avoids SIP backpressure; applications must drain or drop it.
 
 use super::{dialog::TerminatedReason, DialogId};
@@ -108,9 +109,50 @@ pub(crate) struct LifecycleState {
     pub sender: Option<DialogLifecycleSender>,
     pub sequence: u64,
     pub emitted: u8,
+    pub revision: u64,
+    pub pending_initial_ack: bool,
+    pub pending_remote_bye: bool,
+    pub negotiations: u32,
+    pub facts: alloc::vec::Vec<super::snapshot::DialogLifecycleRecord>,
 }
 
 impl LifecycleState {
+    pub fn restored(runtime: &super::snapshot::DialogSnapshotRuntime) -> crate::Result<Self> {
+        let mut state = Self {
+            revision: runtime.revision,
+            ..Self::default()
+        };
+        for fact in &runtime.lifecycle {
+            let bit = match &fact.kind {
+                DialogLifecycleKind::InviteAccepted { status }
+                    if status.kind() == crate::sip::StatusCodeKind::Successful =>
+                {
+                    1
+                }
+                DialogLifecycleKind::LocalTerminationRequested => 2,
+                DialogLifecycleKind::RemoteByeReceived => 4,
+                // A confirmed snapshot cannot already contain a terminal fact.
+                _ => {
+                    return Err(crate::Error::Error(
+                        "invalid snapshot lifecycle fact".into(),
+                    ))
+                }
+            };
+            if state.emitted & bit != 0 || fact.sequence != state.sequence + 1 {
+                return Err(crate::Error::Error(
+                    "invalid snapshot lifecycle sequence".into(),
+                ));
+            }
+            state.emitted |= bit;
+            state.sequence = fact.sequence;
+        }
+        if runtime.revision < state.sequence || runtime.revision == u64::MAX {
+            return Err(crate::Error::Error("invalid snapshot revision".into()));
+        }
+        state.facts = runtime.lifecycle.clone();
+        Ok(state)
+    }
+
     pub fn emit(
         &mut self,
         id: DialogId,
@@ -118,7 +160,6 @@ impl LifecycleState {
         time: LifecycleTime,
         kind: DialogLifecycleKind,
     ) {
-        let Some(sender) = &self.sender else { return };
         let bit = match &kind {
             DialogLifecycleKind::InviteAccepted { .. } => 1,
             DialogLifecycleKind::LocalTerminationRequested => 2,
@@ -130,12 +171,20 @@ impl LifecycleState {
         }
         self.emitted |= bit;
         self.sequence += 1;
-        let _ = sender.send(DialogLifecycleEvent {
-            dialog_id: id,
-            role,
+        self.revision += 1;
+        self.facts.push(super::snapshot::DialogLifecycleRecord {
             sequence: self.sequence,
-            occurred_at: time,
-            kind,
+            since_unix_epoch: time.since_unix_epoch,
+            kind: kind.clone(),
         });
+        if let Some(sender) = &self.sender {
+            let _ = sender.send(DialogLifecycleEvent {
+                dialog_id: id,
+                role,
+                sequence: self.sequence,
+                occurred_at: time,
+                kind,
+            });
+        }
     }
 }

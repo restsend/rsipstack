@@ -557,6 +557,7 @@ impl DialogLayer {
         };
 
         inner.credential = credential;
+        inner.lifecycle.lock().sender = self.inner.lifecycle_sender.lock().clone();
         let inner = Arc::new(inner);
         let dialog = Dialog::from_inner(inner.role, inner.clone());
 

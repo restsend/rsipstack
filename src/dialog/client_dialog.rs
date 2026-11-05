@@ -579,10 +579,7 @@ impl ClientInviteDialog {
             return Ok(());
         }
 
-        self.inner
-            .remote_seq
-            .compare_exchange(remote_seq, cseq, Ordering::Relaxed, Ordering::Relaxed)
-            .ok();
+        self.inner.admit_remote_seq(cseq, &tx.original.method).ok();
 
         if self.inner.is_confirmed() {
             match tx.original.method {
@@ -615,13 +612,12 @@ impl ClientInviteDialog {
     }
 
     async fn handle_bye(&mut self, tx: &mut Transaction) -> Result<()> {
-        self.inner.record_remote_bye(
+        debug!(id = %self.id(), uri = %tx.original.uri, "received bye");
+        self.inner.terminate_remote_bye(
+            TerminatedReason::UasBye,
             tx.original_received_at
                 .unwrap_or_else(super::lifecycle::LifecycleTime::now),
         );
-        debug!(id = %self.id(), uri = %tx.original.uri, "received bye");
-        self.inner
-            .transition(DialogState::Terminated(self.id(), TerminatedReason::UasBye));
         tx.reply(crate::sip::StatusCode::OK).await?;
         Ok(())
     }
@@ -665,7 +661,10 @@ impl ClientInviteDialog {
     }
 
     async fn handle_reinvite(&mut self, tx: &mut Transaction) -> Result<()> {
-        self.inner.process_reinvite(tx, false).await
+        self.inner.begin_negotiation();
+        let result = self.inner.process_reinvite(tx, false).await;
+        self.inner.finish_negotiation();
+        result
     }
 
     async fn handle_refer(&mut self, tx: &mut Transaction) -> Result<()> {
