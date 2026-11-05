@@ -472,6 +472,9 @@ impl DialogLayer {
     ///
     /// Restores only CONFIRMED snapshots.
     /// Non-confirmed snapshots are ignored (warn inside try_restore_from_snapshot).
+    /// Restores without authentication credentials. To supply credentials from
+    /// the application's configuration, use
+    /// [`Self::restore_from_snapshot_with_credential`].
     ///
     /// Returns:
     /// - Ok(true)  => restored and inserted
@@ -484,6 +487,39 @@ impl DialogLayer {
         snapshot: DialogSnapshot,
         state_sender: DialogStateSender,
     ) -> crate::Result<bool> {
+        self.restore_from_snapshot_with_credential(snapshot, state_sender, None)
+    }
+
+    /// Restore a confirmed dialog with optional SIP digest credentials.
+    ///
+    /// Credentials are supplied by the application, not stored in
+    /// [`DialogSnapshot`]. They are used by the existing authentication logic
+    /// when an outgoing in-dialog request receives a 401/407 challenge, for
+    /// either the original client or server role.
+    ///
+    /// Passing `None` is equivalent to [`Self::restore_from_snapshot`].
+    /// Returns `Ok(true)` when inserted, or `Ok(false)` if the dialog already
+    /// exists or the snapshot is not confirmed. An existing dialog's
+    /// credentials are not updated by a skipped restore.
+    ///
+    /// ```rust,no_run
+    /// use rsipstack::dialog::{
+    ///     authenticate::Credential,
+    ///     dialog::{DialogSnapshot, DialogStateSender},
+    ///     dialog_layer::DialogLayer,
+    /// };
+    /// # fn restore(layer: &DialogLayer, snapshot: DialogSnapshot,
+    /// #     states: DialogStateSender, credential: Credential) -> rsipstack::Result<()> {
+    /// layer.restore_from_snapshot_with_credential(snapshot, states, Some(credential))?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn restore_from_snapshot_with_credential(
+        &self,
+        snapshot: DialogSnapshot,
+        state_sender: DialogStateSender,
+        credential: Option<Credential>,
+    ) -> crate::Result<bool> {
         // Already restored?
         if self.get_dialog(&snapshot.id).is_some() {
             return Ok(false);
@@ -491,7 +527,7 @@ impl DialogLayer {
 
         let tu_sender = transaction_event_sender_noop();
 
-        let Some(inner) = DialogInner::try_restore_from_snapshot(
+        let Some(mut inner) = DialogInner::try_restore_from_snapshot(
             snapshot,
             self.endpoint.clone(),
             state_sender,
@@ -502,6 +538,7 @@ impl DialogLayer {
             return Ok(false);
         };
 
+        inner.credential = credential;
         let inner = Arc::new(inner);
         let dialog = Dialog::from_inner(inner.role, inner.clone());
 
