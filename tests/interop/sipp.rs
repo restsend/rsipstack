@@ -17,12 +17,28 @@ mod prack_sdp;
 mod prack_uas;
 mod registration;
 mod session_timer;
+mod soak;
 mod subscription;
 
 pub(super) struct Sipp {
     child: Child,
     pub uri: Uri,
     log: PathBuf,
+}
+
+struct SippLimits {
+    calls: usize,
+    timeout_secs: u64,
+    receive_timeout_ms: u64,
+}
+impl Default for SippLimits {
+    fn default() -> Self {
+        Self {
+            calls: 1,
+            timeout_secs: 15,
+            receive_timeout_ms: 5000,
+        }
+    }
 }
 
 impl Sipp {
@@ -41,6 +57,25 @@ impl Sipp {
         dir: &Path,
         local_uri: &Uri,
         keys: &[(&str, String)],
+    ) -> TestResult<Self> {
+        Self::start_with_limits(
+            scenario,
+            transport,
+            dir,
+            local_uri,
+            keys,
+            SippLimits::default(),
+        )
+        .await
+    }
+
+    async fn start_with_limits(
+        scenario: &str,
+        transport: &str,
+        dir: &Path,
+        local_uri: &Uri,
+        keys: &[(&str, String)],
+        limits: SippLimits,
     ) -> TestResult<Self> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         let binary = std::env::var_os("SIPP_BIN")
@@ -93,15 +128,13 @@ impl Sipp {
             .arg(rendered)
             .args(["-i", "127.0.0.1", "-p"])
             .arg(addr.port().to_string())
+            .args(["-t", if transport == "udp" { "u1" } else { "t1" }, "-m"])
+            .arg(limits.calls.to_string())
+            .arg("-recv_timeout")
+            .arg(limits.receive_timeout_ms.to_string())
+            .arg("-timeout")
+            .arg(format!("{}s", limits.timeout_secs))
             .args([
-                "-t",
-                if transport == "udp" { "u1" } else { "t1" },
-                "-m",
-                "1",
-                "-recv_timeout",
-                "5000",
-                "-timeout",
-                "15s",
                 "-timeout_error",
                 "-nostdin",
                 "-trace_msg",

@@ -434,6 +434,11 @@ pub struct Stack {
 
 impl Drop for Stack {
     fn drop(&mut self) {
+        for id in self.layer.all_dialog_ids() {
+            if let Some(dialog) = self.layer.get_dialog_with(&id) {
+                self.layer.remove_dialog(&dialog.id());
+            }
+        }
         self.cancel.cancel();
         for task in self.tasks.iter().chain(
             self.handlers

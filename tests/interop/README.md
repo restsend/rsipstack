@@ -85,6 +85,17 @@ the peer download scripts.
 See [SESSION_TIMERS.md](SESSION_TIMERS.md) for the opt-in timer API, failure
 policy, and short regression coverage.
 
+Long-running parallel calls, real automatic session refreshes, response loss,
+and resource accounting have a separate [soak runner](SOAK.md):
+
+```sh
+bash scripts/interop/run-soak.sh update
+bash scripts/interop/run-soak.sh reinvite
+```
+
+These tests are excluded even from `all`; the corresponding CI workflow runs
+only when manually dispatched.
+
 ## Coverage and expectations
 
 See [COVERAGE.md](COVERAGE.md) for the complete matrix, reproducible known gaps,

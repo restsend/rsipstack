@@ -112,7 +112,7 @@ accepting other response codes.
 
 ## Executed matrix
 
-There are 208 external-peer test executions:
+The short suite has 208 external-peer test executions (plus two optional soak variants):
 206 regression cases and 2 known-gap probes. The lost-PRACK-response,
 application lost-BYE-response and all fault-injection cases are UDP-only;
 the other families run on both transports.
@@ -194,7 +194,7 @@ features. No finite suite covers every SIP message sequence or peer behavior.
 | Standalone applications | proxy-specific 2xx retransmission policy, forking, session modification, PRACK, authentication, disconnect recovery and media relay |
 | Event packages | initial SUBSCRIBE/NOTIFY races, terminal NOTIFY, PUBLISH, REFER/Replaces |
 | Session extensions | proxy timer policy, timer persistence, full Session-ID transfer/conference flows |
-| Media and scale | RTP/SRTP, codecs, ICE, DTMF media events, concurrency and soak/load tests |
+| Media and scale | RTP/SRTP, codecs, ICE, DTMF media events, TCP/TLS load and production scale |
 
 Add focused XML scenarios and public-API assertions for these areas as the
 harness grows; retain unexpected failures as reproducible tests and document
@@ -244,3 +244,10 @@ Eight SIPp cases exercise RFC 4028 UAC/UAS with UPDATE and re-INVITE over
 UDP/TCP. They verify 422 retry identity, negotiated intervals and refresher
 changes, ACK, BYE and timer/registry cleanup. See [SESSION_TIMERS.md](SESSION_TIMERS.md)
 for the API, virtual-clock library regressions and remaining integration limits.
+
+## Optional soak variants
+
+Two separately selected UDP variants run parallel calls and repeated automatic
+UPDATE/re-INVITE refreshes against SIPp with one lost response per round. They
+check registry/transaction cleanup, endpoint/layer release, runtime task counts,
+and post-warmup RSS growth. See [SOAK.md](SOAK.md) for bounds, artifacts and limits.
