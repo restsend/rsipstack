@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<scenario name="CANCEL receives 200 and INVITE receives 487 then ACK">
+  <recv request="INVITE"/>
+  <nop>
+    <action>
+      <assignstr assign_to="via" value="[last_Via:]"/>
+      <assignstr assign_to="from" value="[last_From:]"/>
+      <assignstr assign_to="to" value="[last_To:]"/>
+      <assignstr assign_to="call_id" value="[last_Call-ID:]"/>
+      <assignstr assign_to="cseq" value="[last_CSeq:]"/>
+    </action>
+  </nop>
+  <send><![CDATA[
+SIP/2.0 180 Ringing
+[$via]
+[$from]
+[$to];tag=sipp-test
+[$call_id]
+[$cseq]
+Contact: <[sipp_uri]>
+Content-Length: 0
+
+]]></send>
+  <recv request="CANCEL"/>
+  <send><![CDATA[
+SIP/2.0 200 OK
+[last_Via:]
+[last_From:]
+[last_To:];tag=sipp-test
+[last_Call-ID:]
+[last_CSeq:]
+Content-Length: 0
+
+]]></send>
+  <send><![CDATA[
+SIP/2.0 487 Request Terminated
+[$via]
+[$from]
+[$to];tag=sipp-test
+[$call_id]
+[$cseq]
+Content-Length: 0
+
+]]></send>
+  <recv request="ACK"/>
+</scenario>

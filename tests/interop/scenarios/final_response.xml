@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<scenario name="Final INVITE rejection must be ACKed">
+  <recv request="INVITE"/>
+  <send><![CDATA[
+SIP/2.0 [final_code] Test Rejection
+[last_Via:]
+[last_From:]
+[last_To:];tag=sipp-test
+[last_Call-ID:]
+[last_CSeq:]
+Content-Length: 0
+
+]]></send>
+  <recv request="ACK"/>
+</scenario>

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<scenario name="Session-ID UUIDs survive ACK and BYE">
+  <recv request="INVITE"><action><ereg regexp="1234567890ab4def9234567890abcdef" search_in="hdr" header="Session-ID:" check_it="true" assign_to="_"/></action></recv>
+  <send><![CDATA[
+SIP/2.0 200 OK
+[last_Via:]
+[last_From:]
+[last_To:];tag=sipp-test
+[last_Call-ID:]
+[last_CSeq:]
+Contact: <[sipp_uri]>
+Session-ID: abcdef1234564890abcdef1234567890;remote=1234567890ab4def9234567890abcdef
+Content-Type: application/sdp
+Content-Length: [len]
+
+v=0
+o=sipp 1 1 IN IP4 127.0.0.1
+s=interop
+c=IN IP4 127.0.0.1
+t=0 0
+m=audio 9 RTP/AVP 0
+a=rtpmap:0 PCMU/8000
+a=inactive
+]]></send>
+  <recv request="ACK"><action><ereg regexp="1234567890ab4def9234567890abcdef;remote=abcdef1234564890abcdef1234567890" search_in="hdr" header="Session-ID:" check_it="true" assign_to="_"/></action></recv>
+  <recv request="BYE"><action><ereg regexp="1234567890ab4def9234567890abcdef;remote=abcdef1234564890abcdef1234567890" search_in="hdr" header="Session-ID:" check_it="true" assign_to="_"/></action></recv>
+  <send><![CDATA[
+SIP/2.0 200 OK
+[last_Via:]
+[last_From:]
+[last_To:]
+[last_Call-ID:]
+[last_CSeq:]
+Session-ID: abcdef1234564890abcdef1234567890;remote=1234567890ab4def9234567890abcdef
+Content-Length: 0
+
+]]></send>
+</scenario>

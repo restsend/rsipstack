@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<scenario name="Digest challenge and authenticated INVITE">
+  <recv request="INVITE"/>
+  <send><![CDATA[
+SIP/2.0 [challenge_code] Authentication Required
+[last_Via:]
+[last_From:]
+[last_To:];tag=sipp-test
+[last_Call-ID:]
+[last_CSeq:]
+[challenge_header]: Digest realm="interop.test", nonce="interop-1", algorithm=[algorithm], qop="auth"
+Content-Length: 0
+
+]]></send>
+  <recv request="ACK"/>
+  <recv request="INVITE"><action>
+    <verifyauth assign_to="valid1" username="alice" password="secret"/>
+  </action></recv>
+  <nop test="valid1" next="valid1"/>
+  <nop><action><log message="AUTHENTICATION_FAILED"/><exec int_cmd="stop_call"/></action></nop>
+  <label id="valid1"/>
+  <send><![CDATA[
+SIP/2.0 200 OK
+[last_Via:]
+[last_From:]
+[last_To:];tag=sipp-test
+[last_Call-ID:]
+[last_CSeq:]
+Contact: <[sipp_uri]>
+Content-Type: application/sdp
+Content-Length: [len]
+
+v=0
+o=sipp 1 1 IN IP4 127.0.0.1
+s=interop
+c=IN IP4 127.0.0.1
+t=0 0
+m=audio 9 RTP/AVP 0
+a=rtpmap:0 PCMU/8000
+a=inactive
+]]></send>
+  <recv request="ACK"/>
+  <recv request="BYE"/>
+  <send><![CDATA[
+SIP/2.0 200 OK
+[last_Via:]
+[last_From:]
+[last_To:]
+[last_Call-ID:]
+[last_CSeq:]
+Content-Length: 0
+
+]]></send>
+</scenario>

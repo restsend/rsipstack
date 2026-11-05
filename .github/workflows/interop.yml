@@ -1,0 +1,57 @@
+name: SIP interoperability
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      suite:
+        type: choice
+        default: regression
+        options: [regression, all, pjsip, sipp, faults, known-gaps]
+        description: Suite to run (all includes documented known gaps)
+
+permissions:
+  contents: read
+
+jobs:
+  interop:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CARGO_TERM_COLOR: always
+      RSIPSTACK_INTEROP_LOG_DIR: ${{ github.workspace }}/target/interop/results/ci
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install peer build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libssl-dev libncurses-dev python3 curl
+      - name: Cache pinned test peers
+        uses: actions/cache@v4
+        with:
+          path: |
+            target/interop/pjproject-*
+            target/interop/pjproject.tar.gz
+            target/interop/pjsua
+            target/interop/build-id
+            target/interop/sipp-*
+            target/interop/sipp.tar.gz
+            target/interop/sipp
+            target/interop/pugixml.tar.gz
+          key: sip-peers-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/interop/build-*.sh') }}
+      - name: Run PJSIP and SIPp scenarios
+        run: bash scripts/interop/run.sh "${{ inputs.suite || 'regression' }}"
+      - name: Save SIP traces and results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: interop-logs
+          path: |
+            target/interop/results/
+            target/interop/build.log
+            target/interop/sipp-build.log
+          if-no-files-found: warn
+          retention-days: 7

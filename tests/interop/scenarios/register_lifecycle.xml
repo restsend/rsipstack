@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<scenario name="REGISTER grant refresh and unregister">
+  <recv request="REGISTER"><action>
+    <ereg regexp="^ *300" search_in="hdr" header="Expires:" check_it="true" assign_to="_"/>
+  </action></recv>
+  <send><![CDATA[
+SIP/2.0 200 OK
+[last_Via:]
+[last_From:]
+[last_To:]
+[last_Call-ID:]
+[last_CSeq:]
+Contact: <[rsip_uri]>;expires=90
+Expires: 120
+Service-Route: <[sipp_uri];lr>
+Content-Length: 0
+
+]]></send>
+  <recv request="REGISTER"><action>
+    <ereg regexp="^ *180" search_in="hdr" header="Expires:" check_it="true" assign_to="_"/>
+  </action></recv>
+  <send><![CDATA[
+SIP/2.0 200 OK
+[last_Via:]
+[last_From:]
+[last_To:]
+[last_Call-ID:]
+[last_CSeq:]
+Contact: <[rsip_uri]>;expires=60
+Content-Length: 0
+
+]]></send>
+  <recv request="REGISTER"><action>
+    <ereg regexp="^ *0" search_in="hdr" header="Expires:" check_it="true" assign_to="_"/>
+  </action></recv>
+  <send><![CDATA[
+SIP/2.0 200 OK
+[last_Via:]
+[last_From:]
+[last_To:]
+[last_Call-ID:]
+[last_CSeq:]
+Contact: <[rsip_uri]>;expires=0
+Content-Length: 0
+
+]]></send>
+</scenario>

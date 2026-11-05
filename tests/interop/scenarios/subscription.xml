@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<scenario name="Established subscription refresh NOTIFY and unsubscribe">
+  <recv request="SUBSCRIBE"><action>
+    <ereg regexp="tag=([^; &gt;]+)" search_in="hdr" header="From:" check_it="true" assign_to="_,from_tag"/>
+    <ereg regexp="presence" search_in="hdr" header="Event:" check_it="true" assign_to="_"/>
+  </action></recv>
+  <nop><action><assignstr assign_to="call_id" value="[last_Call-ID:]"/></action></nop>
+  <send><![CDATA[
+SIP/2.0 200 OK
+[last_Via:]
+[last_From:]
+[last_To:]
+[last_Call-ID:]
+[last_CSeq:]
+Contact: <[sipp_uri]>
+Expires: 60
+Content-Length: 0
+
+]]></send>
+  <send><![CDATA[
+NOTIFY [rsip_uri] SIP/2.0
+Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=z9hG4bK-notify-[pid]
+From: <[sipp_uri]>;tag=sipp-test
+To: <[rsip_uri]>;tag=[$from_tag]
+[$call_id]
+CSeq: 900 NOTIFY
+Max-Forwards: 70
+Event: presence
+Subscription-State: active;expires=60
+Contact: <[sipp_uri]>
+Content-Type: application/pidf+xml
+Content-Length: [len]
+
+<?xml version="1.0"?>
+<presence xmlns="urn:ietf:params:xml:ns:pidf" entity="[sipp_uri]"><tuple id="peer"><status><basic>open</basic></status></tuple></presence>
+]]></send>
+  <recv response="200"/>
+  <nop><action><log message="NOTIFY_ACCEPTED"/></action></nop>
+  <recv request="SUBSCRIBE"><action>
+    <ereg regexp="^ *0" search_in="hdr" header="Expires:" check_it="true" assign_to="_"/>
+  </action></recv>
+  <send><![CDATA[
+SIP/2.0 200 OK
+[last_Via:]
+[last_From:]
+[last_To:]
+[last_Call-ID:]
+[last_CSeq:]
+Expires: 0
+Content-Length: 0
+
+]]></send>
+</scenario>

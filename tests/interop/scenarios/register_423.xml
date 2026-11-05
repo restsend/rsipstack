@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<scenario name="Expose Min-Expires then accept an application retry">
+  <recv request="REGISTER"/>
+  <send><![CDATA[
+SIP/2.0 423 Interval Too Brief
+[last_Via:]
+[last_From:]
+[last_To:]
+[last_Call-ID:]
+[last_CSeq:]
+Min-Expires: 300
+Content-Length: 0
+
+]]></send>
+  <recv request="REGISTER"><action>
+    <ereg regexp="^ *300" search_in="hdr" header="Expires:" check_it="true" assign_to="_"/>
+  </action></recv>
+  <send><![CDATA[
+SIP/2.0 200 OK
+[last_Via:]
+[last_From:]
+[last_To:]
+[last_Call-ID:]
+[last_CSeq:]
+Contact: <[rsip_uri]>;expires=300
+Content-Length: 0
+
+]]></send>
+</scenario>
