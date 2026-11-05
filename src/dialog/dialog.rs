@@ -334,6 +334,7 @@ pub struct DialogInner {
 
     pub(super) endpoint_inner: EndpointInnerRef,
     pub(super) state_sender: DialogStateSender,
+    pub(crate) lifecycle: Mutex<super::lifecycle::LifecycleState>,
     pub(super) tu_sender: TransactionEventSender,
     /// RFC 7989 Session-ID state; `None` when the dialog does not participate
     /// (no UUID supplied by the application and none received from the peer).
@@ -529,6 +530,7 @@ impl DialogInner {
             route_set: Mutex::new(route_set),
             endpoint_inner,
             state_sender,
+            lifecycle: Mutex::new(super::lifecycle::LifecycleState::default()),
             tu_sender,
             state: Mutex::new(DialogState::Calling(id)),
             initial_request: Mutex::new(initial_request),
@@ -1528,6 +1530,13 @@ impl DialogInner {
     /// response ends the dialog. So whatever the transaction returns, the
     /// dialog is `Terminated(reason)`; a failure is still returned.
     pub(super) async fn send_bye(&self, request: Request, reason: TerminatedReason) -> Result<()> {
+        {
+            let state = self.state.lock();
+            if state.is_terminated() {
+                return Ok(());
+            }
+            self.record_local_termination();
+        }
         let initial_ack = self.initial_ack.lock().clone();
         if let Some(ack) = initial_ack {
             ack.done.cancelled().await;
@@ -1759,6 +1768,7 @@ impl DialogInner {
 
             endpoint_inner,
             state_sender,
+            lifecycle: Mutex::new(super::lifecycle::LifecycleState::default()),
             tu_sender,
 
             initial_request,
@@ -1845,6 +1855,46 @@ impl DialogInner {
             version: Version::V2,
         }
     }
+    pub(crate) fn record_initial_acceptance(
+        &self,
+        response: &Response,
+        time: super::lifecycle::LifecycleTime,
+    ) {
+        let _state = self.state.lock();
+        // The send may complete after a concurrent BYE. Report the successful
+        // send as a fact even then, without resurrecting the dialog state.
+        self.lifecycle.lock().emit(
+            self.id.lock().clone(),
+            self.role,
+            time,
+            super::lifecycle::DialogLifecycleKind::InviteAccepted {
+                status: response.status_code.clone(),
+            },
+        );
+    }
+
+    // Called under the state lock by admitted local teardown paths.
+    pub(crate) fn record_local_termination(&self) {
+        self.lifecycle.lock().emit(
+            self.id.lock().clone(),
+            self.role,
+            super::lifecycle::LifecycleTime::now(),
+            super::lifecycle::DialogLifecycleKind::LocalTerminationRequested,
+        );
+    }
+
+    pub(crate) fn record_remote_bye(&self, time: super::lifecycle::LifecycleTime) {
+        let state = self.state.lock();
+        if !state.is_terminated() {
+            self.lifecycle.lock().emit(
+                self.id.lock().clone(),
+                self.role,
+                time,
+                super::lifecycle::DialogLifecycleKind::RemoteByeReceived,
+            );
+        }
+    }
+
     pub(super) fn transition(&self, state: DialogState) {
         // Decide under the state lock and notify only transitions that are
         // applied, while still holding it, so notifications follow the order
@@ -1873,6 +1923,7 @@ impl DialogInner {
     pub(super) fn confirm_unless_cancelled(
         &self,
         confirmed: DialogState,
+        received_at: super::lifecycle::LifecycleTime,
         register: impl FnOnce(),
     ) -> bool {
         let id = self.id.lock().clone();
@@ -1888,6 +1939,16 @@ impl DialogInner {
         // Publish the full dialog key before notifying the application. A
         // concurrent handler cannot inspect the state until this lock releases.
         register();
+        if let DialogState::Confirmed(id, response) = &confirmed {
+            self.lifecycle.lock().emit(
+                id.clone(),
+                self.role,
+                received_at,
+                super::lifecycle::DialogLifecycleKind::InviteAccepted {
+                    status: response.status_code.clone(),
+                },
+            );
+        }
         self.transition_locked(&mut state, confirmed);
         false
     }
@@ -1918,6 +1979,16 @@ impl DialogInner {
             return;
         }
         debug!(from = %old_state, to = %state, "transitioning state");
+        if let DialogState::Terminated(id, reason) = &state {
+            self.lifecycle.lock().emit(
+                id.clone(),
+                self.role,
+                super::lifecycle::LifecycleTime::now(),
+                super::lifecycle::DialogLifecycleKind::DialogTerminated {
+                    reason: reason.clone(),
+                },
+            );
+        }
         *old_state = state.clone();
         // Try to send state update, but don't fail if channel is closed
         self.state_sender.send(state).ok();
