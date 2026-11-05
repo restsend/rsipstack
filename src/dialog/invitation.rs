@@ -147,6 +147,9 @@ pub struct InviteOption {
     /// `Content-Type` here replaces the one the stack would add, so it is
     /// never sent twice; a `Content-Type` here wins over `content_type`.
     pub headers: Option<Vec<crate::sip::Header>>,
+    /// Legacy client-side advertisement switch. For full UAC/UAS support,
+    /// configure `DialogLayer::set_reliable_provisional` with a `PrackHandler`.
+    /// That configuration also advertises 100rel; this flag can remain false.
     pub support_prack: bool,
     pub call_id: Option<String>,
     /// RFC 7989: local Session-ID UUID for this call (32 hex chars; dashed
@@ -493,7 +496,13 @@ impl DialogLayer {
                 .into(),
         ));
 
-        if opt.support_prack {
+        if let Some(config) = self.inner.reliable_config.lock().as_ref() {
+            super::reliable::add_option(&mut request, "Supported", "100rel");
+            if config.require {
+                super::reliable::add_option(&mut request, "Require", "100rel");
+            }
+        }
+        if opt.support_prack && !request.header_contains_token("Supported", "100rel") {
             request
                 .headers
                 .unique_push(crate::sip::Header::Supported("100rel".into()));
@@ -902,6 +911,7 @@ impl DialogLayer {
         let dialog = InviteDialog::from_inner(Arc::new(dlg_inner));
         dialog.inner.lifecycle.lock().sender = self.inner.lifecycle_sender.lock().clone();
         dialog.inner.reserve_invite(&tx)?;
+        *dialog.inner.reliable_config.lock() = self.inner.reliable_config.lock().clone();
         Ok((dialog, tx))
     }
 }

@@ -15,7 +15,9 @@
 //! by a failed negotiation after a peer already accepted it.
 //!
 //! Reliable provisional offer/answer and session-timer negotiation are outside
-//! this component's current scope. Requests requiring 100rel or timer are
+//! this component's current scope. Construction rejects dialogs with a full
+//! 100rel media handler: that handler would otherwise consume the peer's offer
+//! independently of the other leg. Requests requiring 100rel or timer are
 //! rejected with 420 rather than silently claiming support.
 //!
 //! ```no_run
@@ -164,6 +166,9 @@ impl ReinviteBridge {
     ) -> Result<Self> {
         if !a.state().is_confirmed() || !b.state().is_confirmed() || a.id() == b.id() {
             return Err(error("bridge requires two distinct confirmed dialogs"));
+        }
+        if a.inner.reliable_config.lock().is_some() || b.inner.reliable_config.lock().is_some() {
+            return Err(error("reliable-provisional bridging requires a separate media policy; disable 100rel on these bridge legs"));
         }
         Ok(Self {
             inner: Arc::new(Inner {
