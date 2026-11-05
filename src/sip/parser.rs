@@ -9,6 +9,10 @@ use memchr::{memchr, memmem};
 /// Parse one complete message-oriented packet. Without Content-Length, all
 /// remaining octets are the body (RFC 3261 §18.3). Stream transports must frame
 /// their input using Content-Length before calling this function.
+///
+/// Invalid framing is rejected, including duplicate Content-Length headers
+/// (RFC 4475 §3.3.9). Datagram transports answer such requests with 400 from
+/// their parsed header block, while stream framing closes the connection.
 pub fn parse_message(data: &[u8]) -> Result<SipMessage, Error> {
     let (mut message, body_start) = parse_message_head(data)?;
     let available = data.len() - body_start;

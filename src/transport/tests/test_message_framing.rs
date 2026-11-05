@@ -126,6 +126,7 @@ fn stream_requires_valid_single_length() {
         "Content-Length: -1\r\n",
         "Content-Length: +3\r\n",
         "Content-Length: 3\r\nl: 3\r\n",
+        "Content-Length: 3\r\nContent-Length: 3\r\n",
     ] {
         let mut bytes = BytesMut::from(packet(false, length, b"abc").as_slice());
         assert!(SipCodec::new().decode(&mut bytes).is_err());
@@ -236,6 +237,18 @@ async fn udp_invalid_length_gets_400() {
         true,
     )
     .await;
+}
+
+#[tokio::test]
+async fn udp_duplicate_length_gets_400() {
+    // RFC 4475 §3.3.9 (mcl01): a datagram with multiple Content-Length headers
+    // must be rejected, and the receiver can answer 400 from its header block.
+    for length in [
+        "Content-Length: 2\r\nContent-Length: 2\r\n",
+        "Content-Length: 2\r\nl: 2\r\n",
+    ] {
+        malformed_udp("INVITE sip:b@example.com SIP/2.0", length, true, true).await;
+    }
 }
 #[tokio::test]
 async fn udp_truncated_response_is_silently_discarded() {
