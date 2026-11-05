@@ -4,6 +4,7 @@ mod test_authenticate;
 mod test_cancel_2xx_race;
 mod test_client_dialog;
 mod test_connection_affinity;
+mod test_cseq_concurrency;
 mod test_dialog_layer;
 mod test_dialog_states;
 mod test_forked_2xx_bye;

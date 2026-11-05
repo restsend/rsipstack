@@ -602,8 +602,10 @@ impl DialogInner {
         self.local_seq.load(Ordering::Relaxed)
     }
     pub fn increment_local_seq(&self) -> u32 {
-        self.local_seq.fetch_add(1, Ordering::Relaxed);
-        self.local_seq.load(Ordering::Relaxed)
+        // Return this caller's reservation, not a subsequent caller's value.
+        self.local_seq
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_add(1)
     }
 
     pub fn update_remote_tag(&self, tag: &str) -> Result<()> {
