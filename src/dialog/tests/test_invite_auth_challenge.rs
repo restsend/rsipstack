@@ -168,11 +168,12 @@ async fn assert_in_dialog_auth(
         let (seen_tx, mut seen) = unbounded_channel();
         let challenged = status.clone();
         let port = p.uas_port;
+        let server_method = method.clone();
         tokio::spawn(async move {
             while let Some(mut tx) = incoming.recv().await {
                 let initial = tx.original.to_header().unwrap().tag().unwrap().is_none();
                 let authed = answers_challenge(&challenged, &tx.original.headers);
-                let is_test_request = !initial && tx.original.method == method;
+                let is_test_request = !initial && tx.original.method == server_method;
                 let requires_auth = is_test_request || tx.original.method == Method::Bye;
                 if is_test_request {
                     seen_tx.send(authed).unwrap();
@@ -628,16 +629,17 @@ mod restored_dialogs {
                 let challenged = status.clone();
                 let contact = Contact::new(format!("<{}>", snapshot.remote_uri));
                 let server_cred = cred.clone();
+                let server_method = method.clone();
                 tokio::spawn(async move {
                     while let Some(mut tx) = incoming.recv().await {
-                        if tx.original.method != method {
+                        if tx.original.method != server_method {
                             continue;
                         }
                         let raw = digest(&tx.original, &challenged);
                         let valid = raw.as_ref().is_some_and(|raw| {
                             let auth = crate::sip::typed::Authorization::parse(raw).unwrap();
                             auth.username == server_cred.digest_username()
-                                && verify_digest(&auth, &server_cred.password, &method, raw)
+                                && verify_digest(&auth, &server_cred.password, &server_method, raw)
                         });
                         seen_tx.send(tx.original.clone()).unwrap();
                         let challenged = challenged.clone();

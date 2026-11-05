@@ -47,11 +47,11 @@ fn ordered(
     let traces = control.traces();
     let first = traces
         .iter()
-        .position(|t| packet(t, a.0, "delivered", a.1, a.2))
+        .position(|t| packet(t, a.0, "delivered", a.1.clone(), a.2))
         .required()?;
     let second = traces
         .iter()
-        .position(|t| packet(t, b.0, "delivered", b.1, b.2))
+        .position(|t| packet(t, b.0, "delivered", b.1.clone(), b.2))
         .required()?;
     check!(
         first < second,

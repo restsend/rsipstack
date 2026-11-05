@@ -131,7 +131,7 @@ impl Control {
         for dropped in traces.iter().filter(|t| t.phase == "drop") {
             let original = dropped.message.as_ref().required()?;
             let (method, headers) = match original {
-                SipMessage::Request(r) => (r.method, &r.headers),
+                SipMessage::Request(r) => (r.method.clone(), &r.headers),
                 SipMessage::Response(r) => {
                     (r.cseq_header().required()?.method().required()?, &r.headers)
                 }
@@ -472,7 +472,7 @@ impl Pump {
         };
         self.record(&packet, "observed", None)?;
         let identity = match &packet.message {
-            Some(SipMessage::Request(r)) => Some((r.method, None)),
+            Some(SipMessage::Request(r)) => Some((r.method.clone(), None)),
             Some(SipMessage::Response(r)) => Some((
                 r.cseq_header().required()?.method().required()?,
                 Some(r.status_code.code()),
@@ -481,7 +481,7 @@ impl Pump {
         };
         let mut matched = None;
         for (i, r) in self.control.rules.iter().enumerate() {
-            if direction == r.direction && identity == Some((r.method, r.status)) {
+            if direction == r.direction && identity == Some((r.method.clone(), r.status)) {
                 self.counters[i] += 1;
                 if self.counters[i] == r.occurrence {
                     matched = Some(i);

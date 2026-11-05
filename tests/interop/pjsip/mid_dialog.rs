@@ -224,7 +224,7 @@ pub(super) async fn exercise(
             };
             let response = bounded(
                 "PJSUA in-dialog response",
-                dialog.request(method, headers, body),
+                dialog.request(method.clone(), headers, body),
             )
             .await?
             .required()?
