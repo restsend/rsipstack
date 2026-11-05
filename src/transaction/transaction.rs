@@ -1753,7 +1753,11 @@ impl Transaction {
                     self.last_ack.take().map(SipMessage::Request)
                 }
                 TransactionType::ServerNonInvite => {
-                    self.last_response.take().map(SipMessage::Response)
+                    if self.connection.as_ref().is_some_and(|c| c.is_reliable()) {
+                        None
+                    } else {
+                        self.last_response.take().map(SipMessage::Response)
+                    }
                 }
                 // Kept: the matching ACK terminates an Accepted server
                 // INVITE before the dialog reads the 2xx for
