@@ -341,6 +341,7 @@ impl InviteDialog {
         }
         use super::authenticate::{handle_client_authenticate, AuthRetry};
 
+        self.inner.reserve_invite(tx)?;
         self.inner.transition(DialogState::Calling(self.id()));
         let mut auth = AuthRetry::new();
         tx.send().await?;
@@ -395,6 +396,7 @@ impl InviteDialog {
                                 credential,
                             )
                             .await?;
+                            self.inner.reserve_invite(tx)?;
                             tx.send().await?;
                             self.inner.set_server_connection(tx.connection.clone());
                             self.inner.update_remote_tag("").ok();
@@ -592,6 +594,8 @@ impl InviteDialog {
     }
 
     /// Send a re-INVITE request to modify the session.
+    /// Returns `DialogError` with `RequestPending` while another INVITE
+    /// transaction prevents a new local INVITE (RFC 3261 §14.1).
     pub async fn reinvite(
         &self,
         headers: Option<Vec<Header>>,
@@ -834,6 +838,9 @@ impl InviteDialog {
                 tx.reply(StatusCode::BadRequest).await?;
                 return Ok(());
             }
+            if !self.admit_incoming_invite(tx).await? {
+                return Ok(());
+            }
             match tx.original.method {
                 Method::Cancel => {
                     // UAS replies 200 to a CANCEL in confirmed state; UAC
@@ -885,6 +892,9 @@ impl InviteDialog {
             }
         }
 
+        if !self.admit_incoming_invite(tx).await? {
+            return Ok(());
+        }
         // Not confirmed — only the UAS side drives the INVITE transaction here.
         if self.role() == TransactionRole::Server {
             match tx.original.method {
@@ -906,6 +916,33 @@ impl InviteDialog {
             }
         }
         Ok(())
+    }
+
+    /// Apply RFC 3261 §14.2 before dispatching an INVITE to the application.
+    async fn admit_incoming_invite(&self, tx: &mut Transaction) -> Result<bool> {
+        if tx.original.method != Method::Invite {
+            return Ok(true);
+        }
+        let Err(pending_role) = tx.reserve_invite(&self.inner.invite_usage) else {
+            return Ok(true);
+        };
+        let (status, headers) = match pending_role {
+            TransactionRole::Client => (StatusCode::RequestPending, None),
+            TransactionRole::Server => {
+                let mut random = [0u8; 4];
+                crate::transaction::fill_random_bytes(&mut random);
+                let delay = u32::from_ne_bytes(random) % 11;
+                (
+                    StatusCode::ServerInternalError,
+                    Some(vec![Header::RetryAfter(delay.to_string().into())]),
+                )
+            }
+        };
+        let response = self
+            .inner
+            .make_response(&tx.original, status, headers, None);
+        tx.respond(response).await?;
+        Ok(false)
     }
 
     async fn handle_bye(&mut self, tx: &mut Transaction) -> Result<()> {

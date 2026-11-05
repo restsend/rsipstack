@@ -206,6 +206,7 @@ impl DialogLayer {
         }
 
         let dialog = InviteDialog::from_inner(Arc::new(dlg_inner));
+        dialog.inner.reserve_invite(tx)?;
         dialog.inner.set_server_connection(tx.connection.clone());
         self.inner
             .dialogs
