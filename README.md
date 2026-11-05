@@ -8,13 +8,12 @@ A RFC 3261/3262 compliant SIP stack written in Rust. The goal of this project is
 
 - **RFC 3261/3262 Compliant**: Full compliance with SIP specification
 - **Multiple Transport Support**: UDP, TCP, TLS, WebSocket (TLS/WebSocket require the `rustls` and `websocket` features, enabled by default). The TLS client goes through a backend seam (`platform::tls`) — host default is the built-in rustls; embedded stacks can register their own connector
-- **IPv6 & Dual-Stack**: listeners on `::` serve IPv4 and IPv6 (explicit `IPV6_V6ONLY`), IPv4-mapped peer addresses are canonicalized, and UDP sends pick a listener that can reach the target's address family (see [Behavior & Compatibility Notes](#behavior--compatibility-notes))
+- **IPv6 & Dual-Stack**: listeners on `::` serve IPv4 and IPv6; IPv4-mapped peers are canonicalized and UDP sends pick a reachable listener
 - **Transaction Layer**: Complete SIP transaction state machine
 - **Dialog Layer**: SIP dialog management
 - **Reliable Provisionals**: PRACK (RFC 3262 / 100rel) support
 - **Digest Authentication**: Built-in authentication support
-- **High Performance**: Built with Rust for maximum performance
-- **Easy to Use**: Simple and intuitive API design
+- **no_std / Embedded**: alloc-only core with an embassy backend
 
 ## no_std / Embedded Support
 
@@ -46,49 +45,23 @@ cargo check --no-default-features --features platform-embassy
   use UDP or SIPS today.
 - On no_std, register a `DomainResolver` instead of the tokio DNS resolver.
 
-## TODO
-- [x] Transport support
-  - [x] UDP
-  - [x] TCP
-  - [x] TLS
-  - [x] WebSocket
-- [x] Digest Authentication
-- [x] Transaction Layer
-- [x] Dialog Layer
-- [ ] WASM target
-- [x] no_std embassy-based targets
+## Compatibility
 
-## Behavior & Compatibility Notes
-
-rsipstack targets RFC 3261 strictly; where peers are lenient, rsipstack stays
-compliant. Recent releases tightened a few behaviours — if you upgrade from
-0.7.8 or earlier, review the [CHANGELOG](CHANGELOG.md). The most visible
-points:
-
-- **Stream transports require `Content-Length`** (RFC 3261 §18.3): TCP/TLS/WS
-  messages without a valid, single `Content-Length` (compact `l:` counts) are
-  rejected instead of assumed body-less. UDP treats a missing header as "the
-  rest of the datagram is the body".
-- **`Via received` is bare for IPv6** (§20.42): `received=2001:db8::7`, no
-  brackets; bracketed input (RFC 5118) is still parsed.
-- **Dialogs follow target refreshes**: an in-dialog INVITE/UPDATE (or a
-  reliable INVITE provisional) with a valid Contact retargets the dialog;
-  rejected refreshes keep the old target, malformed Contacts get 400.
-- **Transactions match per RFC**: server = Via branch + sent-by + method,
-  client = branch + CSeq method; RFC 2543 (cookie-less branch) requests are
-  still matched, and unmatched CANCELs are answered 481.
+rsipstack follows RFC 3261 strictly. Stream transports require a valid single
+`Content-Length`, `Via received` is bare for IPv6, dialogs follow target
+refreshes, and transactions match per RFC. See the
+[CHANGELOG](CHANGELOG.md) for release-specific behaviour changes.
 
 ## Use Cases
 
-This SIP stack can be used in various scenarios, including but not limited to:
+rsipstack powers production SIP applications and related projects:
 
-- Integration with WebRTC for browser-based communication, such as WebRTC SBC.
-- Building custom SIP proxies or registrars
-- Building custom SIP user agents (SIP.js alternative)
-
-## Why Rust?
-
-We are a group of developers who are passionate about SIP and Rust. We believe that Rust is a great language for building high-performance network applications, and we want to bring the power of Rust to the SIP/WebRTC/SFU world.
+- [RustPBX](https://github.com/restsend/rustpbx) — programmable, software-defined PBX
+- [Active Call](https://github.com/miuda-ai/active-call) — SIP/WebRTC AI voice agent
+- [SipBot](https://github.com/miuda-ai/sipbot) — SIP call-flow bot for testing and simulation
+- [RustRTC](https://github.com/restsend/rustrtc) — WebRTC, RTP/SRTP and T.38 media stack used alongside rsipstack
+- [MiuTURN](https://github.com/restsend/miuturn) — TURN server for WebRTC
+- Custom SIP proxies, registrars, user agents, and WebRTC SBCs
 
 ## Quick Start Examples
 
