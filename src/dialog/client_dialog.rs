@@ -1,19 +1,15 @@
 use super::dialog::DialogInnerRef;
 use super::DialogId;
+use crate::dialog::{
+    dialog::{DialogState, TerminatedReason, TransactionHandle},
+    subscription::ClientSubscriptionDialog,
+};
 use crate::platform::CancellationToken;
 use crate::prelude::*;
 use crate::sip::prelude::HeadersExt;
-use crate::sip::{Response, SipMessage, StatusCode};
+use crate::sip::{Response, SipMessage};
 use crate::transaction::transaction::Transaction;
 use crate::Result;
-use crate::{
-    dialog::{
-        authenticate::{handle_client_authenticate, AuthRetry},
-        dialog::{DialogState, TerminatedReason, TransactionHandle},
-        subscription::ClientSubscriptionDialog,
-    },
-    transaction::key::TransactionRole,
-};
 use core::sync::atomic::Ordering;
 use tracing::{debug, trace, warn};
 
@@ -36,7 +32,7 @@ use tracing::{debug, trace, warn};
 ///
 /// 1. **Creation** - Dialog created when sending INVITE
 /// 2. **Early State** - Receives provisional responses (1xx)
-/// 3. **Confirmed** - Receives 2xx response and sends ACK
+/// 3. **Confirmed** - Receives 2xx response; ACK is then sent
 /// 4. **Active** - Can send in-dialog requests (UPDATE, INFO, etc.)
 /// 5. **Termination** - Sends BYE or CANCEL to end session
 ///
@@ -734,127 +730,8 @@ impl ClientInviteDialog {
         &self,
         tx: &mut Transaction,
     ) -> Result<(DialogId, Option<Response>)> {
-        self.inner.transition(DialogState::Calling(self.id()));
-        let mut auth = AuthRetry::new();
-        tx.send().await?;
-        let mut dialog_id = self.id();
-        let mut final_response = None;
-        while let Some(msg) = tx.receive().await {
-            match msg {
-                SipMessage::Request(_) => {}
-                SipMessage::Response(resp) => {
-                    let status = resp.status_code.clone();
-
-                    // RFC 7989 §8: learn the peer's (possibly new) UUID.
-                    let peer_uuid = resp.session_id_header().and_then(|s| s.local_uuid());
-                    self.inner.observe_peer_session_uuid(peer_uuid);
-
-                    let unified =
-                        super::invite_dialog::InviteDialog::from_inner(self.inner.clone());
-                    if status == StatusCode::Trying {
-                        self.inner.transition(DialogState::Trying(self.id()));
-                        unified.send_deferred_cancel();
-                        continue;
-                    }
-
-                    if matches!(status.kind(), crate::sip::StatusCodeKind::Provisional) {
-                        unified.send_deferred_cancel();
-                        self.inner.handle_provisional_response(&resp).await?;
-                        self.inner.transition(DialogState::Early(self.id(), resp));
-                        unified.send_deferred_cancel();
-                        continue;
-                    }
-
-                    if matches!(
-                        status,
-                        StatusCode::ProxyAuthenticationRequired | StatusCode::Unauthorized
-                    ) && !self.inner.cancel_requested.load(Ordering::SeqCst)
-                    {
-                        if !auth.should_answer(&resp) {
-                            final_response = Some(resp.clone());
-                            debug!(id = %self.id(), ?status, "received auth response after auth sent");
-                            self.inner.transition(DialogState::Terminated(
-                                self.id(),
-                                TerminatedReason::ProxyAuthRequired,
-                            ));
-                            break;
-                        }
-                        if let Some(credential) = &self.inner.credential {
-                            *tx = handle_client_authenticate(
-                                self.inner.increment_local_seq(),
-                                tx,
-                                resp,
-                                credential,
-                            )
-                            .await?;
-                            tx.send().await?;
-                            self.inner.update_remote_tag("").ok();
-                            // Update initial_request with the new invite request
-                            {
-                                let mut req = self.inner.initial_request.lock();
-                                *req = tx.original.clone();
-                            }
-                            continue;
-                        } else {
-                            // No credential to retry with: the challenge is the
-                            // final response (RFC 3261 §22.2, §22.3).
-                            final_response = Some(resp);
-                            debug!(id = %self.id(), ?status, "received auth challenge without credential");
-                            self.inner.transition(DialogState::Terminated(
-                                self.id(),
-                                TerminatedReason::ProxyAuthRequired,
-                            ));
-                            break;
-                        }
-                    }
-                    final_response = Some(resp.clone());
-                    if let Some(tag) = resp.to_header()?.tag()? {
-                        self.inner.update_remote_tag(tag.value())?
-                    }
-
-                    if let Ok(id) = DialogId::try_from((&resp, TransactionRole::Client)) {
-                        dialog_id = id;
-                    }
-                    match resp.status_code {
-                        StatusCode::Ringing | StatusCode::SessionProgress
-                            if resp
-                                .to_header()
-                                .ok()
-                                .and_then(|h| h.tag().ok().flatten())
-                                .is_some() =>
-                        {
-                            self.inner.update_route_set_from_response(&resp);
-                        }
-                        StatusCode::OK => {
-                            self.inner.update_route_set_from_response(&resp);
-                            // 200 response to INVITE always contains Contact header
-                            let contact = resp.contact_header()?;
-                            self.inner.remote_contact.lock().replace(contact.clone());
-
-                            let contact_uri = resp
-                                .typed_contact_headers()?
-                                .first()
-                                .map(|c| c.uri.clone())
-                                .ok_or_else(|| {
-                                    crate::Error::Error("missing Contact header".to_string())
-                                })?;
-                            *self.inner.remote_uri.lock() = contact_uri;
-                            let confirmed = DialogState::Confirmed(dialog_id.clone(), resp.clone());
-                            if self.inner.confirm_unless_cancelled(confirmed) {
-                                unified.bye_2xx_of_cancelled(resp);
-                            }
-                        }
-                        _ => {
-                            self.inner.transition(DialogState::Terminated(
-                                self.id(),
-                                TerminatedReason::UasOther(resp.status_code.clone()),
-                            ));
-                        }
-                    }
-                    break;
-                }
-            }
-        }
-        Ok((dialog_id, final_response))
+        super::invite_dialog::InviteDialog::from_inner(self.inner.clone())
+            .process_invite(tx)
+            .await
     }
 }

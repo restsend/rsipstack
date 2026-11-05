@@ -1,6 +1,7 @@
 mod test_accept_before_handle;
 mod test_ack_answer;
 mod test_authenticate;
+mod test_bye_during_ack;
 mod test_cancel_2xx_race;
 mod test_client_dialog;
 mod test_connection_affinity;

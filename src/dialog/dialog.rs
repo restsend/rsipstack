@@ -86,7 +86,7 @@ impl TransactionHandle {
 /// * `Trying` - Dialog has received a 100 Trying response
 /// * `Early` - Dialog is in early state (1xx response received, except 100)
 /// * `WaitAck` - Server dialog waiting for ACK after sending 2xx response
-/// * `Confirmed` - Dialog is established and confirmed (2xx response received/sent and ACK sent/received)
+/// * `Confirmed` - UAC received 2xx (ACK may still be sending); UAS received ACK
 /// * `Updated` - Dialog received an UPDATE request
 /// * `Notify` - Dialog received a NOTIFY request
 /// * `Info` - Dialog received an INFO request
@@ -356,12 +356,33 @@ pub struct DialogInner {
     pub(super) cancel_requested: AtomicBool,
     /// That CANCEL waits for a provisional response (RFC 3261 §9.1).
     pub(super) cancel_deferred: AtomicBool,
+    pub(super) initial_ack: Mutex<Option<Arc<InitialInviteAck>>>,
 }
 
 pub type DialogStateReceiver = UnboundedReceiver<DialogState>;
 pub type DialogStateSender = UnboundedSender<DialogState>;
 
 pub(super) type DialogInnerRef = Arc<DialogInner>;
+
+/// Outgoing teardown waits for the initial ACK attempt; incoming BYE does not.
+pub(super) struct InitialInviteAck {
+    pub done: CancellationToken,
+    completed: AtomicBool,
+}
+
+impl InitialInviteAck {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            done: CancellationToken::new(),
+            completed: AtomicBool::new(false),
+        })
+    }
+
+    pub fn finish(&self) {
+        self.completed.store(true, Ordering::SeqCst);
+        self.done.cancel();
+    }
+}
 
 impl DialogState {
     pub fn id(&self) -> &DialogId {
@@ -521,6 +542,7 @@ impl DialogInner {
             dialback_target: Mutex::new(None),
             cancel_requested: AtomicBool::new(false),
             cancel_deferred: AtomicBool::new(false),
+            initial_ack: Mutex::new(None),
         })
     }
     /// Extract RFC 7989 Session-ID state from the initial request.
@@ -1506,6 +1528,19 @@ impl DialogInner {
     /// response ends the dialog. So whatever the transaction returns, the
     /// dialog is `Terminated(reason)`; a failure is still returned.
     pub(super) async fn send_bye(&self, request: Request, reason: TerminatedReason) -> Result<()> {
+        let initial_ack = self.initial_ack.lock().clone();
+        if let Some(ack) = initial_ack {
+            ack.done.cancelled().await;
+            // The peer may have ended the dialog while our ACK was blocked.
+            if self.is_terminated() {
+                return Ok(());
+            }
+            if !ack.completed.load(Ordering::SeqCst) {
+                return Err(crate::Error::Error(
+                    "initial INVITE ACK was interrupted".into(),
+                ));
+            }
+        }
         let result = self.do_request(request).await;
         let id = self.id.lock().clone();
         self.transition(DialogState::Terminated(id, reason));
@@ -1735,6 +1770,7 @@ impl DialogInner {
             dialback_target: Mutex::new(None),
             cancel_requested: AtomicBool::new(false),
             cancel_deferred: AtomicBool::new(false),
+            initial_ack: Mutex::new(None),
         }))
     }
     fn build_restored_initial_request(
@@ -1834,7 +1870,11 @@ impl DialogInner {
     /// `cancel()` was called. Decided under the state lock `cancel()` takes,
     /// so a racing `cancel()` is either seen here or sees `Confirmed`.
     /// Returns whether the INVITE was cancelled.
-    pub(super) fn confirm_unless_cancelled(&self, confirmed: DialogState) -> bool {
+    pub(super) fn confirm_unless_cancelled(
+        &self,
+        confirmed: DialogState,
+        register: impl FnOnce(),
+    ) -> bool {
         let id = self.id.lock().clone();
         let mut state = self.state.lock();
         if self.cancel_requested.load(Ordering::SeqCst) {
@@ -1842,6 +1882,12 @@ impl DialogInner {
             self.transition_locked(&mut state, cancelled);
             return true;
         }
+        if state.is_terminated() {
+            return false;
+        }
+        // Publish the full dialog key before notifying the application. A
+        // concurrent handler cannot inspect the state until this lock releases.
+        register();
         self.transition_locked(&mut state, confirmed);
         false
     }

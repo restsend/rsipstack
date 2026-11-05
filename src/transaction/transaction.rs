@@ -829,13 +829,23 @@ impl Transaction {
     /// dedicated cancellation channel that the transaction itself
     /// observes via `TransactionEvent::Terminate`.
     pub async fn receive(&mut self) -> Option<SipMessage> {
+        self.receive_with_response_observer(|_| {}).await
+    }
+
+    /// Let the dialog install its state before an automatic ACK can suspend
+    /// reception. The observer is synchronous and only sees accepted responses.
+    pub(crate) async fn receive_with_response_observer(
+        &mut self,
+        mut observer: impl FnMut(&Response) + Send,
+    ) -> Option<SipMessage> {
         while let Some(event) = self.tu_receiver.recv().await {
             match event {
                 TransactionEvent::Received(msg, connection) => {
                     if let Some(msg) = match msg {
                         SipMessage::Request(req) => self.on_received_request(req, connection).await,
                         SipMessage::Response(resp) => {
-                            self.on_received_response(resp, connection).await
+                            self.on_received_response(resp, connection, &mut observer)
+                                .await
                         }
                     } {
                         return Some(msg);
@@ -1083,6 +1093,7 @@ impl Transaction {
         &mut self,
         resp: Response,
         connection: Option<SipConnection>,
+        observer: &mut (impl FnMut(&Response) + Send),
     ) -> Option<SipMessage> {
         match self.transaction_type {
             TransactionType::ServerInvite | TransactionType::ServerNonInvite => return None,
@@ -1101,6 +1112,7 @@ impl Transaction {
                 self.transition(TransactionState::Accepted).ok()?;
             }
             self.last_response.replace(resp.clone());
+            observer(&resp);
             return Some(SipMessage::Response(resp));
         }
         let new_state = match resp.status_code.kind() {
@@ -1190,6 +1202,7 @@ impl Transaction {
 
         self.transition(new_state).ok();
 
+        observer(&resp);
         if auto_ack_client_invite {
             if let Err(e) = self.send_ack(connection).await {
                 warn!(
