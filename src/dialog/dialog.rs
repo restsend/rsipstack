@@ -342,6 +342,8 @@ pub struct DialogInner {
     pub(super) endpoint_inner: EndpointInnerRef,
     pub(super) state_sender: DialogStateSender,
     pub(crate) lifecycle: Mutex<super::lifecycle::LifecycleState>,
+    pub(crate) persistence: Mutex<Option<Arc<super::persistence::PersistenceRuntime>>>,
+    pub(crate) persistence_owner: Mutex<alloc::sync::Weak<DialogInner>>,
     pub(super) tu_sender: TransactionEventSender,
     /// RFC 7989 Session-ID state; `None` when the dialog does not participate
     /// (no UUID supplied by the application and none received from the peer).
@@ -566,6 +568,8 @@ impl DialogInner {
             route_set: Mutex::new(route_set),
             endpoint_inner,
             state_sender,
+            persistence: Mutex::new(None),
+            persistence_owner: Mutex::new(alloc::sync::Weak::new()),
             lifecycle: Mutex::new(super::lifecycle::LifecycleState::default()),
             tu_sender,
             state: Mutex::new(DialogState::Calling(id)),
@@ -823,6 +827,7 @@ impl DialogInner {
             }
         }
 
+        self.bind_persistence(&tx);
         match tx.send().await {
             Ok(_) => {
                 debug!(
@@ -867,6 +872,7 @@ impl DialogInner {
                         if let Some(cred) = &self.credential {
                             let new_seq = self.increment_local_seq();
                             tx = handle_client_authenticate(new_seq, &tx, resp, cred).await?;
+                            self.bind_persistence(&tx);
                             tx.send().await?;
                             continue;
                         } else {
@@ -888,6 +894,7 @@ impl DialogInner {
                 _ => break,
             }
         }
+        tx.check_persistence()?;
         Ok(None)
     }
 
@@ -1351,6 +1358,11 @@ impl DialogInner {
         let result = self.send_dialog_request_inner(request, options).await;
         if negotiation {
             self.finish_negotiation();
+            self.checkpoint(
+                super::persistence::DialogCheckpointReason::SignalingCompleted,
+                None,
+            )
+            .await?;
         }
         result
     }
@@ -1373,6 +1385,7 @@ impl DialogInner {
         );
         tx.defer_success_ack = options.as_ref().is_some_and(|o| o.answer_handler.is_some());
         tx.force_success_ack = options.is_some() && !tx.defer_success_ack;
+        self.bind_persistence(&tx);
         self.reserve_invite(&tx)?;
 
         if let Some(route) = tx.original.route_header() {
@@ -1594,6 +1607,7 @@ impl DialogInner {
                             tx.defer_success_ack =
                                 options.as_ref().is_some_and(|o| o.answer_handler.is_some());
                             tx.force_success_ack = options.is_some() && !tx.defer_success_ack;
+                            self.bind_persistence(&tx);
                             self.reserve_invite(&tx)?;
                             tx.send().await?;
                             cancel_watch = options.as_ref().map(|o| {
@@ -1690,6 +1704,7 @@ impl DialogInner {
                 _ => break,
             }
         }
+        tx.check_persistence()?;
         Ok(None)
     }
 
@@ -1732,6 +1747,11 @@ impl DialogInner {
             }
             self.record_local_termination();
         }
+        self.checkpoint(
+            super::persistence::DialogCheckpointReason::LocalTerminationRequested,
+            None,
+        )
+        .await?;
         let initial_ack = self.initial_ack.lock().clone();
         let reinvite_ack = self.reinvite_ack.lock().clone();
         for ack in [initial_ack, reinvite_ack].into_iter().flatten() {
@@ -1747,6 +1767,8 @@ impl DialogInner {
         let result = self.do_request(request).await;
         let id = self.id.lock().clone();
         self.transition(DialogState::Terminated(id, reason));
+        self.checkpoint(super::persistence::DialogCheckpointReason::Terminated, None)
+            .await?;
         result.map(|_| ())
     }
 
@@ -1843,11 +1865,15 @@ impl DialogInner {
     /// writes to DialogInner public fields bypass these synchronization guarantees.
     pub fn snapshot(&self) -> DialogSnapshot {
         let state_guard = self.state.lock();
+        self.snapshot_locked(&state_guard)
+    }
+
+    pub(crate) fn snapshot_locked(&self, state_guard: &DialogState) -> DialogSnapshot {
         let usage = self.invite_usage.lock();
         let lifecycle = self.lifecycle.lock();
         let id = self.id.lock().clone();
 
-        let state = match &*state_guard {
+        let state = match state_guard {
             DialogState::Calling(_) => DialogSnapshotState::Calling,
             DialogState::Trying(_) => DialogSnapshotState::Trying,
             DialogState::Early(_, _) => DialogSnapshotState::Early,
@@ -1986,6 +2012,8 @@ impl DialogInner {
 
             endpoint_inner,
             state_sender,
+            persistence: Mutex::new(None),
+            persistence_owner: Mutex::new(alloc::sync::Weak::new()),
             lifecycle: Mutex::new(lifecycle),
             tu_sender,
 
@@ -2244,6 +2272,13 @@ impl DialogInner {
         }
         self.lifecycle.lock().revision += 1;
         *old_state = state.clone();
+        if state.is_terminated() {
+            self.enqueue_checkpoint_locked(
+                old_state,
+                super::persistence::DialogCheckpointReason::Terminated,
+                None,
+            );
+        }
         // Try to send state update, but don't fail if channel is closed
         self.state_sender.send(state).ok();
     }
@@ -2261,6 +2296,11 @@ impl DialogInner {
         let result = self.process_transaction_handle_inner(tx, rx).await;
         if negotiation {
             self.finish_negotiation();
+            self.checkpoint(
+                super::persistence::DialogCheckpointReason::SignalingCompleted,
+                None,
+            )
+            .await?;
         }
         result
     }
@@ -2271,6 +2311,7 @@ impl DialogInner {
         tx: &mut Transaction,
         mut rx: TransactionCommandReceiver,
     ) -> Result<()> {
+        self.bind_persistence(tx);
         let target = if Self::is_target_refresh(&tx.original.method) {
             match Self::parse_target_refresh_contact(&tx.original) {
                 Ok(target) => target,

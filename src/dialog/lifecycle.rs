@@ -3,6 +3,8 @@
 //! Unlike `DialogState`, these are facts, not requests for application action.
 //! Delivery never awaits application code or storage. Events are not a durable
 //! journal: a closed receiver drops notifications without affecting SIP.
+//! Explicitly enabling persistence holds delivery until a covering checkpoint
+//! commits; the notification receiver itself still cannot delay SIP.
 //!
 //! Configure the layer before creating calls:
 //!
@@ -114,6 +116,8 @@ pub(crate) struct LifecycleState {
     pub pending_remote_bye: bool,
     pub negotiations: u32,
     pub facts: alloc::vec::Vec<super::snapshot::DialogLifecycleRecord>,
+    pub defer_delivery: bool,
+    pub undelivered: alloc::vec::Vec<DialogLifecycleEvent>,
 }
 
 impl LifecycleState {
@@ -177,14 +181,19 @@ impl LifecycleState {
             since_unix_epoch: time.since_unix_epoch,
             kind: kind.clone(),
         });
-        if let Some(sender) = &self.sender {
-            let _ = sender.send(DialogLifecycleEvent {
+        if self.sender.is_some() {
+            let event = DialogLifecycleEvent {
                 dialog_id: id,
                 role,
                 sequence: self.sequence,
                 occurred_at: time,
                 kind,
-            });
+            };
+            if self.defer_delivery {
+                self.undelivered.push(event);
+            } else if let Some(sender) = &self.sender {
+                let _ = sender.send(event);
+            }
         }
     }
 }

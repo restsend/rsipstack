@@ -558,6 +558,7 @@ impl ClientInviteDialog {
     /// * `UPDATE` - Handles session updates
     /// * `INVITE` - Handles re-INVITE (when confirmed)
     pub async fn handle(&mut self, tx: &mut Transaction) -> Result<()> {
+        self.inner.bind_persistence(tx);
         trace!(
             id = %self.id(),
             method = %tx.original.method,
@@ -664,6 +665,12 @@ impl ClientInviteDialog {
         self.inner.begin_negotiation();
         let result = self.inner.process_reinvite(tx, false).await;
         self.inner.finish_negotiation();
+        self.inner
+            .checkpoint(
+                super::persistence::DialogCheckpointReason::SignalingCompleted,
+                None,
+            )
+            .await?;
         result
     }
 

@@ -653,6 +653,7 @@ impl ServerInviteDialog {
     /// * `UPDATE` - Handles session updates
     /// * `INVITE` - Handles initial INVITE or re-INVITE
     pub async fn handle(&mut self, tx: &mut Transaction) -> Result<()> {
+        self.inner.bind_persistence(tx);
         debug!(
             id = %self.id(),
             method = %tx.original.method,
@@ -853,6 +854,12 @@ impl ServerInviteDialog {
         self.inner.begin_negotiation();
         let result = self.inner.process_reinvite(tx, true).await;
         self.inner.finish_negotiation();
+        self.inner
+            .checkpoint(
+                super::persistence::DialogCheckpointReason::SignalingCompleted,
+                None,
+            )
+            .await?;
         result
     }
 
@@ -895,8 +902,15 @@ impl ServerInviteDialog {
                     SipMessage::Response(_) => {}
                 }
             }
+            tx.check_persistence()?;
             let answered_2xx = self.inner.waiting_ack();
             self.inner.end_session_without_ack(tx, answered_2xx).await;
+            self.inner
+                .checkpoint(
+                    super::persistence::DialogCheckpointReason::SignalingCompleted,
+                    None,
+                )
+                .await?;
             Ok::<(), crate::Error>(())
         };
         match handle_loop.await {

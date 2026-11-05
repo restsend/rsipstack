@@ -51,6 +51,17 @@ PJSUA_BIN=/absolute/path/to/pjsua SIPP_BIN=/absolute/path/to/sipp \
 ```
 
 The binaries must support the flags and CLI used by the pinned versions below.
+
+To exercise the opt-in dialog persistence barriers against the same peers:
+
+```sh
+RSIPSTACK_INTEROP_CHECKPOINTS=1 bash scripts/interop/run.sh regression
+```
+
+Each scenario writes `checkpoints.log`; the test handler syncs each checkpoint
+to disk before acknowledging it and rejects backwards revisions. This is a
+test journal, not a production storage format. The regular library tests cover
+blocked writes, failures, timeouts, concurrent BYE, and lifecycle delivery.
 To prepare peers without running the suite, use `bash scripts/interop/build-pjsua.sh`
 and `bash scripts/interop/build-sipp.sh`. Set `JOBS=2` to limit build concurrency.
 With Rust dependencies and peers already cached, `CARGO_NET_OFFLINE=true bash

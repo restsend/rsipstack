@@ -34,6 +34,8 @@ use tracing::debug;
 /// * `last_seq` uses atomic operations for lock-free increments
 /// * `dialogs` uses RwLock for concurrent read access with exclusive writes
 pub struct DialogLayerInner {
+    pub(super) persistence_config:
+        crate::platform::sync::Mutex<Option<super::persistence::DialogPersistenceConfig>>,
     pub(super) lifecycle_sender:
         crate::platform::sync::Mutex<Option<super::lifecycle::DialogLifecycleSender>>,
     pub(super) last_seq: AtomicU32,
@@ -143,6 +145,7 @@ impl DialogLayer {
             endpoint,
             inner: Arc::new(DialogLayerInner {
                 last_seq: AtomicU32::new(0),
+                persistence_config: crate::platform::sync::Mutex::new(None),
                 lifecycle_sender: crate::platform::sync::Mutex::new(None),
                 dialogs: RwMap::new(),
             }),
@@ -159,6 +162,22 @@ impl DialogLayer {
                 .store(true, Ordering::Relaxed);
         }
         *self.inner.lifecycle_sender.lock() = sender;
+    }
+
+    /// Configure optional durable checkpoints for subsequently created/restored
+    /// INVITE dialogs. Existing dialogs retain their configuration.
+    pub fn set_persistence(
+        &self,
+        config: Option<super::persistence::DialogPersistenceConfig>,
+    ) -> Result<()> {
+        if let Some(config) = &config {
+            config.validate()?;
+            self.endpoint
+                .record_receipt_times
+                .store(true, Ordering::Relaxed);
+        }
+        *self.inner.persistence_config.lock() = config;
+        Ok(())
     }
 
     pub fn get_or_create_server_invite(
@@ -223,6 +242,10 @@ impl DialogLayer {
         let dialog = InviteDialog::from_inner(Arc::new(dlg_inner));
         dialog.inner.lifecycle.lock().sender = self.inner.lifecycle_sender.lock().clone();
         *tx.initial_dialog.lock() = Some(Arc::downgrade(&dialog.inner));
+        dialog
+            .inner
+            .configure_persistence(self.inner.persistence_config.lock().clone());
+        dialog.inner.bind_persistence(tx);
         dialog.inner.reserve_invite(tx)?;
         dialog.inner.set_server_connection(tx.connection.clone());
         self.inner
@@ -559,6 +582,7 @@ impl DialogLayer {
         inner.credential = credential;
         inner.lifecycle.lock().sender = self.inner.lifecycle_sender.lock().clone();
         let inner = Arc::new(inner);
+        inner.configure_persistence(self.inner.persistence_config.lock().clone());
         let dialog = Dialog::from_inner(inner.role, inner.clone());
 
         let key = dialog.id().to_string();
