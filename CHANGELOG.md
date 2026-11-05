@@ -1,17 +1,70 @@
 # Changelog
 
-## Unreleased
+## 0.8.1
+
+Fourteen fixes and additions merged (#223–#236). One public API change:
+`Method` gained `Method::Other(String)` for RFC 3261 extension methods and is
+no longer `Copy`; exhaustive matches over `Method` must handle the new variant.
+Other public signatures, configuration defaults, and snapshot fields are
+unchanged.
+
+### Dialog lifecycle and concurrency (#223–#225, #231–#235)
 
 - A final 401/407 for an in-dialog request now returns to its caller without
   terminating a confirmed dialog when credentials are absent or the retry is
   rejected. Applications can decide whether to retry, report the failed
   operation, or explicitly hang up. Initial INVITE authentication and early
   dialog handling are unchanged; an outgoing BYE still ends the dialog.
-  Public signatures, configuration defaults, and snapshot fields are unchanged.
-- Atomically validate and advance the remote CSeq for incoming INVITE-dialog
-  requests. Concurrent requests cannot lose a newer sequence number or pass
-  using a stale comparison. ACK/CANCEL keep their INVITE's CSeq and do not
-  advance the dialog counter; equal CSeq values retain their existing behavior.
+- `reinvite_with_glare_retry()` now uses the RFC 3261 §14.1 role-specific 491
+  retry windows: 2.1–4.0 s for the Call-ID owner and 0–2.0 s for the other
+  endpoint, with 10 ms increments.
+- `increment_local_seq()` / `increment_last_seq()` reserve distinct CSeq values
+  for concurrent callers instead of returning the same value.
+- `restore_from_snapshot()` inserts atomically and is idempotent: concurrent
+  restores report exactly one successful insertion and never replace a live or
+  restored dialog.
+- New `DialogLayer::restore_from_snapshot_with_credential(snapshot, states,
+  credential)` supplies runtime-only SIP digest credentials for restored
+  dialogs. The existing `restore_from_snapshot()` delegates with `None`.
+- Incoming INVITE-dialog requests validate and advance the remote CSeq
+  atomically; ACK/CANCEL reuse their INVITE's CSeq and do not advance it.
+- INVITE transactions are admitted per dialog: conflicting local INVITEs are
+  rejected with `DialogError/RequestPending`, incoming re-INVITEs during a
+  pending local INVITE receive 491, and duplicate incoming INVITEs receive 500
+  with a random Retry-After.
+- UAC dialogs are confirmed and registered before awaiting the initial ACK, so
+  an incoming BYE during that window no longer receives 481.
+
+### SIP message parsing (#227–#230)
+
+- `Method::Other(String)` accepts any RFC 3261 token as an extension method
+  while rejecting empty or non-token values.
+- URI parsing extracts `scheme:`/`userinfo@` before headers and parameters, and
+  preserves opaque non-SIP URIs (for example `urn:service:sos`) instead of
+  splitting `:digits` as a port.
+- `name-addr`, `Contact`, and `Via` validation rejects unbalanced quotes,
+  unquoted display names with non-token characters, whitespace inside `<...>`,
+  missing `;` before header parameters, empty Contact entries, and invalid
+  protocol versions.
+- Request-Line, Status-Line, and core headers are validated per RFC 3261 and
+  RFC 4475, including version, whitespace, URI form, CSeq method matching,
+  numeric bounds, and `Date` format.
+- RFC 4475 §3.3.9 (`mcl01`) duplicate `Content-Length` remains invalid:
+  datagram transports answer 400 from the header block and stream framing
+  rejects and closes the connection. Added regression coverage for both.
+
+### Transactions (#226)
+
+- Reliable transports now terminate server non-INVITE transactions immediately
+  (Timer J = 0, RFC 3261 §17.2.2) instead of retaining the final response for
+  `64*T1`.
+
+### Testing (#236)
+
+- Added the opt-in PJSUA/SIPp interoperability harness: 161 external-peer cases
+  covering calls, dialogs, authentication, PRACK, registration, subscription,
+  re-INVITE/UPDATE, forked responses, and deterministic UDP fault injection.
+- Adapted dialog and interop tests to the non-`Copy` `Method` type.
 
 ## 0.8.0
 
