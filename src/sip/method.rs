@@ -1,7 +1,7 @@
 use crate::prelude::*;
 use crate::sip::Error;
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub enum Method {
     Ack,
     Bye,
@@ -17,6 +17,19 @@ pub enum Method {
     Register,
     Subscribe,
     Update,
+    Other(String),
+}
+
+fn is_token_char(b: u8) -> bool {
+    b.is_ascii_alphanumeric()
+        || matches!(
+            b,
+            b'-' | b'.' | b'!' | b'%' | b'*' | b'_' | b'+' | b'`' | b'\'' | b'~'
+        )
+}
+
+fn is_token(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(is_token_char)
 }
 
 impl Method {
@@ -57,6 +70,7 @@ impl core::fmt::Display for Method {
             Self::Register => "REGISTER",
             Self::Subscribe => "SUBSCRIBE",
             Self::Update => "UPDATE",
+            Self::Other(s) => s.as_str(),
         };
         write!(f, "{}", s)
     }
@@ -81,6 +95,7 @@ impl core::str::FromStr for Method {
             m if m.eq_ignore_ascii_case("REGISTER") => Ok(Self::Register),
             m if m.eq_ignore_ascii_case("SUBSCRIBE") => Ok(Self::Subscribe),
             m if m.eq_ignore_ascii_case("UPDATE") => Ok(Self::Update),
+            m if is_token(m) => Ok(Self::Other(m.to_string())),
             m => Err(Error::ParseError(format!("invalid method: {}", m))),
         }
     }
@@ -97,5 +112,26 @@ impl core::convert::TryFrom<&[u8]> for Method {
     type Error = Error;
     fn try_from(b: &[u8]) -> Result<Self, Self::Error> {
         core::str::from_utf8(b)?.parse()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Method;
+
+    #[test]
+    fn parses_extension_token_method_and_rejects_non_token() {
+        let m: Method = "!interesting-Method0123456789_*+`.%indeed'~"
+            .parse()
+            .unwrap();
+        assert_eq!(
+            m,
+            Method::Other("!interesting-Method0123456789_*+`.%indeed'~".to_string())
+        );
+        assert_eq!(m.to_string(), "!interesting-Method0123456789_*+`.%indeed'~");
+        assert!("".parse::<Method>().is_err());
+        assert!("INV ITE".parse::<Method>().is_err());
+        assert!("INV@ITE".parse::<Method>().is_err());
+        assert!("INV\"ITE".parse::<Method>().is_err());
     }
 }

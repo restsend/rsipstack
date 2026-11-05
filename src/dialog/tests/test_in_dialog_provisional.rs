@@ -166,15 +166,16 @@ async fn assert_provisional_keeps_confirmed(method: Method) -> crate::Result<()>
     let (dialog, mut states, peer) = establish(&token).await?;
 
     let requester = dialog.clone();
+    let req_method = method.clone();
     let pending = tokio::spawn(async move {
-        match method {
+        match req_method {
             Method::Invite => requester.reinvite(None, None).await,
             Method::Update => requester.update(None, None).await,
             _ => unreachable!(),
         }
     });
 
-    let (req, uac) = recv_request(&peer, method).await;
+    let (req, uac) = recv_request(&peer, method.clone()).await;
     reply(&peer, uac, &req, 100, "Trying").await;
     reply(&peer, uac, &req, 183, "Session Progress").await;
     // Let the dialog process the provisionals while the request is pending.

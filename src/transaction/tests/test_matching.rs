@@ -18,9 +18,9 @@ fn request(branch: &str) -> Request {
     format!("INVITE sip:bob@example.com SIP/2.0\r\nVia: SIP/2.0/UDP 192.0.2.1:5060{branch}\r\nFrom: <sip:a@example.com>;tag=alice\r\nTo: <sip:b@example.com>\r\nCall-ID: matching\r\nCSeq: 1 INVITE\r\nContent-Length: 0\r\n\r\n").try_into().unwrap()
 }
 fn method(mut req: Request, method: Method) -> Request {
-    req.method = method;
     req.headers
         .unique_push(headers::CSeq::new(format!("1 {method}")).into());
+    req.method = method;
     req
 }
 fn server(req: &Request) -> TransactionKey {

@@ -94,15 +94,15 @@ async fn inbound_contact(
     *inner.state.lock() = DialogState::Confirmed(id, Default::default());
     let mut dlg = InviteDialog::from_inner(inner.clone());
     let mut r = req();
-    r.method = method;
+    r.headers
+        .unique_push(Header::CSeq(format!("2 {method}").into()));
+    r.method = method.clone();
     if role == TransactionRole::Client {
         r.headers
             .unique_push(Header::From("<sip:bob@example.com>;tag=bob".into()));
         r.headers
             .unique_push(Header::To("<sip:alice@example.com>;tag=alice".into()));
     }
-    r.headers
-        .unique_push(Header::CSeq(format!("2 {method}").into()));
     r.headers.retain(|h| !matches!(h, Header::Contact(_)));
     if has_contact {
         r.headers.push(Header::Contact(format!("<{NEW}>").into()));
@@ -369,9 +369,9 @@ async fn fixture() -> (
 
 fn refresh_request(method: Method, cseq: u32, contact: &str) -> Request {
     let mut r = req();
-    r.method = method;
     r.headers
         .unique_push(Header::CSeq(format!("{cseq} {method}").into()));
+    r.method = method.clone();
     r.headers.unique_push(Header::Contact(contact.into()));
     r.headers
         .unique_push(Header::From("<sip:bob@example.com>;tag=bob".into()));

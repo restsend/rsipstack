@@ -806,7 +806,7 @@ impl DialogInner {
         *self.remote_contact.lock() = contact;
     }
 
-    pub(super) fn is_target_refresh(method: Method) -> bool {
+    pub(super) fn is_target_refresh(method: &Method) -> bool {
         matches!(method, Method::Invite | Method::Update)
     }
 
@@ -857,10 +857,10 @@ impl DialogInner {
         *last = Some(cseq);
     }
 
-    fn accepts_target_refresh(method: Method, response: &Response) -> bool {
+    fn accepts_target_refresh(method: &Method, response: &Response) -> bool {
         Self::is_target_refresh(method)
             && (response.status_code.kind() == StatusCodeKind::Successful
-                || (method == Method::Invite
+                || (*method == Method::Invite
                     && response.status_code.kind() == StatusCodeKind::Provisional
                     && response.status_code != StatusCode::Trying
                     && response.header_contains_token("Require", "100rel")
@@ -905,7 +905,7 @@ impl DialogInner {
 
         let cseq_header = CSeq {
             seq: cseq.unwrap_or_else(|| self.increment_local_seq()),
-            method,
+            method: method.clone(),
         };
 
         for via in vias {
@@ -1377,7 +1377,7 @@ impl DialogInner {
                     // In-dialog responses cannot establish a different dialog.
                     // Do not let a mismatched tag rewrite either the target or
                     // the tag used for the next PRACK/request.
-                    if Self::is_target_refresh(method)
+                    if Self::is_target_refresh(&method)
                         && !DialogId::try_from((&resp, TransactionRole::Client))
                             .is_ok_and(|id| id == *self.id.lock())
                     {
@@ -1466,7 +1466,7 @@ impl DialogInner {
                         method = %method,
                         "dialog do_request done: {:?}", status
                     );
-                    if Self::is_target_refresh(method)
+                    if Self::is_target_refresh(&method)
                         && status.kind() == StatusCodeKind::Successful
                     {
                         self.refresh_target_from_response(&resp)?;
@@ -1867,7 +1867,7 @@ impl DialogInner {
         tx: &mut Transaction,
         mut rx: TransactionCommandReceiver,
     ) -> Result<()> {
-        let target = if Self::is_target_refresh(tx.original.method) {
+        let target = if Self::is_target_refresh(&tx.original.method) {
             match Self::parse_target_refresh_contact(&tx.original) {
                 Ok(target) => target,
                 Err(_) => return tx.reply(StatusCode::BadRequest).await,
@@ -1888,7 +1888,7 @@ impl DialogInner {
                         let is_final = status.kind() != StatusCodeKind::Provisional;
                         let response = self.make_response(&tx.original, status, headers, body);
                         let accepts_refresh =
-                            Self::accepts_target_refresh(tx.original.method, &response);
+                            Self::accepts_target_refresh(&tx.original.method, &response);
                         tx.respond(response).await?;
 
                         // Commit only once the accepting response was sent.

@@ -821,7 +821,7 @@ impl InviteDialog {
         if self.inner.is_confirmed() {
             // Validate before the application can change its media state or
             // accept the request. Receiving a Contact alone does not commit it.
-            if DialogInner::is_target_refresh(tx.original.method)
+            if DialogInner::is_target_refresh(&tx.original.method)
                 && DialogInner::parse_target_refresh_contact(&tx.original).is_err()
             {
                 tx.reply(StatusCode::BadRequest).await?;

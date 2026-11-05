@@ -112,7 +112,13 @@ impl EndpointInner {
             Header::CallId(call_id),
             Header::From(from.into()),
             Header::To(to.into()),
-            Header::CSeq(crate::sip::typed::CSeq { seq, method }.into()),
+            Header::CSeq(
+                crate::sip::typed::CSeq {
+                    seq,
+                    method: method.clone(),
+                }
+                .into(),
+            ),
             Header::MaxForwards(70.into()),
             Header::UserAgent(self.user_agent.clone().into()),
         ];
