@@ -7,7 +7,7 @@ use crate::dialog::{
 use crate::platform::CancellationToken;
 use crate::prelude::*;
 use crate::sip::prelude::HeadersExt;
-use crate::sip::{Response, SipMessage};
+use crate::sip::Response;
 use crate::transaction::transaction::Transaction;
 use crate::Result;
 use core::sync::atomic::Ordering;
@@ -661,34 +661,7 @@ impl ClientInviteDialog {
     }
 
     async fn handle_reinvite(&mut self, tx: &mut Transaction) -> Result<()> {
-        debug!(id = %self.id(), uri = %tx.original.uri, "received reinvite");
-        let (handle, rx) = TransactionHandle::new();
-        self.inner
-            .transition(DialogState::Updated(self.id(), tx.original.clone(), handle));
-
-        self.inner.process_transaction_handle(tx, rx).await?;
-        let answered_2xx = tx
-            .last_response
-            .as_ref()
-            .is_some_and(|resp| resp.status_code.kind() == crate::sip::StatusCodeKind::Successful);
-        let mut acked = false;
-
-        // wait for ACK
-        while let Some(msg) = tx.receive().await {
-            match msg {
-                SipMessage::Request(req) if req.method == crate::sip::Method::Ack => {
-                    debug!(id = %self.id(), "received ACK for re-INVITE");
-                    self.inner.remote_ack.lock().replace(req);
-                    acked = true;
-                    break;
-                }
-                _ => {}
-            }
-        }
-        self.inner
-            .end_session_without_ack(tx, answered_2xx && !acked)
-            .await;
-        Ok(())
+        self.inner.process_reinvite(tx, false).await
     }
 
     async fn handle_refer(&mut self, tx: &mut Transaction) -> Result<()> {

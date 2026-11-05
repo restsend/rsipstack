@@ -175,6 +175,9 @@ pub struct Transaction {
     pub connection: Option<SipConnection>,
     pub last_response: Option<Response>,
     pub last_ack: Option<Request>,
+    /// Defer the first successful ACK until an application supplies its body.
+    pub(crate) defer_success_ack: bool,
+    pub(crate) force_success_ack: bool,
     pub tu_receiver: TransactionEventReceiver,
     pub tu_sender: TransactionEventSender,
     pub timer_a: Option<u64>,
@@ -218,6 +221,8 @@ impl Transaction {
             state,
             last_response: None,
             last_ack: None,
+            defer_success_ack: false,
+            force_success_ack: false,
             timer_a: None,
             timer_b: None,
             timer_c: None,
@@ -775,9 +780,21 @@ impl Transaction {
         if let Some(ref conn) = connection {
             if let Err(e) = conn.send(ack, self.destination.as_ref()).await {
                 warn!(key = %self.key, error = %e, "ack send failed");
+                if self.defer_success_ack {
+                    return Err(e);
+                }
             }
         } else {
             debug!(key = %self.key, "no connection for ack");
+            if self.defer_success_ack {
+                return Err(Error::TransactionError(
+                    "no connection for controlled ACK".into(),
+                    self.key.clone(),
+                ));
+            }
+        }
+        if self.defer_success_ack && self.state == TransactionState::Accepted {
+            self.invite_reservation.lock().take();
         }
         // RFC 3261 §17.1.1.3 / RFC 6026 §7.2: ACK in Completed (3xx-6xx)
         // immediately terminates the client transaction. ACK in Accepted
@@ -839,32 +856,51 @@ impl Transaction {
         mut observer: impl FnMut(&Response) + Send,
     ) -> Option<SipMessage> {
         while let Some(event) = self.tu_receiver.recv().await {
-            match event {
-                TransactionEvent::Received(msg, connection) => {
-                    if let Some(msg) = match msg {
-                        SipMessage::Request(req) => self.on_received_request(req, connection).await,
-                        SipMessage::Response(resp) => {
-                            self.on_received_response(resp, connection, &mut observer)
-                                .await
-                        }
-                    } {
-                        return Some(msg);
-                    }
-                }
-                TransactionEvent::Timer(t) => {
-                    self.on_timer(t).await.ok();
-                }
-                TransactionEvent::Respond(response) => {
-                    self.respond(response).await.ok();
-                }
-                TransactionEvent::Terminate(key) => {
-                    debug!(%key, "received terminate event");
-                    self.invite_reservation.lock().take();
-                    return None;
-                }
+            if let Some(result) = self.dispatch_event_observed(event, &mut observer).await {
+                return result;
             }
         }
         None
+    }
+
+    // Receive from the channel in a cancel-safe select, then finish dispatch
+    // outside the select so a competing application command cannot drop it.
+    pub(crate) async fn dispatch_event(
+        &mut self,
+        event: TransactionEvent,
+    ) -> Option<Option<SipMessage>> {
+        self.dispatch_event_observed(event, &mut |_| {}).await
+    }
+
+    async fn dispatch_event_observed(
+        &mut self,
+        event: TransactionEvent,
+        observer: &mut (impl FnMut(&Response) + Send),
+    ) -> Option<Option<SipMessage>> {
+        match event {
+            TransactionEvent::Received(msg, connection) => {
+                let message = match msg {
+                    SipMessage::Request(req) => self.on_received_request(req, connection).await,
+                    SipMessage::Response(resp) => {
+                        self.on_received_response(resp, connection, observer).await
+                    }
+                };
+                message.map(Some)
+            }
+            TransactionEvent::Timer(t) => {
+                self.on_timer(t).await.ok();
+                None
+            }
+            TransactionEvent::Respond(response) => {
+                self.respond(response).await.ok();
+                None
+            }
+            TransactionEvent::Terminate(key) => {
+                debug!(%key, "received terminate event");
+                self.invite_reservation.lock().take();
+                Some(None)
+            }
+        }
     }
 
     /// Stop request retransmissions while keeping the transaction alive to
@@ -1099,6 +1135,18 @@ impl Transaction {
             TransactionType::ServerInvite | TransactionType::ServerNonInvite => return None,
             _ => {}
         }
+        if self.defer_success_ack && resp.status_code != StatusCode::Trying {
+            // A controlled re-INVITE belongs to an established dialog. Reject
+            // another tag before it changes state or consumes the cached SDP
+            // answer; an in-dialog request cannot fork into another dialog.
+            let expected = DialogId::try_from((&self.original, TransactionRole::Client)).ok();
+            let received = DialogId::try_from((&resp, TransactionRole::Client)).ok();
+            let expected_cseq = self.original.cseq_header().and_then(|h| h.seq()).ok();
+            let received_cseq = resp.cseq_header().and_then(|h| h.seq()).ok();
+            if expected.is_none() || expected != received || expected_cseq != received_cseq {
+                return None;
+            }
+        }
         if self.transaction_type == TransactionType::ClientInvite
             && resp.status_code.kind() == StatusCodeKind::Successful
             && resp.has_multiple_vias()
@@ -1129,7 +1177,10 @@ impl Transaction {
             }
             StatusCodeKind::Successful => {
                 if self.transaction_type == TransactionType::ClientInvite {
-                    if !self.endpoint_inner.option.auto_ack_2xx {
+                    if !self.endpoint_inner.option.auto_ack_2xx
+                        && !self.defer_success_ack
+                        && !self.force_success_ack
+                    {
                         // auto_ack_2xx = false (proxy mode): a 2xx terminates
                         // the client INVITE transaction at once; the ACK is
                         // the TU's job (RFC 3261 section 17.1.1.2).
@@ -1198,7 +1249,8 @@ impl Transaction {
         // absorption window is preserved.
         let auto_ack_client_invite = self.transaction_type == TransactionType::ClientInvite
             && (new_state == TransactionState::Completed
-                || new_state == TransactionState::Accepted);
+                || (new_state == TransactionState::Accepted
+                    && (!self.defer_success_ack || self.last_ack.is_some())));
 
         self.transition(new_state).ok();
 
@@ -1672,7 +1724,12 @@ impl Transaction {
         );
         self.state = state;
         if let Some(reservation) = self.invite_reservation.lock().as_mut() {
-            reservation.transition(&self.state);
+            if !(self.defer_success_ack
+                && self.state == TransactionState::Accepted
+                && self.transaction_type == TransactionType::ClientInvite)
+            {
+                reservation.transition(&self.state);
+            }
         }
         Ok(self.state.clone())
     }
@@ -1778,7 +1835,9 @@ impl Transaction {
                             // for a 2xx, so retransmitted 2xx fall through
                             // to the TU instead of being absorbed or re-ACKed
                             // here (RFC 3261 section 17.1.1.2).
-                            let auto_ack = self.endpoint_inner.option.auto_ack_2xx
+                            let auto_ack = ((self.endpoint_inner.option.auto_ack_2xx
+                                || self.force_success_ack)
+                                && !self.defer_success_ack)
                                 || resp.status_code.kind() != StatusCodeKind::Successful;
                             if auto_ack {
                                 if let Ok(ack) = self.endpoint_inner.make_ack(&self.original, resp)

@@ -24,7 +24,7 @@ const CALL_ID: &str = "accept-before-handle-test";
 
 /// A new server INVITE dialog and its transaction, with `handle()` not yet
 /// started, plus the raw UAC socket that sent the INVITE.
-async fn incoming_invite(
+pub(super) async fn incoming_invite(
     token: &CancellationToken,
 ) -> crate::Result<(InviteDialog, Transaction, DialogStateReceiver, UdpSocket)> {
     let transport_layer = TransportLayer::new(token.child_token());

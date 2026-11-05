@@ -253,6 +253,13 @@ let (state_sender, _state_receiver) = dialog_layer.new_dialog_state_channel();
 let (invite_dialog, response) = dialog_layer.do_invite(invite_option, state_sender).await?;
 ```
 
+For application-controlled renegotiation on an established call, see
+[`dialog::reinvite`](https://docs.rs/rsipstack/latest/rsipstack/dialog/reinvite/index.html):
+prepare/send a re-INVITE, observe provisional responses, cancel one negotiation,
+and supply the ACK answer to an offerless re-INVITE. Incoming re-INVITE handles
+expose CANCEL and the matching ACK body. The existing `reinvite()` convenience
+method remains available.
+
 ### 5. Implementing a Proxy
 
 ```rust
