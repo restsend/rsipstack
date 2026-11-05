@@ -13,6 +13,7 @@ use crate::transaction::make_tag;
 use crate::transaction::transaction::transaction_event_sender_noop;
 use crate::transaction::{endpoint::EndpointInnerRef, transaction::Transaction};
 use crate::Result;
+use alloc::collections::btree_map::Entry;
 use core::sync::atomic::{AtomicU32, Ordering};
 use tracing::debug;
 
@@ -475,6 +476,9 @@ impl DialogLayer {
     /// Returns:
     /// - Ok(true)  => restored and inserted
     /// - Ok(false) => skipped (already exists or not confirmed)
+    ///
+    /// Concurrent restores of the same dialog insert at most one instance;
+    /// an existing dialog is never replaced by a restored snapshot.
     pub fn restore_from_snapshot(
         &self,
         snapshot: DialogSnapshot,
@@ -503,9 +507,18 @@ impl DialogLayer {
 
         let key = dialog.id().to_string();
 
-        self.inner.dialogs.insert(key, dialog);
-
-        Ok(true)
+        // Another restore or live dialog may have won while we built this one.
+        // Check and insert under the same registry lock, without replacing it.
+        Ok(self
+            .inner
+            .dialogs
+            .with_mut(|dialogs| match dialogs.entry(key) {
+                Entry::Vacant(entry) => {
+                    entry.insert(dialog);
+                    true
+                }
+                Entry::Occupied(_) => false,
+            }))
     }
 
     pub fn remove_dialog(&self, id: &DialogId) {

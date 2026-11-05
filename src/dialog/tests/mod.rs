@@ -18,6 +18,7 @@ mod test_refer_notify;
 mod test_registration_keep_alive;
 mod test_server_dialog;
 mod test_session_id;
+mod test_snapshot_restore;
 mod test_state_after_terminated;
 mod test_sub_pub;
 mod test_target_refresh;
