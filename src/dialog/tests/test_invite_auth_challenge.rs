@@ -10,7 +10,7 @@ use crate::dialog::{
     dialog_layer::DialogLayer,
     invitation::InviteOption,
 };
-use crate::sip::{headers::*, Header, Method, Response, StatusCode, Uri};
+use crate::sip::{headers::*, Header, HeadersExt, Method, Response, StatusCode, Uri};
 use crate::transaction::TransactionReceiver;
 use crate::transport::{udp::UdpConnection, TransportLayer};
 use crate::EndpointBuilder;
@@ -149,6 +149,137 @@ fn credential() -> Credential {
         realm: None,
         auth_username: None,
     }
+}
+
+/// An authentication failure for one in-dialog request must leave the
+/// established session intact and return that request's final response.
+async fn assert_in_dialog_auth(
+    status: StatusCode,
+    with_credential: bool,
+    accept_credentials: bool,
+) -> crate::Result<()> {
+    for method in [
+        Method::Invite,
+        Method::Update,
+        Method::Info,
+        Method::Options,
+    ] {
+        let (p, mut incoming) = peers().await?;
+        let (seen_tx, mut seen) = unbounded_channel();
+        let challenged = status.clone();
+        let port = p.uas_port;
+        tokio::spawn(async move {
+            while let Some(mut tx) = incoming.recv().await {
+                let initial = tx.original.to_header().unwrap().tag().unwrap().is_none();
+                let authed = answers_challenge(&challenged, &tx.original.headers);
+                let is_test_request = !initial && tx.original.method == method;
+                let requires_auth = is_test_request || tx.original.method == Method::Bye;
+                if is_test_request {
+                    seen_tx.send(authed).unwrap();
+                }
+                let status = challenged.clone();
+                tokio::spawn(async move {
+                    if requires_auth && !(authed && accept_credentials) {
+                        tx.reply_with(status.clone(), vec![challenge_header(&status)], None)
+                            .await
+                            .unwrap();
+                    } else {
+                        tx.reply_with(
+                            StatusCode::OK,
+                            vec![Contact::new(format!("<sip:bob@127.0.0.1:{port}>")).into()],
+                            None,
+                        )
+                        .await
+                        .unwrap();
+                    }
+                    while tx.receive().await.is_some() {}
+                });
+            }
+        });
+        let (states, mut events) = unbounded_channel();
+        let (dialog, response) = tokio::time::timeout(
+            PROMPT,
+            p.uac_layer
+                .do_invite(invite_option(&p, with_credential.then(credential)), states),
+        )
+        .await
+        .expect("initial INVITE did not complete")?;
+        assert_eq!(response.unwrap().status_code, StatusCode::OK);
+        while events.try_recv().is_ok() {}
+        let before = dialog.snapshot();
+
+        let response = tokio::time::timeout(PROMPT, async {
+            match method {
+                Method::Invite => dialog.reinvite(None, None).await,
+                Method::Update => dialog.update(None, None).await,
+                Method::Info => dialog.info(None, None).await,
+                Method::Options => dialog.options(None).await,
+                _ => unreachable!(),
+            }
+        })
+        .await
+        .expect("in-dialog auth result must return promptly")?
+        .expect("the final response must be returned");
+        let expected = if with_credential && accept_credentials {
+            StatusCode::OK
+        } else {
+            status.clone()
+        };
+        assert_eq!(response.status_code, expected, "{method}");
+        assert!(dialog.state().is_confirmed(), "{method} ended the call");
+        let after = dialog.snapshot();
+        assert_eq!(after.id, before.id);
+        assert_eq!(after.remote_uri, before.remote_uri);
+        assert!(!seen.try_recv().unwrap());
+        if with_credential {
+            assert!(seen.try_recv().unwrap());
+        }
+        assert!(seen.try_recv().is_err(), "unexpected extra auth retry");
+        while let Ok(event) = events.try_recv() {
+            assert!(!matches!(event, DialogState::Terminated(..)));
+        }
+        // A failed modification must still permit call teardown, including
+        // when BYE itself receives a final authentication failure.
+        tokio::time::timeout(PROMPT, dialog.bye())
+            .await
+            .expect("BYE did not complete")?;
+        assert!(dialog.state().is_terminated());
+        p.token.cancel();
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn in_dialog_auth_without_credentials_preserves_session() -> crate::Result<()> {
+    for status in [
+        StatusCode::Unauthorized,
+        StatusCode::ProxyAuthenticationRequired,
+    ] {
+        assert_in_dialog_auth(status, false, false).await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn in_dialog_auth_rejected_credentials_preserves_session() -> crate::Result<()> {
+    for status in [
+        StatusCode::Unauthorized,
+        StatusCode::ProxyAuthenticationRequired,
+    ] {
+        assert_in_dialog_auth(status, true, false).await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn in_dialog_auth_successful_retry_preserves_session() -> crate::Result<()> {
+    for status in [
+        StatusCode::Unauthorized,
+        StatusCode::ProxyAuthenticationRequired,
+    ] {
+        assert_in_dialog_auth(status, true, true).await?;
+    }
+    Ok(())
 }
 
 fn is_auth_terminated(state: &DialogState) -> bool {
