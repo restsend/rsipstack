@@ -374,7 +374,7 @@ pub fn make_uuid_v4() -> String {
 }
 
 #[cfg(all(feature = "std", not(target_family = "wasm")))]
-fn fill_random_bytes(buf: &mut [u8]) {
+pub(crate) fn fill_random_bytes(buf: &mut [u8]) {
     use rand::Rng;
     rand::rng().fill_bytes(buf);
 }
@@ -383,7 +383,7 @@ fn fill_random_bytes(buf: &mut [u8]) {
 /// is what tags/branches need; hardware entropy arrives with the embassy
 /// backend (WP3) — do not rely on this for secrets.
 #[cfg(not(feature = "std"))]
-fn fill_random_bytes(buf: &mut [u8]) {
+pub(crate) fn fill_random_bytes(buf: &mut [u8]) {
     if crate::platform::rng::try_fill(buf) {
         return;
     }
@@ -405,7 +405,7 @@ fn fill_random_bytes(buf: &mut [u8]) {
 }
 
 #[cfg(target_family = "wasm")]
-fn fill_random_bytes(buf: &mut [u8]) {
+pub(crate) fn fill_random_bytes(buf: &mut [u8]) {
     for byte in buf.iter_mut() {
         *byte = (js_sys::Math::random() * 256.0) as u8;
     }
