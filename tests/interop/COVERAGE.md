@@ -3,6 +3,7 @@
 This harness is a growing collection of real-process interoperability tests,
 not a certification of complete SIP conformance. A passing case covers only
 the exchange and assertions stated for that case.
+The current baseline is upstream `54e99b0` (0.8.1) with the standalone application tests.
 
 ## Known gap: standard SHA-256 digest challenge
 
@@ -11,7 +12,7 @@ or select just this issue with `bash scripts/interop/run.sh sipp known_gap_auth_
 
 SIPp sends a 401 with `algorithm=SHA-256` and verifies the authenticated retry
 using its independent Digest implementation. The expected exchange ends in
-200 / ACK / BYE. At upstream revision `03f191d`, rsipstack instead returns
+200 / ACK / BYE. At upstream revision `004f607`, rsipstack instead returns
 `SipMessageError(ParseError("invalid Algorithm: SHA-256"))`. Its algorithm
 parser recognizes `SHA256`, whereas the standardized token has a hyphen.
 See [RFC 8760](https://www.rfc-editor.org/rfc/rfc8760.html).
@@ -25,20 +26,21 @@ by removing `known_gap_` from their names and update this document.
 
 The harness commit does not modify the digest parser or other library code.
 
-## Known gap: remote Session-ID UUID lost before BYE
+## Resolved: remote Session-ID UUID lost before BYE
 
-Reproduce with `bash scripts/interop/run.sh sipp known_gap_session_id`.
+Run with `bash scripts/interop/run.sh regression session_id`.
 The INVITE advertises a local UUID with a nil remote UUID; SIPp's 200 supplies
 its own UUID and echoes the caller's. ACK correctly contains both UUIDs,
 but the subsequent BYE resets the remote UUID to nil on upstream `03f191d`.
 SIPp's header assertion fails. The expected BYE retains the UUID learned from
 the peer; see [RFC 7989 sections 6 and 8](https://www.rfc-editor.org/rfc/rfc7989.html#section-6).
-Both UDP and TCP probes remain failing until a separate library fix is made.
+Both UDP and TCP cases pass on upstream `004f607` and are now part of regression.
+Their assertions are unchanged; only the `known_gap_` classification was removed.
 
 ## Known gaps: incomplete PRACK reliability and validation
 
 Use `bash scripts/interop/run.sh known-gaps prack`. Eight probes fail at
-upstream `03f191d`, reproducing the following on both UDP and TCP:
+upstream `004f607`, reproducing the following on both UDP and TCP:
 
 - `prack_rseq_gap`: after acknowledging RSeq 1, the peer sends RSeq 3 before
   RSeq 2. rsipstack sends `RAck: 3 1 INVITE`; RFC 3262 section 4 requires
@@ -59,18 +61,22 @@ These tests distinguish parsing/accepting a PRACK from implementing the full
 100rel state machine. A passing basic PRACK exchange is not evidence that
 the remaining reliability, validation or offer/answer behavior is complete.
 
-## Known gaps: blocked ACK
+## Resolved: blocked ACK
 
-`bash scripts/interop/run.sh known-gaps faults` exercises two failures on
-upstream `03f191d` through the public dialog API:
+`bash scripts/interop/run.sh regression blocked_ack` exercises three cases,
+including wrong-tag rejection. The two former failures on upstream `03f191d`
+now pass on `004f607` after [PR #235](https://github.com/restsend/rsipstack/pull/235):
 
 - `remote_bye_during_blocked_ack`: a valid BYE arrives after 200 while the UDP
-  ACK send is blocked. The peer expects 200 but receives 481. The required
+  ACK send is blocked. The old baseline replied 481 instead of 200. The required
   lifecycle events are one Confirmed followed by one Terminated, with no
   resurrection when ACK completes.
 - `local_bye_waits_for_blocked_ack`: the dialog should already be confirmed
   on receiving 200, and a local BYE must wait for ACK send completion. The
-  baseline still exposes Calling at the blocked-ACK checkpoint.
+  old baseline exposed Calling at the blocked-ACK checkpoint.
+
+Both former known-gap cases now run in the normal regression suite with their
+original assertions, alongside the wrong-tag case.
 
 The blocked-ACK probes deliberately exercise a peer that sends BYE immediately
 after its 200. This is an adversarial timing case, not a claim that a normal
@@ -86,9 +92,10 @@ accepting other response codes.
 
 ## Executed matrix
 
-There are 161 external-peer test executions:
-147 regression cases and 14 known-gap probes. The lost-PRACK-response and all
-fault-injection cases are UDP-only; the other families run on both transports.
+There are 183 external-peer test executions:
+173 regression cases and 10 known-gap probes. The lost-PRACK-response,
+application lost-BYE-response and all fault-injection cases are UDP-only;
+the other families run on both transports.
 
 | Area | Exchanges / assertions | Executions |
 | --- | --- | ---: |
@@ -103,13 +110,16 @@ fault-injection cases are UDP-only; the other families run on both transports.
 | Session modification | hold/resume re-INVITEs, 488 rejection, UPDATE | 6 |
 | Termination | CANCEL/487, crossed CANCEL/200, BYE/481 | 6 |
 | Dialog identity | wrong local/remote tags then valid BYE | 2 |
+| Session-ID | retain the local/remote UUID pair through ACK and BYE | 2 |
 | Repeated / forked answers | repeated 200 re-ACK, second answered branch ACK/BYE | 4 |
 | Routing | loose Record-Route on ACK/BYE; UPDATE Contact refresh | 4 |
 | Registration | MD5, granted expiry, refresh/unregister, Service-Route, 423 | 6 |
 | Existing subscription | refresh, incoming presence NOTIFY, application reply, unsubscribe | 2 |
 | UDP fault injection with PJSIP | loss in both directions of INVITE, 200, ACK, BYE, CANCEL and their replies; ACK/BYE delays | 20 |
-| UDP races with SIPp | delayed ACK delivery, wrong-tag BYE during blocked ACK, CANCEL crossing held 200, crossed BYEs | 4 |
-| Known-gap probes | SHA-256; Session-ID; PRACK; blocked ACK/BYE ordering | 14 |
+| UDP races with SIPp | delayed ACK delivery, valid/wrong-tag BYE during blocked ACK, local BYE waiting for ACK, CANCEL crossing held 200, crossed BYEs | 6 |
+| Standalone proxy | two PJSUA peers; caller/callee BYE, 486, CANCEL; SIPp late 200 and lost BYE response; preserved dialog identity and Via/Record-Route forwarding | 11 |
+| Standalone B2BUA | two independent dialogs; caller/callee BYE, 486, CANCEL; SIPp late 200 and lost BYE response; independent identifiers and both-leg cleanup | 11 |
+| Known-gap probes | SHA-256; PRACK | 10 |
 
 The lost-487 case is a regression test. An earlier fixture dropped the server
 INVITE transaction when `dialog.handle()` returned after CANCEL, cancelling
@@ -141,8 +151,10 @@ See [RFC 3262 sections 3 and 4](https://www.rfc-editor.org/rfc/rfc3262.html#sect
 The subscription fixture starts with an existing dialog's tags. It checks the
 public subscription API and incoming NOTIFY dispatch; it does not claim to
 test initial SUBSCRIBE establishment or the final terminated NOTIFY exchange.
-The route test uses a single local SIPp endpoint as the next hop; it checks
-the learned Route headers, not a multi-proxy deployment.
+The direct route test uses a single local SIPp endpoint as the next hop; it
+checks learned Route headers. The standalone proxy cases add one real proxy
+process between two independent peers, but do not cover a multi-proxy chain.
+See [the application contract and limitations](README.md#standalone-proxy-and-b2bua).
 
 ## Remaining coverage
 
@@ -157,6 +169,7 @@ features. No finite suite covers every SIP message sequence or peer behavior.
 | Transactions | multi-packet loss bursts, long timer exhaustion, crash/restart recovery |
 | Authentication | multiple challenges, auth-int, sess algorithms, SHA-512/256, rejected credentials |
 | Routing | strict routes, several proxies, redirects, Path/Outbound flows |
+| Standalone applications | proxy-specific 2xx retransmission policy, forking, session modification, PRACK, authentication, disconnect recovery and media relay |
 | Event packages | initial SUBSCRIBE/NOTIFY races, terminal NOTIFY, PUBLISH, REFER/Replaces |
 | Session extensions | session timers, full Session-ID transfer/conference flows |
 | Media and scale | RTP/SRTP, codecs, ICE, DTMF media events, concurrency and soak/load tests |

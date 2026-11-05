@@ -442,7 +442,7 @@ cases! {
     (udp_known_gap_prack_rseq_gap, tcp_known_gap_prack_rseq_gap, Case::Prack("prack_gap")),
     (udp_record_route, tcp_record_route, Case::RecordRoute),
     (udp_target_refresh, tcp_target_refresh, Case::TargetRefresh),
-    (udp_known_gap_session_id, tcp_known_gap_session_id, Case::SessionId),
+    (udp_session_id, tcp_session_id, Case::SessionId),
     (udp_forked_200, tcp_forked_200, Case::Forked200),
 }
 

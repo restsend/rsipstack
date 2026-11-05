@@ -2,8 +2,11 @@
 #[macro_use]
 mod failure;
 pub use failure::{Failure, Required, TestResult};
+mod applications;
+mod b2bua;
 mod faults;
 mod pjsip;
+mod proxy;
 mod sipp;
 use rsipstack::{
     dialog::{
