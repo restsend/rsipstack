@@ -785,8 +785,20 @@ impl InviteDialog {
         }
 
         let cseq = tx.original.cseq_header()?.seq()?;
-        let remote_seq = self.inner.remote_seq.load(Ordering::Relaxed);
-        if remote_seq > 0 && cseq < remote_seq {
+        // ACK and CANCEL reuse their INVITE's CSeq and are matched by the
+        // transaction layer. Neither participates in the dialog sequence.
+        // Re-evaluate the comparison after every competing update: a failed
+        // one-shot CAS must not admit a stale request or lose a newer CSeq.
+        let sequence = if matches!(tx.original.method, Method::Ack | Method::Cancel) {
+            Ok(self.inner.remote_seq.load(Ordering::Relaxed))
+        } else {
+            self.inner
+                .remote_seq
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |remote_seq| {
+                    (cseq >= remote_seq).then_some(cseq)
+                })
+        };
+        if let Err(remote_seq) = sequence {
             match self.role() {
                 // Server discards old requests silently.
                 TransactionRole::Server => {
@@ -812,11 +824,6 @@ impl InviteDialog {
                 }
             }
         }
-
-        self.inner
-            .remote_seq
-            .compare_exchange(remote_seq, cseq, Ordering::Relaxed, Ordering::Relaxed)
-            .ok();
 
         if self.inner.is_confirmed() {
             // Validate before the application can change its media state or

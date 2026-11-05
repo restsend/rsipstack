@@ -8,6 +8,10 @@
   operation, or explicitly hang up. Initial INVITE authentication and early
   dialog handling are unchanged; an outgoing BYE still ends the dialog.
   Public signatures, configuration defaults, and snapshot fields are unchanged.
+- Atomically validate and advance the remote CSeq for incoming INVITE-dialog
+  requests. Concurrent requests cannot lose a newer sequence number or pass
+  using a stale comparison. ACK/CANCEL keep their INVITE's CSeq and do not
+  advance the dialog counter; equal CSeq values retain their existing behavior.
 
 ## 0.8.0
 
