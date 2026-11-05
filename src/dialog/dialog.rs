@@ -352,6 +352,7 @@ pub struct DialogInner {
     pub(super) remote_reliable: Mutex<Vec<RemoteReliableState>>,
     pub(super) reliable_clients: Mutex<BTreeMap<(DialogId, u32), super::reliable::ReliableClient>>,
     pub(super) reliable_config: Mutex<Option<super::reliable::ReliableProvisionalConfig>>,
+    pub(crate) session_timer: Mutex<Option<Arc<super::session_timer::SessionTimer>>>,
     pub(super) reliable_servers: Mutex<BTreeMap<u32, Arc<super::reliable::ReliableServer>>>,
     /// The last ACK received for an INVITE or re-INVITE this dialog answered
     /// (UAS role). Carries the answer when the 2xx carried the offer.
@@ -552,6 +553,7 @@ impl DialogInner {
             remote_reliable: Mutex::new(Vec::new()),
             reliable_clients: Mutex::new(BTreeMap::new()),
             reliable_config: Mutex::new(None),
+            session_timer: Mutex::new(None),
             reliable_servers: Mutex::new(BTreeMap::new()),
             remote_ack: Mutex::new(None),
             server_connection: Mutex::new(None),
@@ -1165,6 +1167,9 @@ impl DialogInner {
                 }
             }
         }
+        if let Some(timer) = self.session_timer.lock().as_ref() {
+            timer.outgoing(&mut request);
+        }
         Ok(request)
     }
 
@@ -1557,7 +1562,25 @@ impl DialogInner {
             .as_ref()
             .map(|o| super::reinvite::RequestCancellation::new(&tx, Some(o.cancellation.clone())));
         let mut auth = AuthRetry::new();
-        while let Some(msg) = tx.receive().await {
+        let mut timer_retries = 0;
+        loop {
+            let timer = self.session_timer.lock().clone();
+            let original = tx.original.clone();
+            let mut timer_result = Ok(());
+            let msg = tx
+                .receive_with_response_observer(|response, _received_at| {
+                    if DialogId::try_from((response, TransactionRole::Client))
+                        .is_ok_and(|id| id == *self.id.lock())
+                    {
+                        if let Some(timer) = &timer {
+                            timer_result = timer.received(&original, response);
+                        }
+                    }
+                })
+                .await;
+            let Some(msg) = msg else {
+                break;
+            };
             match msg {
                 SipMessage::Response(resp) => {
                     // RFC 7989 §8: accept the peer's (possibly new) UUID from
@@ -1686,6 +1709,27 @@ impl DialogInner {
                         }
                     }
 
+                    let timer = self.session_timer.lock().clone();
+                    if let Some(timer) = timer {
+                        if !options
+                            .as_ref()
+                            .is_some_and(|o| o.cancellation.is_cancelled())
+                        {
+                            if let Some(next) = timer.retry(self, &tx, &resp, &mut timer_retries)? {
+                                tx = next;
+                                self.reserve_invite(&tx)?;
+                                auth = AuthRetry::new();
+                                tx.send().await?;
+                                cancel_watch = options.as_ref().map(|o| {
+                                    super::reinvite::RequestCancellation::new(
+                                        &tx,
+                                        Some(o.cancellation.clone()),
+                                    )
+                                });
+                                continue;
+                            }
+                        }
+                    }
                     debug!(
                         id = self.id.lock().to_string(),
                         method = %method,
@@ -1755,6 +1799,15 @@ impl DialogInner {
                                 gate.0.finish();
                             }
                         }
+                    }
+                    // A malformed timer agreement cannot skip the successful
+                    // INVITE's ACK, including an offer answered in that ACK.
+                    if let Err(error) = timer_result {
+                        super::invite_dialog::InviteDialog::from_inner(self.clone())
+                            .bye()
+                            .await
+                            .ok();
+                        return Err(error);
                     }
                     return Ok(Some(resp));
                 }
@@ -2050,6 +2103,7 @@ impl DialogInner {
             remote_reliable: Mutex::new(Vec::new()),
             reliable_clients: Mutex::new(BTreeMap::new()),
             reliable_config: Mutex::new(None),
+            session_timer: Mutex::new(None),
             reliable_servers: Mutex::new(BTreeMap::new()),
             remote_ack: Mutex::new(None),
             server_connection: Mutex::new(None),
@@ -2265,6 +2319,11 @@ impl DialogInner {
                     reason: reason.clone(),
                 },
             );
+        }
+        if matches!(state, DialogState::Terminated(..)) {
+            if let Some(timer) = self.session_timer.lock().as_ref() {
+                timer.stop();
+            }
         }
         *old_state = state.clone();
         // Try to send state update, but don't fail if channel is closed

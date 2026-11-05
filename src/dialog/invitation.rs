@@ -551,6 +551,9 @@ impl DialogLayer {
                 }
             }
         }
+        if let Some(config) = self.inner.session_timer_config.lock().as_ref() {
+            config.initial(&mut request);
+        }
         Ok(request)
     }
 
@@ -912,6 +915,9 @@ impl DialogLayer {
         dialog.inner.lifecycle.lock().sender = self.inner.lifecycle_sender.lock().clone();
         dialog.inner.reserve_invite(&tx)?;
         *dialog.inner.reliable_config.lock() = self.inner.reliable_config.lock().clone();
+        if let Some(config) = self.inner.session_timer_config.lock().clone() {
+            super::session_timer::SessionTimer::install(&dialog.inner, config);
+        }
         Ok((dialog, tx))
     }
 }

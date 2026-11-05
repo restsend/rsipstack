@@ -16,6 +16,7 @@ mod faults;
 mod prack_sdp;
 mod prack_uas;
 mod registration;
+mod session_timer;
 mod subscription;
 
 pub(super) struct Sipp {
@@ -79,11 +80,13 @@ impl Sipp {
             vec![]
         };
         let child = Command::new(binary)
-            .args(if scenario.starts_with("prack_uas") {
-                vec![local_uri.host_with_port.to_string()]
-            } else {
-                vec![]
-            })
+            .args(
+                if scenario.starts_with("prack_uas") || scenario.starts_with("session_uas") {
+                    vec![local_uri.host_with_port.to_string()]
+                } else {
+                    vec![]
+                },
+            )
             .args(duplicate_flags)
             .current_dir(dir)
             .arg("-sf")

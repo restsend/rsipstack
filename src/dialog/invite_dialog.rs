@@ -389,6 +389,7 @@ impl InviteDialog {
         self.inner.transition(DialogState::Calling(self.id()));
         let mut auth = AuthRetry::new();
         tx.track_receipt_times(self.inner.lifecycle.lock().sender.is_some());
+        let mut timer_retries = 0;
         tx.send().await?;
         // Record the flow the INVITE actually went out on, so later
         // in-dialog requests (BYE / re-INVITE / INFO) reuse it instead of
@@ -400,6 +401,9 @@ impl InviteDialog {
             let ack = InviteAck::new();
             let _ack_guard = InitialAckGuard(ack.clone());
             let mut established = Ok(false);
+            let timer = self.inner.session_timer.lock().clone();
+            let request = tx.original.clone();
+            let mut timer_result = Ok(());
             let msg = tx
                 .receive_with_response_observer(|resp, received_at| {
                     let peer_uuid = resp.session_id_header().and_then(|s| s.local_uuid());
@@ -407,11 +411,20 @@ impl InviteDialog {
                     if resp.status_code.kind() == StatusCodeKind::Successful {
                         self.inner.initial_ack.lock().replace(ack.clone());
                         established = self.establish_from_2xx(resp, received_at, &mut register);
+                        if established.is_ok() {
+                            if let Some(timer) = &timer {
+                                timer_result = timer.received(&request, resp);
+                            }
+                        }
                     }
                 })
                 .await;
             ack.finish();
             let cancelled = established?;
+            if let Err(error) = timer_result {
+                self.bye().await.ok();
+                return Err(error);
+            }
             let Some(msg) = msg else { break };
             if matches!(&msg, SipMessage::Response(r) if r.status_code.kind() != StatusCodeKind::Provisional)
             {
@@ -489,6 +502,23 @@ impl InviteDialog {
                                 TerminatedReason::ProxyAuthRequired,
                             ));
                             break;
+                        }
+                    }
+                    let timer = self.inner.session_timer.lock().clone();
+                    if let Some(timer) = timer {
+                        if !self.inner.cancel_requested.load(Ordering::SeqCst) {
+                            if let Some(next) =
+                                timer.retry(&self.inner, tx, &resp, &mut timer_retries)?
+                            {
+                                *tx = next;
+                                self.inner.reserve_invite(tx)?;
+                                self.inner.update_remote_tag("")?;
+                                *self.inner.initial_request.lock() = tx.original.clone();
+                                auth = AuthRetry::new();
+                                tx.send().await?;
+                                self.inner.set_server_connection(tx.connection.clone());
+                                continue;
+                            }
                         }
                     }
                     final_response = Some(resp.clone());
@@ -924,6 +954,10 @@ impl InviteDialog {
                     return Ok(());
                 }
             }
+        }
+
+        if self.inner.handle_session_timer(tx).await? {
+            return Ok(());
         }
 
         // A locally originated dialog can receive PRACK for its re-INVITE.

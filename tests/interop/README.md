@@ -21,11 +21,11 @@ brew install cmake pkg-config openssl@3 python
 From the repository root:
 
 ```sh
-bash scripts/interop/run.sh regression                # supported baseline (198 tests)
-bash scripts/interop/run.sh all                       # all 200; includes 2 known-gap probes
+bash scripts/interop/run.sh regression                # supported baseline (206 tests)
+bash scripts/interop/run.sh all                       # all 208; includes 2 known-gap probes
 bash scripts/interop/run.sh pjsip                     # 76 PJSUA regression tests
 bash scripts/interop/run.sh pjsip mid_dialog          # 36 mid-dialog PJSUA cases
-bash scripts/interop/run.sh sipp                      # 102 SIPp tests, including known gaps
+bash scripts/interop/run.sh sipp                      # 110 SIPp tests, including known gaps
 bash scripts/interop/run.sh proxy                     # 11 standalone proxy cases
 bash scripts/interop/run.sh b2bua                     # 11 linked two-dialog B2BUA cases
 bash scripts/interop/run.sh sipp prack                # all 27 PRACK cases
@@ -35,6 +35,7 @@ bash scripts/interop/run.sh known-gaps                # reproduce documented fai
 bash scripts/interop/run.sh pjsip udp_uac_peer_bye     # one test
 bash scripts/interop/run.sh sipp wrong_tag_bye         # UDP and TCP
 bash scripts/interop/run.sh pjsip bridge               # two-peer hold/resume bridge
+bash scripts/interop/run.sh sipp session_timer         # eight RFC 4028 wire exchanges
 bash scripts/interop/run.sh sipp bridge                # offerless bridge and lost SDP ACK
 ```
 
@@ -67,6 +68,9 @@ With Rust dependencies and peers already cached, `CARGO_NET_OFFLINE=true bash
 scripts/interop/run.sh all` runs without downloads. This requires an existing
 peer cache or explicit binary overrides; Cargo's offline flag does not disable
 the peer download scripts.
+
+See [SESSION_TIMERS.md](SESSION_TIMERS.md) for the opt-in timer API, failure
+policy, and short regression coverage.
 
 ## Coverage and expectations
 

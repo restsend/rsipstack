@@ -112,8 +112,8 @@ accepting other response codes.
 
 ## Executed matrix
 
-There are 200 external-peer test executions:
-198 regression cases and 2 known-gap probes. The lost-PRACK-response,
+There are 208 external-peer test executions:
+206 regression cases and 2 known-gap probes. The lost-PRACK-response,
 application lost-BYE-response and all fault-injection cases are UDP-only;
 the other families run on both transports.
 
@@ -127,6 +127,7 @@ the other families run on both transports.
 | Reliable provisional responses | UAC/UAS validation, retransmission, contiguous RSeq, offer/answer in PRACK, 401/407 | 27 |
 | Call progress | 100, 180, SDP in 183, final 200 | 2 |
 | In-dialog methods | OPTIONS, INFO with DTMF body, MESSAGE with text | 2 |
+| RFC 4028 | UAC/UAS negotiation, 422, UPDATE/re-INVITE refresh and teardown over UDP/TCP | 8 |
 | Session modification | hold/resume re-INVITEs, 488 rejection, UPDATE | 6 |
 | Termination | CANCEL/487, crossed CANCEL/200, BYE/481 | 6 |
 | Dialog identity | wrong local/remote tags then valid BYE | 2 |
@@ -192,7 +193,7 @@ features. No finite suite covers every SIP message sequence or peer behavior.
 | Routing | strict routes, several proxies, redirects, Path/Outbound flows |
 | Standalone applications | proxy-specific 2xx retransmission policy, forking, session modification, PRACK, authentication, disconnect recovery and media relay |
 | Event packages | initial SUBSCRIBE/NOTIFY races, terminal NOTIFY, PUBLISH, REFER/Replaces |
-| Session extensions | session timers, full Session-ID transfer/conference flows |
+| Session extensions | proxy timer policy, timer persistence, full Session-ID transfer/conference flows |
 | Media and scale | RTP/SRTP, codecs, ICE, DTMF media events, concurrency and soak/load tests |
 
 Add focused XML scenarios and public-API assertions for these areas as the
@@ -236,3 +237,10 @@ Priorities beyond the executed matrix above:
    DNS failover and transport reconnection.
 4. Separate longer stress/soak and parser fuzzing jobs, with explicit resource
    limits and reproducible seeds. These are not enabled by the current runner.
+
+## Session timers
+
+Eight SIPp cases exercise RFC 4028 UAC/UAS with UPDATE and re-INVITE over
+UDP/TCP. They verify 422 retry identity, negotiated intervals and refresher
+changes, ACK, BYE and timer/registry cleanup. See [SESSION_TIMERS.md](SESSION_TIMERS.md)
+for the API, virtual-clock library regressions and remaining integration limits.

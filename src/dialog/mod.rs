@@ -18,6 +18,7 @@ pub mod reinvite;
 pub mod reinvite_bridge;
 pub mod reliable;
 pub mod server_dialog;
+pub mod session_timer;
 pub mod subscription;
 
 #[cfg(test)]

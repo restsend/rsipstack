@@ -33,3 +33,5 @@ mod test_prack_validation;
 mod test_reinvite_bridge;
 mod test_reinvite_control;
 mod test_reliable_provisional;
+
+mod test_session_timer;

@@ -195,6 +195,8 @@ pub struct Transaction {
     retransmission: bool,
     is_cleaned_up: bool,
     invite_reservation: Mutex<Option<InviteReservation>>,
+    pub(crate) session_timer:
+        crate::platform::sync::Mutex<Option<Arc<crate::dialog::session_timer::SessionTimer>>>,
     pub(crate) reliable_provisional:
         crate::platform::sync::Mutex<Option<Arc<crate::dialog::reliable::ReliableServer>>>,
 }
@@ -247,6 +249,7 @@ impl Transaction {
             is_cleaned_up: false,
             invite_reservation: Mutex::new(None),
             reliable_provisional: crate::platform::sync::Mutex::new(None),
+            session_timer: crate::platform::sync::Mutex::new(None),
         };
         tx.endpoint_inner
             .attach_transaction(&tx.key, tx.tu_sender.clone());
@@ -532,6 +535,11 @@ impl Transaction {
             response
         };
 
+        let session_timer = self.session_timer.lock().clone();
+        let mut response = response;
+        if let Some(timer) = &session_timer {
+            timer.prepare_response(&self.original, &mut response)?;
+        }
         let new_state = match response.status_code.kind() {
             StatusCodeKind::Provisional => match response.status_code {
                 StatusCode::Trying => TransactionState::Trying,
@@ -620,7 +628,12 @@ impl Transaction {
             }
         }
         guard.0 = None;
+        // Non-INVITE termination moves last_response into the endpoint cache.
+        let timer_response = session_timer.as_ref().and(self.last_response.clone());
         self.transition(new_state)?;
+        if let (Some(timer), Some(response)) = (session_timer, timer_response) {
+            timer.sent(&self.original, &response);
+        }
         if let (Some(server), Some(response)) = (reliable, self.last_response.as_ref()) {
             server.sent(response);
         }

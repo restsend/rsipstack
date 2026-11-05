@@ -39,6 +39,8 @@ pub struct DialogLayerInner {
     pub(super) last_seq: AtomicU32,
     pub(super) dialogs: RwMap<String, Dialog>,
     retired_reliable: RwMap<String, Dialog>,
+    pub(super) session_timer_config:
+        crate::platform::sync::Mutex<Option<super::session_timer::SessionTimerConfig>>,
     pub(super) reliable_config:
         crate::platform::sync::Mutex<Option<super::reliable::ReliableProvisionalConfig>>,
 }
@@ -150,6 +152,7 @@ impl DialogLayer {
                 dialogs: RwMap::new(),
                 retired_reliable: RwMap::new(),
                 reliable_config: crate::platform::sync::Mutex::new(None),
+                session_timer_config: crate::platform::sync::Mutex::new(None),
             }),
         }
     }
@@ -172,6 +175,19 @@ impl DialogLayer {
         config: Option<super::reliable::ReliableProvisionalConfig>,
     ) {
         *self.inner.reliable_config.lock() = config;
+    }
+
+    /// Opt in to RFC 4028 for subsequently created INVITE dialogs. Existing and
+    /// snapshot-restored dialogs retain their own recovery policy.
+    pub fn set_session_timer(
+        &self,
+        config: Option<super::session_timer::SessionTimerConfig>,
+    ) -> Result<()> {
+        if let Some(config) = &config {
+            config.validate()?;
+        }
+        *self.inner.session_timer_config.lock() = config;
+        Ok(())
     }
 
     pub fn get_or_create_server_invite(
@@ -238,6 +254,10 @@ impl DialogLayer {
         *tx.initial_dialog.lock() = Some(Arc::downgrade(&dialog.inner));
         dialog.inner.reserve_invite(tx)?;
         *dialog.inner.reliable_config.lock() = self.inner.reliable_config.lock().clone();
+        if let Some(config) = self.inner.session_timer_config.lock().clone() {
+            super::session_timer::SessionTimer::install(&dialog.inner, config);
+            *tx.session_timer.lock() = dialog.inner.session_timer.lock().clone();
+        }
         dialog.inner.attach_reliable_server(tx)?;
         dialog.inner.set_server_connection(tx.connection.clone());
         self.inner
