@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Dialog registries now use the complete `DialogId` (Call-ID, local tag,
+  remote tag) as their key. Hyphens in these components can no longer make
+  distinct dialogs collide during registration, lookup, removal, or restore.
+- New `DialogLayer::dialog_ids()` enumerates structured identities. Existing
+  signatures and the `DialogId` display format remain unchanged. The legacy
+  `get_dialog_with(&String)` scans display strings and returns `None` for an
+  ambiguous match; `all_dialog_ids()` can contain duplicate display strings.
+  Applications using strings as identity keys should retain the three fields
+  and use `get_dialog(&DialogId)` instead.
+
 ## 0.8.1
 
 Fourteen fixes and additions merged (#223–#236).

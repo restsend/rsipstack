@@ -179,7 +179,7 @@ impl DialogGuard {
 
 impl Drop for DialogGuard {
     fn drop(&mut self) {
-        let dlg = match self.dialog_layer_inner.dialogs.remove(&self.id.to_string()) {
+        let dlg = match self.dialog_layer_inner.dialogs.remove(&self.id) {
             Some(dlg) => dlg,
             None => return,
         };
@@ -208,7 +208,7 @@ impl Drop for DialogGuardForUnconfirmed {
         if self.dialog.is_none() {
             return;
         }
-        let client_dialog = match self.dialog_layer_inner.dialogs.remove(&self.id.to_string()) {
+        let client_dialog = match self.dialog_layer_inner.dialogs.remove(&self.id) {
             Some(Dialog::Invite(client_dialog)) => client_dialog,
             Some(_) => return,
             // The application already removed the dialog from the layer
@@ -676,7 +676,7 @@ impl DialogLayer {
 
         self.inner
             .dialogs
-            .insert(id.to_string(), Dialog::Invite(dialog.clone()));
+            .insert(id.clone(), Dialog::Invite(dialog.clone()));
 
         let mut guard = DialogGuardForUnconfirmed {
             dialog_layer_inner: self.inner.clone(),
@@ -694,15 +694,15 @@ impl DialogLayer {
         let r = dialog
             .process_invite_with_registration(tx, |new_id| {
                 self.inner.dialogs.with_mut(|dialogs| {
-                    dialogs.remove(&id.to_string());
-                    dialogs.insert(new_id.to_string(), Dialog::Invite(dialog.clone()));
+                    dialogs.remove(&id);
+                    dialogs.insert(new_id.clone(), Dialog::Invite(dialog.clone()));
                 });
             })
             .boxed()
             .await;
         guard.dialog = None;
         if !dialog.inner.is_confirmed() {
-            self.inner.dialogs.remove(&id.to_string());
+            self.inner.dialogs.remove(&id);
         }
 
         match r {
@@ -771,7 +771,7 @@ impl DialogLayer {
         // 1) register early key (so in-dialog requests can be matched)
         self.inner
             .dialogs
-            .insert(id0.to_string(), Dialog::Invite(dialog.clone()));
+            .insert(id0.clone(), Dialog::Invite(dialog.clone()));
 
         let inner = self.inner.clone();
         let dialog_clone = dialog.clone();
@@ -796,8 +796,8 @@ impl DialogLayer {
             let r = dialog_clone
                 .process_invite_with_registration(invite_tx, |new_id| {
                     inner.dialogs.with_mut(|dialogs| {
-                        dialogs.remove(&id0.to_string());
-                        dialogs.insert(new_id.to_string(), Dialog::Invite(dialog_clone.clone()));
+                        dialogs.remove(&id0);
+                        dialogs.insert(new_id.clone(), Dialog::Invite(dialog_clone.clone()));
                     });
                 })
                 .boxed()
@@ -809,7 +809,7 @@ impl DialogLayer {
                 .expect("transaction should be available");
 
             if !dialog_clone.inner.is_confirmed() {
-                inner.dialogs.remove(&id0.to_string());
+                inner.dialogs.remove(&id0);
             }
 
             match &r {
