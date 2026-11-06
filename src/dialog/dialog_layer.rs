@@ -37,7 +37,7 @@ pub struct DialogLayerInner {
     pub(super) lifecycle_sender:
         crate::platform::sync::Mutex<Option<super::lifecycle::DialogLifecycleSender>>,
     pub(super) last_seq: AtomicU32,
-    pub(super) dialogs: RwMap<String, Dialog>,
+    pub(super) dialogs: RwMap<DialogId, Dialog>,
 }
 pub type DialogLayerInnerRef = Arc<DialogLayerInner>;
 
@@ -131,7 +131,7 @@ pub type DialogLayerInnerRef = Arc<DialogLayerInner>;
 /// DialogLayer is thread-safe and can be shared across multiple tasks:
 /// * Dialog lookup operations are concurrent
 /// * Dialog creation is serialized when needed
-/// * Automatic cleanup prevents memory leaks
+/// * Applications remove completed dialogs with [`Self::remove_dialog`]
 pub struct DialogLayer {
     pub endpoint: EndpointInnerRef,
     pub inner: DialogLayerInnerRef,
@@ -170,7 +170,7 @@ impl DialogLayer {
     ) -> Result<InviteDialog> {
         let mut id = DialogId::try_from(tx)?;
         if !id.local_tag.is_empty() {
-            let dlg = self.inner.dialogs.get(&id.to_string());
+            let dlg = self.inner.dialogs.get(&id);
             match dlg {
                 Some(Dialog::Invite(dlg)) => return Ok(dlg),
                 _ => {
@@ -227,7 +227,7 @@ impl DialogLayer {
         dialog.inner.set_server_connection(tx.connection.clone());
         self.inner
             .dialogs
-            .insert(id.to_string(), Dialog::Invite(dialog.clone()));
+            .insert(id.clone(), Dialog::Invite(dialog.clone()));
         debug!(%id, "server invite dialog created");
         Ok(dialog)
     }
@@ -241,7 +241,7 @@ impl DialogLayer {
     ) -> Result<ServerSubscriptionDialog> {
         let mut id = DialogId::try_from(tx)?;
         if !id.local_tag.is_empty() {
-            let dlg = self.inner.dialogs.get(&id.to_string());
+            let dlg = self.inner.dialogs.get(&id);
             match dlg {
                 Some(Dialog::ServerSubscription(dlg)) => return Ok(dlg),
                 _ => {
@@ -281,7 +281,7 @@ impl DialogLayer {
         };
         self.inner
             .dialogs
-            .insert(id.to_string(), Dialog::ServerSubscription(dialog.clone()));
+            .insert(id.clone(), Dialog::ServerSubscription(dialog.clone()));
         debug!(%id, "server subscription dialog created");
         Ok(dialog)
     }
@@ -295,7 +295,7 @@ impl DialogLayer {
     ) -> Result<ServerPublicationDialog> {
         let mut id = DialogId::try_from(tx)?;
         if !id.local_tag.is_empty() {
-            let dlg = self.inner.dialogs.get(&id.to_string());
+            let dlg = self.inner.dialogs.get(&id);
             match dlg {
                 Some(Dialog::ServerPublication(dlg)) => return Ok(dlg),
                 _ => {
@@ -333,7 +333,7 @@ impl DialogLayer {
         let dialog = ServerPublicationDialog::new(Arc::new(dlg_inner));
         self.inner
             .dialogs
-            .insert(id.to_string(), Dialog::ServerPublication(dialog.clone()));
+            .insert(id.clone(), Dialog::ServerPublication(dialog.clone()));
         debug!(%id, "server publication dialog created");
         Ok(dialog)
     }
@@ -382,7 +382,7 @@ impl DialogLayer {
         let dialog = ClientPublicationDialog::new(Arc::new(dlg_inner));
         self.inner
             .dialogs
-            .insert(id.to_string(), Dialog::ClientPublication(dialog.clone()));
+            .insert(id.clone(), Dialog::ClientPublication(dialog.clone()));
         Ok(dialog)
     }
 
@@ -432,7 +432,7 @@ impl DialogLayer {
         };
         self.inner
             .dialogs
-            .insert(id.to_string(), Dialog::ClientSubscription(dialog.clone()));
+            .insert(id.clone(), Dialog::ClientSubscription(dialog.clone()));
         Ok(dialog)
     }
 
@@ -451,16 +451,36 @@ impl DialogLayer {
         self.inner.dialogs.is_empty()
     }
 
-    pub fn all_dialog_ids(&self) -> Vec<String> {
+    /// Enumerate structured identities suitable for lookup and removal.
+    pub fn dialog_ids(&self) -> Vec<DialogId> {
         self.inner.dialogs.with(|m| m.keys().cloned().collect())
     }
 
-    pub fn get_dialog(&self, id: &DialogId) -> Option<Dialog> {
-        self.get_dialog_with(&id.to_string())
+    /// Legacy display strings. Distinct identities can have the same string.
+    /// Prefer [`Self::dialog_ids`] when iterating or persisting identities.
+    pub fn all_dialog_ids(&self) -> Vec<String> {
+        self.inner
+            .dialogs
+            .with(|m| m.keys().map(ToString::to_string).collect())
     }
 
-    pub fn get_dialog_with(&self, id: &String) -> Option<Dialog> {
+    pub fn get_dialog(&self, id: &DialogId) -> Option<Dialog> {
         self.inner.dialogs.get(id)
+    }
+
+    /// Legacy lookup by display string. Returns `None` if no dialog matches or
+    /// the string is ambiguous. This scans the registry; prefer the typed
+    /// [`Self::get_dialog`] for unambiguous lookup without a scan.
+    pub fn get_dialog_with(&self, id: &String) -> Option<Dialog> {
+        self.inner.dialogs.with(|m| {
+            let mut matches = m.iter().filter(|(key, _)| key.to_string() == *id);
+            let first = matches.next()?.1;
+            if matches.next().is_some() {
+                None
+            } else {
+                Some(first.clone())
+            }
+        })
     }
     /// Returns all client-side INVITE dialogs (UAC) that share the given Call-ID.
     ///
@@ -560,7 +580,7 @@ impl DialogLayer {
         let inner = Arc::new(inner);
         let dialog = Dialog::from_inner(inner.role, inner.clone());
 
-        let key = dialog.id().to_string();
+        let key = dialog.id();
 
         // Another restore or live dialog may have won while we built this one.
         // Check and insert under the same registry lock, without replacing it.
@@ -577,7 +597,7 @@ impl DialogLayer {
     }
 
     pub fn remove_dialog(&self, id: &DialogId) {
-        if let Some(d) = self.inner.dialogs.remove(&id.to_string()) {
+        if let Some(d) = self.inner.dialogs.remove(id) {
             d.on_remove()
         }
     }
