@@ -1380,14 +1380,11 @@ impl Transaction {
         );
         let dialog = self.persistence_dialog.lock().upgrade();
         if let Some(dialog) = dialog {
-            if resp.status_code.kind() == StatusCodeKind::Successful
+            if resp.status_code.kind() != StatusCodeKind::Provisional
                 && self.original.method == Method::Invite
             {
                 if let Err(error) = dialog
-                    .checkpoint(
-                        crate::dialog::persistence::DialogCheckpointReason::BeforeAck,
-                        Some(resp.clone().into()),
-                    )
+                    .checkpoint_invite_response(&self.original, &resp)
                     .await
                 {
                     tracing::warn!(%error, "INVITE checkpoint failed before ACK");

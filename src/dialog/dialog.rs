@@ -956,6 +956,50 @@ impl DialogInner {
         }))
     }
 
+    /// Preserve the observed final response and its accepted target together.
+    /// Initial INVITE confirmation is installed by its response observer;
+    /// a re-INVITE may refresh only its own established dialog, not another fork.
+    #[cfg_attr(not(feature = "platform-tokio"), allow(unused_mut))]
+    pub(crate) async fn checkpoint_invite_response(
+        &self,
+        request: &Request,
+        response: &Response,
+    ) -> Result<()> {
+        let in_dialog = request
+            .to_header()?
+            .tag()?
+            .is_some_and(|tag| !tag.value().is_empty());
+        let target = if in_dialog
+            && response.status_code.kind() == StatusCodeKind::Successful
+            && DialogId::try_from((response, TransactionRole::Client))
+                .is_ok_and(|id| id == *self.id.lock())
+            && response.cseq_header()?.seq()? == request.cseq_header()?.seq()?
+        {
+            Self::parse_target_refresh_contact(response)?
+        } else {
+            None
+        };
+        let receiver = {
+            let state = self.state.lock();
+            if let Some(target) = target {
+                self.set_remote_target_locked(target.uri, Some(target.contact));
+            }
+            self.enqueue_checkpoint_locked(
+                &state,
+                super::persistence::DialogCheckpointReason::BeforeAck,
+                Some(response.clone().into()),
+            )
+        };
+        if let Some(mut receiver) = receiver {
+            receiver
+                .recv()
+                .await
+                .unwrap_or_else(|| Err("dialog persistence worker stopped".into()))
+                .map_err(crate::Error::Error)?;
+        }
+        Ok(())
+    }
+
     fn refresh_target_from_response(&self, response: &Response) -> Result<()> {
         if let Some(target) = Self::parse_target_refresh_contact(response)? {
             self.set_remote_target(target.uri, Some(target.contact));
