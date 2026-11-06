@@ -65,6 +65,42 @@ macro_rules! all_headers {
     };
 }
 
+fn sip_sequence_number(value: &str) -> Option<u32> {
+    if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    value.parse().ok()
+}
+
+// Keep the wire method token: RFC 3261 permits extension methods, including
+// case-sensitive tokens that the library's Method enum cannot represent.
+pub(crate) fn rack_parts<T: HasHeaders + ?Sized>(message: &T) -> Option<(u32, u32, &str)> {
+    let mut fields = message
+        .headers()
+        .iter()
+        .filter(|h| h.name().eq_ignore_ascii_case("RAck"));
+    let value = fields.next()?.value();
+    if fields.next().is_some() {
+        return None;
+    }
+    let mut parts = value.split_ascii_whitespace();
+    let rseq = sip_sequence_number(parts.next()?).filter(|n| *n > 0)?;
+    let cseq = sip_sequence_number(parts.next()?).filter(|n| *n < (1 << 31))?;
+    let method = parts.next()?;
+    if parts.next().is_some()
+        || !method.bytes().all(|b| {
+            b.is_ascii_alphanumeric()
+                || matches!(
+                    b,
+                    b'-' | b'.' | b'!' | b'%' | b'*' | b'_' | b'+' | b'`' | b'\'' | b'~'
+                )
+        })
+    {
+        return None;
+    }
+    Some((rseq, cseq, method))
+}
+
 pub trait HeadersExt: HasHeaders {
     fn to_header(&self) -> Result<&To, Error> {
         header_get!(
@@ -344,28 +380,26 @@ pub trait HeadersExt: HasHeaders {
     fn path_headers(&self) -> Vec<&crate::sip::headers::untyped::Path> {
         all_headers!(self.headers().iter(), Header::Path)
     }
+    /// RFC 3262 §§7.1, 10: one RSeq, containing a nonzero 32-bit number.
     fn rseq_value(&self) -> Option<u32> {
-        self.headers().iter().find_map(|h| {
-            if let Header::RSeq(r) = h {
-                r.value().trim().parse().ok()
-            } else {
-                None
-            }
-        })
+        let mut fields = self
+            .headers()
+            .iter()
+            .filter(|h| h.name().eq_ignore_ascii_case("RSeq"));
+        let value = fields.next()?.value().trim();
+        if fields.next().is_some() {
+            return None;
+        }
+        sip_sequence_number(value).filter(|n| *n > 0)
     }
+    /// RFC 3262 §§7.2, 10: exactly response-num, CSeq-num and method.
     fn rack_value(&self) -> Option<(u32, u32, Method)> {
-        self.headers().iter().find_map(|h| {
-            if let Header::RAck(r) = h {
-                let v = r.value();
-                let mut parts = v.split_whitespace();
-                let rseq = parts.next()?.parse::<u32>().ok()?;
-                let cseq = parts.next()?.parse::<u32>().ok()?;
-                let method = parts.next()?.parse::<Method>().ok()?;
-                Some((rseq, cseq, method))
-            } else {
-                None
-            }
-        })
+        let (rseq, cseq, token) = rack_parts(self)?;
+        let method: Method = token.parse().ok()?;
+        if token != method.to_string() {
+            return None;
+        }
+        Some((rseq, cseq, method))
     }
     fn header_value(&self, name: &str) -> Option<String> {
         self.headers().iter().find_map(|h| {

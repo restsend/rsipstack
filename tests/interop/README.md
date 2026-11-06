@@ -21,20 +21,31 @@ brew install cmake pkg-config openssl@3 python
 From the repository root:
 
 ```sh
-bash scripts/interop/run.sh regression                # supported baseline (173 tests)
-bash scripts/interop/run.sh all                       # all 183; includes 10 known-gap probes
-bash scripts/interop/run.sh pjsip                     # 72 PJSUA regression tests
+bash scripts/interop/run.sh regression                # supported baseline (206 tests)
+bash scripts/interop/run.sh all                       # all 208; includes 2 known-gap probes
+bash scripts/interop/run.sh pjsip                     # 76 PJSUA regression tests
 bash scripts/interop/run.sh pjsip mid_dialog          # 36 mid-dialog PJSUA cases
-bash scripts/interop/run.sh sipp                      # 89 SIPp tests, including known gaps
+bash scripts/interop/run.sh sipp                      # 110 SIPp tests, including known gaps
 bash scripts/interop/run.sh proxy                     # 11 standalone proxy cases
 bash scripts/interop/run.sh b2bua                     # 11 linked two-dialog B2BUA cases
-bash scripts/interop/run.sh sipp prack                # all 19 PRACK cases, including known gaps
-bash scripts/interop/run.sh regression prack          # 11 passing PRACK regression cases
-bash scripts/interop/run.sh faults                    # 26 UDP loss/delay/race cases
+bash scripts/interop/run.sh sipp prack                # all 27 PRACK cases
+bash scripts/interop/run.sh regression prack          # 27 passing PRACK regression cases
+bash scripts/interop/run.sh faults                    # 27 UDP loss/delay/race cases
 bash scripts/interop/run.sh known-gaps                # reproduce documented failures
 bash scripts/interop/run.sh pjsip udp_uac_peer_bye     # one test
 bash scripts/interop/run.sh sipp wrong_tag_bye         # UDP and TCP
+bash scripts/interop/run.sh pjsip bridge               # two-peer hold/resume bridge
+bash scripts/interop/run.sh sipp session_timer         # eight RFC 4028 wire exchanges
+bash scripts/interop/run.sh sipp bridge                # offerless bridge and lost SDP ACK
 ```
+
+The bridge cases use two independent peer processes and two rsipstack dialog
+legs joined by the public `ReinviteBridge` component. Four PJSUA cases cover
+hold/resume initiated from either leg over UDP/TCP. Five SIPp cases cover
+offerless re-INVITEs in both directions, delayed answers supplied in ACK,
+identical ACK retransmission, and loss of the first SDP-bearing ACK over UDP.
+Each leg has a separate trace directory; both must finish without background
+errors or live dialogs. These tests do not assert RTP delivery or PRACK bridging.
 
 The **first explicit harness run** downloads and builds the selected peers in
 `target/interop`. Later runs reuse them. Normal `cargo build` and `cargo test`
@@ -51,6 +62,19 @@ PJSUA_BIN=/absolute/path/to/pjsua SIPP_BIN=/absolute/path/to/sipp \
 ```
 
 The binaries must support the flags and CLI used by the pinned versions below.
+
+To exercise the opt-in dialog persistence barriers against the same peers:
+
+```sh
+RSIPSTACK_INTEROP_CHECKPOINTS=1 bash scripts/interop/run.sh regression
+```
+
+In-process dialog-peer scenarios write `checkpoints.log`; the test handler syncs
+each checkpoint to disk before acknowledging it and rejects backwards revisions.
+The standalone proxy/B2BUA applications use their own dialog layers and are not
+configured by this switch. This is a test journal, not a production storage
+format. The regular library tests cover blocked writes, failures, timeouts,
+concurrent BYE, lifecycle delivery, and application-controlled re-INVITEs.
 To prepare peers without running the suite, use `bash scripts/interop/build-pjsua.sh`
 and `bash scripts/interop/build-sipp.sh`. Set `JOBS=2` to limit build concurrency.
 With Rust dependencies and peers already cached, `CARGO_NET_OFFLINE=true bash
@@ -58,14 +82,16 @@ scripts/interop/run.sh all` runs without downloads. This requires an existing
 peer cache or explicit binary overrides; Cargo's offline flag does not disable
 the peer download scripts.
 
+See [SESSION_TIMERS.md](SESSION_TIMERS.md) for the opt-in timer API, failure
+policy, and short regression coverage.
+
 ## Coverage and expectations
 
 See [COVERAGE.md](COVERAGE.md) for the complete matrix, reproducible known gaps,
 and the features this suite does not exercise. The default (`all`) and `sipp`
 include known-gap probes and currently **return nonzero**. `regression`
 explicitly reports and excludes them; it does not change their assertions.
-The documented counts describe upstream baseline `004f607` plus these application
-tests; results can differ when
+The documented counts describe this PR stack on upstream `895d443`; results can differ when
 run against another revision or with uncommitted application changes.
 
 PJSUA checks calls in both directions, UDP loss/retransmission, hold/resume and UPDATE initiated by
@@ -83,8 +109,8 @@ may send RTP to loopback discard port 9. No test asserts media delivery or
 quality. RTP/audio quality, scale and downstream application
 behavior (such as CDR/billing) require separate tests.
 
-SIPp's repeated-200, lost-PRACK-response and application lost-BYE-response cases
-use `-nr` so its UDP duplicate
+SIPp's repeated-200, repeated-183, lost-PRACK-response, bridge offerless, and
+application lost-BYE-response cases use `-nr` so its UDP duplicate
 detector does not consume the repeated request before the explicit XML receive
 step. The peer still has to receive the real retransmission from rsipstack.
 Handshake messages/log markers coordinate state checks without timed sleeps.
@@ -185,8 +211,8 @@ crash recovery remain outside this initial matrix.
 
 ## Controlled UDP faults and replay
 
-`bash scripts/interop/run.sh faults` selects only the 26 fault scenarios.
-All 26 are regression cases on upstream `004f607`, including the previously
+`bash scripts/interop/run.sh faults` selects only the 27 fault scenarios.
+All 27 are regression cases in this checkout, including the previously
 failing blocked-ACK cases fixed by PR #235. A `known-gaps faults` selection now
 matches no tests and fails explicitly rather than reporting a misleading pass.
 The six small fault-engine checks also run under normal `cargo test`; they

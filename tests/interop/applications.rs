@@ -500,7 +500,7 @@ pub async fn lost_bye_response(mode: &str, name: &str) -> TestResult {
         std::fs::create_dir_all(dir.join(peer)).required()?;
     }
     let unused: Uri = "sip:unused@127.0.0.1:9".parse().required()?;
-    let callee = super::sipp::Sipp::start(
+    let mut callee = super::sipp::Sipp::start(
         "application_lost_bye_response",
         "udp",
         &dir.join("callee"),
@@ -511,6 +511,9 @@ pub async fn lost_bye_response(mode: &str, name: &str) -> TestResult {
     let mut caller = Peer::start("udp", &dir.join("caller")).await?;
     caller.command(&format!("m\n{}\n", app.uri)).await?;
     caller.wait_text("state changed to CONFIRMED").await?;
+    // CONFIRMED at the caller does not prove that the callee received ACK.
+    // Independent proxy tasks can forward BYE first if hangup starts now.
+    callee.marker("APPLICATION_ACK_RECEIVED").await?;
     caller.command("h\n").await?;
     callee.finish().await?;
     caller.wait_text("Response msg 200/BYE").await?;

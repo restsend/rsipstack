@@ -273,15 +273,15 @@ impl Dialog {
 
 #[derive(Clone)]
 pub(super) struct RemoteReliableState {
-    last_rseq: u32,
+    dialog_id: DialogId,
     invite_cseq: u32,
-    prack_request: Request,
+    last_rseq: u32,
 }
 
 /// A validated Contact, kept separate from the dialog until its refresh is accepted.
 pub(super) struct RemoteTarget {
-    uri: crate::sip::Uri,
-    contact: crate::sip::headers::untyped::Contact,
+    pub(super) uri: crate::sip::Uri,
+    pub(super) contact: crate::sip::headers::untyped::Contact,
 }
 
 /// Internal Dialog State and Management
@@ -342,6 +342,8 @@ pub struct DialogInner {
     pub(super) endpoint_inner: EndpointInnerRef,
     pub(super) state_sender: DialogStateSender,
     pub(crate) lifecycle: Mutex<super::lifecycle::LifecycleState>,
+    pub(crate) persistence: Mutex<Option<Arc<super::persistence::PersistenceRuntime>>>,
+    pub(crate) persistence_owner: Mutex<alloc::sync::Weak<DialogInner>>,
     pub(super) tu_sender: TransactionEventSender,
     /// RFC 7989 Session-ID state; `None` when the dialog does not participate
     /// (no UUID supplied by the application and none received from the peer).
@@ -349,7 +351,11 @@ pub struct DialogInner {
     // initial request updated when INVITE auth failed with new INVITE
     pub(super) initial_request: Mutex<Request>,
     pub(super) supports_100rel: bool,
-    pub(super) remote_reliable: Mutex<Option<RemoteReliableState>>,
+    pub(super) remote_reliable: Mutex<Vec<RemoteReliableState>>,
+    pub(super) reliable_clients: Mutex<BTreeMap<(DialogId, u32), super::reliable::ReliableClient>>,
+    pub(super) reliable_config: Mutex<Option<super::reliable::ReliableProvisionalConfig>>,
+    pub(crate) session_timer: Mutex<Option<Arc<super::session_timer::SessionTimer>>>,
+    pub(super) reliable_servers: Mutex<BTreeMap<u32, Arc<super::reliable::ReliableServer>>>,
     /// The last ACK received for an INVITE or re-INVITE this dialog answered
     /// (UAS role). Carries the answer when the 2xx carried the offer.
     pub(super) remote_ack: Mutex<Option<Request>>,
@@ -451,8 +457,15 @@ pub struct SessionIdState {
     pub local: String,
     pub remote: Option<String>,
 }
+/// A coherent snapshot for application-owned storage and recovery.
+///
+/// Use [`Self::builder`] to reconstruct stored data. Direct field access remains
+/// available; destructuring outside this crate must include `..`.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct DialogSnapshot {
+    /// Captured with routing, CSeq, lifecycle facts, and transaction admission.
+    pub runtime: super::snapshot::DialogSnapshotRuntime,
     pub state: DialogSnapshotState,
     pub role: TransactionRole,
     pub id: DialogId,
@@ -473,6 +486,27 @@ pub struct DialogSnapshot {
     /// RFC 7989 Session-ID state, preserved across snapshot restore.
     pub session_id: Option<SessionIdState>,
 }
+impl DialogSnapshot {
+    /// Reconstruct a snapshot without depending on its complete field list.
+    ///
+    /// State, both CSeq values, and runtime metadata must be supplied explicitly
+    /// before building. See [`super::snapshot`] for the 0.9 migration guide.
+    pub fn builder(
+        id: DialogId,
+        role: TransactionRole,
+        from: crate::sip::typed::From,
+        to: crate::sip::typed::To,
+        remote_uri: crate::sip::Uri,
+    ) -> super::snapshot::DialogSnapshotBuilder {
+        super::snapshot::DialogSnapshotBuilder::new(id, role, from, to, remote_uri)
+    }
+
+    /// Only confirmed snapshots with no unfinished signaling can be resumed.
+    pub fn is_quiescent(&self) -> bool {
+        self.state == DialogSnapshotState::Confirmed && self.runtime.pending.is_empty()
+    }
+}
+
 impl DialogInner {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -538,6 +572,8 @@ impl DialogInner {
             route_set: Mutex::new(route_set),
             endpoint_inner,
             state_sender,
+            persistence: Mutex::new(None),
+            persistence_owner: Mutex::new(alloc::sync::Weak::new()),
             lifecycle: Mutex::new(super::lifecycle::LifecycleState::default()),
             tu_sender,
             state: Mutex::new(DialogState::Calling(id)),
@@ -546,7 +582,11 @@ impl DialogInner {
             local_contact,
             remote_contact: Mutex::new(None),
             supports_100rel,
-            remote_reliable: Mutex::new(None),
+            remote_reliable: Mutex::new(Vec::new()),
+            reliable_clients: Mutex::new(BTreeMap::new()),
+            reliable_config: Mutex::new(None),
+            session_timer: Mutex::new(None),
+            reliable_servers: Mutex::new(BTreeMap::new()),
             remote_ack: Mutex::new(None),
             server_connection: Mutex::new(None),
             dialback_target: Mutex::new(None),
@@ -600,10 +640,12 @@ impl DialogInner {
         {
             return;
         }
+        let _snapshot_gate = self.state.lock();
         let mut state = self.session_id.lock();
         if let Some(sid) = state.as_mut() {
             if sid.local != uuid {
                 sid.remote = Some(uuid);
+                self.lifecycle.lock().revision += 1;
             }
         }
     }
@@ -638,13 +680,45 @@ impl DialogInner {
         self.local_seq.load(Ordering::Relaxed)
     }
     pub fn increment_local_seq(&self) -> u32 {
-        // Return this caller's reservation, not a subsequent caller's value.
+        let _snapshot_gate = self.state.lock();
+        self.increment_local_seq_locked()
+    }
+
+    fn increment_local_seq_locked(&self) -> u32 {
+        self.lifecycle.lock().revision += 1;
         self.local_seq
             .fetch_add(1, Ordering::Relaxed)
             .wrapping_add(1)
     }
 
+    pub(crate) fn admit_remote_seq(
+        &self,
+        cseq: u32,
+        method: &Method,
+    ) -> core::result::Result<u32, u32> {
+        let _snapshot_gate = self.state.lock();
+        let previous = self.remote_seq.load(Ordering::Relaxed);
+        if cseq < previous {
+            return Err(previous);
+        }
+        if *method == Method::Bye && (_snapshot_gate.is_confirmed() || _snapshot_gate.waiting_ack())
+        {
+            let mut lifecycle = self.lifecycle.lock();
+            if !lifecycle.pending_remote_bye {
+                lifecycle.pending_remote_bye = true;
+                lifecycle.revision += 1;
+            }
+        }
+        if cseq != previous {
+            self.remote_seq.store(cseq, Ordering::Relaxed);
+            self.lifecycle.lock().revision += 1;
+        }
+        Ok(previous)
+    }
+
     pub fn update_remote_tag(&self, tag: &str) -> Result<()> {
+        let _snapshot_gate = self.state.lock();
+        self.lifecycle.lock().revision += 1;
         self.id.lock().remote_tag = tag.to_string();
 
         if self.role == TransactionRole::Client {
@@ -654,59 +728,98 @@ impl DialogInner {
         Ok(())
     }
 
-    fn clear_remote_reliable(&self) {
-        self.remote_reliable.lock().take();
+    pub(super) fn attach_reliable_server(self: &Arc<Self>, tx: &Transaction) -> Result<()> {
+        if tx.original.method != Method::Invite {
+            return Ok(());
+        }
+        let Some(config) = self.reliable_config.lock().clone() else {
+            return Ok(());
+        };
+        if !tx.original.header_contains_token("Supported", "100rel")
+            && !tx.original.header_contains_token("Require", "100rel")
+        {
+            return Ok(());
+        }
+        let cseq = tx.original.cseq_header()?.seq()?;
+        let mut servers = self.reliable_servers.lock();
+        let server = servers
+            .entry(cseq)
+            .or_insert_with(|| {
+                super::reliable::ReliableServer::new(
+                    self,
+                    tx.original.clone(),
+                    tx.tu_sender.clone(),
+                    config,
+                )
+            })
+            .clone();
+        *tx.reliable_provisional.lock() = Some(server);
+        Ok(())
+    }
+
+    pub(super) async fn receive_prack(&self, tx: &mut Transaction) -> Result<()> {
+        let Some((_, cseq, _)) = crate::sip::message::rack_parts(&tx.original) else {
+            return tx.reply(StatusCode::BadRequest).await;
+        };
+        let server = self.reliable_servers.lock().get(&cseq).cloned();
+        if let Some(server) = server {
+            server.handle_prack(tx).await
+        } else {
+            self.reject_unmatched_prack(tx).await
+        }
+    }
+
+    pub(super) fn clear_remote_reliable(&self, invite_cseq: u32) {
+        self.reliable_clients
+            .lock()
+            .retain(|(_, cseq), _| *cseq != invite_cseq);
+        self.remote_reliable
+            .lock()
+            .retain(|s| s.invite_cseq != invite_cseq);
     }
 
     pub(super) fn prepare_prack_request(&self, resp: &Response) -> Result<Option<Request>> {
-        if !resp.header_contains_token("Require", "100rel") {
+        if !(101..200).contains(&resp.status_code.code())
+            || !resp.header_contains_token("Require", "100rel")
+        {
             return Ok(None);
         }
-
         let Some(rseq) = resp.rseq_value() else {
-            warn!(
-                id = self.id.lock().to_string(),
-                "received reliable provisional response without RSeq"
-            );
             return Ok(None);
         };
-        if rseq == 0 || rseq > 0x7fff_ffff {
-            return Ok(None);
-        }
-
         let cseq_header = resp.cseq_header()?;
         let cseq = cseq_header.seq()?;
-        let method = cseq_header.method()?;
-        if method != Method::Invite {
+        if cseq_header.method()? != Method::Invite {
+            return Ok(None);
+        }
+        let dialog_id = DialogId::try_from((resp, TransactionRole::Client))?;
+        let local_id = self.id.lock().clone();
+        if dialog_id.call_id != local_id.call_id
+            || dialog_id.local_tag != local_id.local_tag
+            || dialog_id.remote_tag.is_empty()
+        {
             return Ok(None);
         }
 
-        {
-            let state_guard = self.remote_reliable.lock();
-            if let Some(state) = state_guard.as_ref() {
-                if state.invite_cseq == cseq && state.last_rseq == rseq {
-                    return Ok(Some(state.prack_request.clone()));
-                }
-
-                if cseq < state.invite_cseq || (state.invite_cseq == cseq && state.last_rseq > rseq)
-                {
-                    return Ok(None);
-                }
+        let mut states = self.remote_reliable.lock();
+        let state = states
+            .iter_mut()
+            .find(|s| s.dialog_id == dialog_id && s.invite_cseq == cseq);
+        if let Some(state) = state.as_ref() {
+            // RFC 3262 §4: duplicates, old responses and gaps are discarded
+            // without delivering their SDP or generating another PRACK.
+            if state.last_rseq.checked_add(1) != Some(rseq) {
+                return Ok(None);
             }
+        } else if rseq > i32::MAX as u32 {
+            // The first RSeq in a transaction is in 1..=2^31-1 (§3).
+            return Ok(None);
         }
-
-        // RFC 6141 §4.7/4.9: a reliable INVITE provisional response refreshes
-        // the target before PRACK is built. Duplicates/older RSeqs above must
-        // not replay an old Contact. Initial-dialog route learning is separate.
+        // RFC 6141: a newly accepted reliable provisional refreshes Contact
+        // before its PRACK is routed. Duplicates and gaps were rejected above.
         self.refresh_target_from_response(resp)?;
-
-        let rack_value = format!("{} {} {}", rseq, cseq, method);
-        let mut headers = vec![Header::RAck(rack_value.into())];
-        if self.supports_100rel {
-            headers.push(Header::Supported("100rel".into()));
-        }
-
-        let prack_request = self.make_request(
+        let headers = vec![Header::RAck(format!("{} {} INVITE", rseq, cseq).into())];
+        let mut prack = self.make_request(
             Method::PRack,
             Some(self.increment_local_seq()),
             None,
@@ -714,35 +827,117 @@ impl DialogInner {
             Some(headers),
             None,
         )?;
-
-        let state = RemoteReliableState {
-            last_rseq: rseq,
-            invite_cseq: cseq,
-            prack_request: prack_request.clone(),
-        };
-
-        {
-            let mut state_guard = self.remote_reliable.lock();
-            *state_guard = Some(state);
+        // Select the early dialog that sent this response, including forks.
+        prack
+            .headers
+            .unique_push(Header::To(resp.to_header()?.clone()));
+        if let Some(state) = state {
+            state.last_rseq = rseq;
+        } else {
+            states.push(RemoteReliableState {
+                dialog_id,
+                invite_cseq: cseq,
+                last_rseq: rseq,
+            });
         }
-
-        Ok(Some(prack_request))
+        Ok(Some(prack))
     }
 
-    pub(super) async fn handle_provisional_response(&self, resp: &Response) -> Result<()> {
-        let to_header = resp.to_header()?;
-        if let Ok(Some(tag)) = to_header.tag() {
-            self.update_remote_tag(tag.value())?;
-        }
+    /// Returns false when the provisional must be discarded, including its body.
+    pub(super) async fn handle_provisional_response(
+        self: &Arc<Self>,
+        resp: &Response,
+        request: &Request,
+    ) -> Result<bool> {
+        if resp.header_contains_token("Require", "100rel") && resp.status_code != StatusCode::Trying
+        {
+            let config = self.reliable_config.lock().clone();
+            if let Some(config) = config {
+                return self.start_reliable_prack(resp, request, config);
+            }
 
-        if let Some(prack) = self.prepare_prack_request(resp)? {
+            if request.method != Method::Invite
+                || resp.cseq_header()?.seq()? != request.cseq_header()?.seq()?
+            {
+                return Ok(false);
+            }
+            // An in-dialog response must not change the peer's tag.
+            if let Some(tag) = request.to_header()?.tag()? {
+                if resp.to_header()?.tag()?.as_ref() != Some(&tag) {
+                    return Ok(false);
+                }
+            }
+            let Some(prack) = self.prepare_prack_request(resp)? else {
+                return Ok(false);
+            };
+            if let Some(tag) = resp.to_header()?.tag()? {
+                self.update_remote_tag(tag.value())?;
+            }
             let _ = self.send_prack_request(prack).await?;
+        } else if resp.status_code != StatusCode::Trying {
+            if let Some(tag) = resp.to_header()?.tag()? {
+                self.update_remote_tag(tag.value())?;
+            }
         }
+        Ok(true)
+    }
 
-        Ok(())
+    /// Disabled dialogs reject required 100rel rather than falsely accepting it.
+    /// RFC 3262 §3 explicitly permits rejecting required 100rel with 420.
+    pub(super) async fn reject_required_100rel(&self, tx: &mut Transaction) -> Result<bool> {
+        if self.reliable_config.lock().is_some()
+            || tx.original.method != Method::Invite
+            || !tx.original.header_contains_token("Require", "100rel")
+        {
+            return Ok(false);
+        }
+        let initial =
+            self.role == TransactionRole::Server && tx.original.to_header()?.tag()?.is_none();
+        tx.reply_with(
+            StatusCode::BadExtension,
+            vec![Header::Unsupported("100rel".into())],
+            None,
+        )
+        .await?;
+        if initial {
+            let id = self.id.lock().clone();
+            self.transition(DialogState::Terminated(
+                id,
+                TerminatedReason::UasOther(StatusCode::BadExtension),
+            ));
+        }
+        Ok(true)
+    }
+
+    pub(super) async fn reject_unmatched_prack(&self, tx: &mut Transaction) -> Result<()> {
+        // A syntactically valid RAck is not proof of a matching outstanding
+        // reliable response. The built-in UAS does not create any (§3).
+        let status = if crate::sip::message::rack_parts(&tx.original).is_some() {
+            StatusCode::CallTransactionDoesNotExist
+        } else {
+            StatusCode::BadRequest
+        };
+        tx.reply(status).await
     }
 
     pub(super) async fn send_prack_request(&self, request: Request) -> Result<Option<Response>> {
+        self.send_prack_request_to(request, None).await
+    }
+
+    pub(super) async fn send_prack_request_to(
+        &self,
+        request: Request,
+        destination: Option<SipAddr>,
+    ) -> Result<Option<Response>> {
+        let tx = self.start_prack_transaction(request, destination).await?;
+        self.finish_prack_transaction(tx).await
+    }
+
+    pub(super) async fn start_prack_transaction(
+        &self,
+        request: Request,
+        destination: Option<SipAddr>,
+    ) -> Result<Transaction> {
         let method = request.method().to_owned();
         let key = TransactionKey::from_request(&request, TransactionRole::Client)?;
         // RFC 5626 flow affinity: reuse the reliable connection recorded for
@@ -755,12 +950,15 @@ impl DialogInner {
             affinity_connection,
         );
 
-        if let Some(route) = tx.original.route_header() {
+        if destination.is_some() {
+            tx.destination = destination;
+        } else if let Some(route) = tx.original.route_header() {
             if let Ok(first_route) = route.typed() {
                 tx.destination = SipAddr::try_from(&first_route.uri).ok();
             }
         }
 
+        self.bind_persistence(&tx);
         match tx.send().await {
             Ok(_) => {
                 debug!(
@@ -784,6 +982,13 @@ impl DialogInner {
             }
         }
 
+        Ok(tx)
+    }
+
+    pub(super) async fn finish_prack_transaction(
+        &self,
+        mut tx: Transaction,
+    ) -> Result<Option<Response>> {
         let mut auth = AuthRetry::new();
         while let Some(msg) = tx.receive().await {
             match msg {
@@ -792,6 +997,9 @@ impl DialogInner {
                     StatusCode::ProxyAuthenticationRequired | StatusCode::Unauthorized => {
                         let id = self.id.lock().clone();
                         if !auth.should_answer(&resp) {
+                            if self.reliable_config.lock().is_some() {
+                                return Ok(Some(resp));
+                            }
                             debug!(
                                 id = self.id.lock().to_string(),
                                 "received {} response after auth sent", resp.status_code
@@ -805,9 +1013,13 @@ impl DialogInner {
                         if let Some(cred) = &self.credential {
                             let new_seq = self.increment_local_seq();
                             tx = handle_client_authenticate(new_seq, &tx, resp, cred).await?;
+                            self.bind_persistence(&tx);
                             tx.send().await?;
                             continue;
                         } else {
+                            if self.reliable_config.lock().is_some() {
+                                return Ok(Some(resp));
+                            }
                             debug!(
                                 id = self.id.lock().to_string(),
                                 "received 407 response without auth option"
@@ -826,6 +1038,7 @@ impl DialogInner {
                 _ => break,
             }
         }
+        tx.check_persistence()?;
         Ok(None)
     }
 
@@ -838,8 +1051,18 @@ impl DialogInner {
         uri: crate::sip::Uri,
         contact: Option<crate::sip::headers::untyped::Contact>,
     ) {
+        let _snapshot_gate = self.state.lock();
+        self.set_remote_target_locked(uri, contact);
+    }
+
+    fn set_remote_target_locked(
+        &self,
+        uri: crate::sip::Uri,
+        contact: Option<crate::sip::headers::untyped::Contact>,
+    ) {
         *self.remote_uri.lock() = uri;
         *self.remote_contact.lock() = contact;
+        self.lifecycle.lock().revision += 1;
     }
 
     pub(super) fn is_target_refresh(method: &Method) -> bool {
@@ -877,6 +1100,50 @@ impl DialogInner {
         }))
     }
 
+    /// Preserve the observed final response and its accepted target together.
+    /// Initial INVITE confirmation is installed by its response observer;
+    /// a re-INVITE may refresh only its own established dialog, not another fork.
+    #[cfg_attr(not(feature = "platform-tokio"), allow(unused_mut))]
+    pub(crate) async fn checkpoint_invite_response(
+        &self,
+        request: &Request,
+        response: &Response,
+    ) -> Result<()> {
+        let in_dialog = request
+            .to_header()?
+            .tag()?
+            .is_some_and(|tag| !tag.value().is_empty());
+        let target = if in_dialog
+            && response.status_code.kind() == StatusCodeKind::Successful
+            && DialogId::try_from((response, TransactionRole::Client))
+                .is_ok_and(|id| id == *self.id.lock())
+            && response.cseq_header()?.seq()? == request.cseq_header()?.seq()?
+        {
+            Self::parse_target_refresh_contact(response)?
+        } else {
+            None
+        };
+        let receiver = {
+            let state = self.state.lock();
+            if let Some(target) = target {
+                self.set_remote_target_locked(target.uri, Some(target.contact));
+            }
+            self.enqueue_checkpoint_locked(
+                &state,
+                super::persistence::DialogCheckpointReason::BeforeAck,
+                Some(response.clone().into()),
+            )
+        };
+        if let Some(mut receiver) = receiver {
+            receiver
+                .recv()
+                .await
+                .unwrap_or_else(|| Err("dialog persistence worker stopped".into()))
+                .map_err(crate::Error::Error)?;
+        }
+        Ok(())
+    }
+
     fn refresh_target_from_response(&self, response: &Response) -> Result<()> {
         if let Some(target) = Self::parse_target_refresh_contact(response)? {
             self.set_remote_target(target.uri, Some(target.contact));
@@ -885,11 +1152,12 @@ impl DialogInner {
     }
 
     pub(super) fn accept_target_refresh(&self, cseq: u32, target: &RemoteTarget) {
+        let _snapshot_gate = self.state.lock();
         let mut last = self.remote_target_cseq.lock();
         if last.is_some_and(|accepted| cseq <= accepted) {
             return;
         }
-        self.set_remote_target(target.uri.clone(), Some(target.contact.clone()));
+        self.set_remote_target_locked(target.uri.clone(), Some(target.contact.clone()));
         *last = Some(cseq);
     }
 
@@ -900,9 +1168,7 @@ impl DialogInner {
                     && response.status_code.kind() == StatusCodeKind::Provisional
                     && response.status_code != StatusCode::Trying
                     && response.header_contains_token("Require", "100rel")
-                    && response
-                        .rseq_value()
-                        .is_some_and(|rseq| (1..=0x7fff_ffff).contains(&rseq))))
+                    && response.rseq_value().is_some()))
     }
 
     /// Update the stored route set from Record-Route headers present in a response.
@@ -924,7 +1190,9 @@ impl DialogInner {
             .collect();
 
         new_route_set.reverse();
+        let _snapshot_gate = self.state.lock();
         *self.route_set.lock() = new_route_set;
+        self.lifecycle.lock().revision += 1;
     }
 
     pub(super) fn make_request_with_vias(
@@ -935,12 +1203,13 @@ impl DialogInner {
         headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
     ) -> Result<crate::sip::Request> {
+        let _snapshot_gate = self.state.lock();
         let mut out: Vec<Header> = Vec::new();
 
         // --- system headers first ---
 
         let cseq_header = CSeq {
-            seq: cseq.unwrap_or_else(|| self.increment_local_seq()),
+            seq: cseq.unwrap_or_else(|| self.increment_local_seq_locked()),
             method: method.clone(),
         };
 
@@ -1010,13 +1279,25 @@ impl DialogInner {
             }
         }
 
-        Ok(crate::sip::Request {
+        let mut request = crate::sip::Request {
             method,
             uri: self.remote_uri.lock().clone(),
             headers: out.into(),
             body: body.unwrap_or_default(),
             version: crate::sip::Version::V2,
-        })
+        };
+        if request.method == Method::Invite {
+            if let Some(config) = self.reliable_config.lock().as_ref() {
+                super::reliable::add_option(&mut request, "Supported", "100rel");
+                if config.require {
+                    super::reliable::add_option(&mut request, "Require", "100rel");
+                }
+            }
+        }
+        if let Some(timer) = self.session_timer.lock().as_ref() {
+            timer.outgoing(&mut request);
+        }
+        Ok(request)
     }
 
     pub(super) fn make_request(
@@ -1264,7 +1545,28 @@ impl DialogInner {
     }
 
     async fn send_dialog_request(
-        &self,
+        self: &Arc<Self>,
+        request: Request,
+        options: Option<super::reinvite::ReinviteOptions>,
+    ) -> Result<Option<Response>> {
+        let negotiation = Self::is_target_refresh(&request.method);
+        if negotiation {
+            self.begin_negotiation();
+        }
+        let result = self.send_dialog_request_inner(request, options).await;
+        if negotiation {
+            self.finish_negotiation();
+            self.checkpoint(
+                super::persistence::DialogCheckpointReason::SignalingCompleted,
+                None,
+            )
+            .await?;
+        }
+        result
+    }
+
+    async fn send_dialog_request_inner(
+        self: &Arc<Self>,
         request: Request,
         options: Option<super::reinvite::ReinviteOptions>,
     ) -> Result<Option<Response>> {
@@ -1281,6 +1583,7 @@ impl DialogInner {
         );
         tx.defer_success_ack = options.as_ref().is_some_and(|o| o.answer_handler.is_some());
         tx.force_success_ack = options.is_some() && !tx.defer_success_ack;
+        self.bind_persistence(&tx);
         self.reserve_invite(&tx)?;
 
         if let Some(route) = tx.original.route_header() {
@@ -1408,7 +1711,25 @@ impl DialogInner {
             .as_ref()
             .map(|o| super::reinvite::RequestCancellation::new(&tx, Some(o.cancellation.clone())));
         let mut auth = AuthRetry::new();
-        while let Some(msg) = tx.receive().await {
+        let mut timer_retries = 0;
+        loop {
+            let timer = self.session_timer.lock().clone();
+            let original = tx.original.clone();
+            let mut timer_result = Ok(());
+            let msg = tx
+                .receive_with_response_observer(|response, _received_at| {
+                    if DialogId::try_from((response, TransactionRole::Client))
+                        .is_ok_and(|id| id == *self.id.lock())
+                    {
+                        if let Some(timer) = &timer {
+                            timer_result = timer.received(&original, response);
+                        }
+                    }
+                })
+                .await;
+            let Some(msg) = msg else {
+                break;
+            };
             match msg {
                 SipMessage::Response(resp) => {
                     // RFC 7989 §8: accept the peer's (possibly new) UUID from
@@ -1439,14 +1760,18 @@ impl DialogInner {
                     }
 
                     if status.kind() == StatusCodeKind::Provisional {
+                        if method == Method::Invite
+                            && !self
+                                .handle_provisional_response(&resp, &tx.original)
+                                .await?
+                        {
+                            continue;
+                        }
                         if let Some(sender) = options
                             .as_ref()
                             .and_then(|o| o.provisional_responses.as_ref())
                         {
                             sender.send(resp.clone()).ok();
-                        }
-                        if method == Method::Invite {
-                            self.handle_provisional_response(&resp).await?;
                         }
                         // RFC 3261 §12: a dialog moves from early to confirmed
                         // and never back. A 1xx to a mid-dialog request (re-INVITE,
@@ -1483,7 +1808,7 @@ impl DialogInner {
                             // established session (RFC 3261 sections 12/14.1).
                             if self.is_confirmed() {
                                 if method != Method::PRack {
-                                    self.clear_remote_reliable();
+                                    self.clear_remote_reliable(tx.original.cseq_header()?.seq()?);
                                 }
                                 return Ok(Some(resp));
                             }
@@ -1502,6 +1827,7 @@ impl DialogInner {
                             tx.defer_success_ack =
                                 options.as_ref().is_some_and(|o| o.answer_handler.is_some());
                             tx.force_success_ack = options.is_some() && !tx.defer_success_ack;
+                            self.bind_persistence(&tx);
                             self.reserve_invite(&tx)?;
                             tx.send().await?;
                             cancel_watch = options.as_ref().map(|o| {
@@ -1521,7 +1847,7 @@ impl DialogInner {
                             // another operation or normal call teardown.
                             if self.is_confirmed() {
                                 if method != Method::PRack {
-                                    self.clear_remote_reliable();
+                                    self.clear_remote_reliable(tx.original.cseq_header()?.seq()?);
                                 }
                                 return Ok(Some(resp));
                             }
@@ -1533,6 +1859,27 @@ impl DialogInner {
                         }
                     }
 
+                    let timer = self.session_timer.lock().clone();
+                    if let Some(timer) = timer {
+                        if !options
+                            .as_ref()
+                            .is_some_and(|o| o.cancellation.is_cancelled())
+                        {
+                            if let Some(next) = timer.retry(self, &tx, &resp, &mut timer_retries)? {
+                                tx = next;
+                                self.reserve_invite(&tx)?;
+                                auth = AuthRetry::new();
+                                tx.send().await?;
+                                cancel_watch = options.as_ref().map(|o| {
+                                    super::reinvite::RequestCancellation::new(
+                                        &tx,
+                                        Some(o.cancellation.clone()),
+                                    )
+                                });
+                                continue;
+                            }
+                        }
+                    }
                     debug!(
                         id = self.id.lock().to_string(),
                         method = %method,
@@ -1543,8 +1890,10 @@ impl DialogInner {
                     {
                         self.refresh_target_from_response(&resp)?;
                     }
-                    if !matches!(method, Method::PRack) {
-                        self.clear_remote_reliable();
+                    let reliable_sdp = method == Method::Invite
+                        && self.has_reliable_sdp(tx.original.cseq_header()?.seq()?);
+                    if method == Method::Invite {
+                        self.clear_remote_reliable(tx.original.cseq_header()?.seq()?);
                     }
                     if let Some(options) = &options {
                         if status.kind() == StatusCodeKind::Successful {
@@ -1554,7 +1903,15 @@ impl DialogInner {
                                 super::reinvite::AckGuard(gate)
                             });
                             let answer = if let Some(handler) = &options.answer_handler {
-                                self.answer_reinvite(&mut tx, &resp, handler).await
+                                if reliable_sdp {
+                                    // The offer was answered in PRACK. The final
+                                    // response repeats it; ACK must not negotiate again.
+                                    tx.last_ack =
+                                        Some(self.endpoint_inner.make_ack(&tx.original, &resp)?);
+                                    tx.send_ack(tx.connection.clone()).await
+                                } else {
+                                    self.answer_reinvite(&mut tx, &resp, handler).await
+                                }
                             } else {
                                 Ok(())
                             };
@@ -1593,23 +1950,33 @@ impl DialogInner {
                             }
                         }
                     }
+                    // A malformed timer agreement cannot skip the successful
+                    // INVITE's ACK, including an offer answered in that ACK.
+                    if let Err(error) = timer_result {
+                        super::invite_dialog::InviteDialog::from_inner(self.clone())
+                            .bye()
+                            .await
+                            .ok();
+                        return Err(error);
+                    }
                     return Ok(Some(resp));
                 }
                 _ => break,
             }
         }
+        tx.check_persistence()?;
         Ok(None)
     }
 
     pub(super) fn do_request(
-        &self,
+        self: &Arc<Self>,
         request: Request,
     ) -> futures::future::BoxFuture<'_, Result<Option<Response>>> {
         self.send_dialog_request(request, None).boxed()
     }
 
     pub(super) async fn do_reinvite(
-        &self,
+        self: &Arc<Self>,
         request: Request,
         options: super::reinvite::ReinviteOptions,
     ) -> Result<Option<Response>> {
@@ -1632,7 +1999,11 @@ impl DialogInner {
     /// once the BYE is handed to its transaction, and a 481, a 408 or no
     /// response ends the dialog. So whatever the transaction returns, the
     /// dialog is `Terminated(reason)`; a failure is still returned.
-    pub(super) async fn send_bye(&self, request: Request, reason: TerminatedReason) -> Result<()> {
+    pub(super) async fn send_bye(
+        self: &Arc<Self>,
+        request: Request,
+        reason: TerminatedReason,
+    ) -> Result<()> {
         {
             let state = self.state.lock();
             if state.is_terminated() {
@@ -1640,6 +2011,11 @@ impl DialogInner {
             }
             self.record_local_termination();
         }
+        self.checkpoint(
+            super::persistence::DialogCheckpointReason::LocalTerminationRequested,
+            None,
+        )
+        .await?;
         let initial_ack = self.initial_ack.lock().clone();
         let reinvite_ack = self.reinvite_ack.lock().clone();
         for ack in [initial_ack, reinvite_ack].into_iter().flatten() {
@@ -1655,6 +2031,8 @@ impl DialogInner {
         let result = self.do_request(request).await;
         let id = self.id.lock().clone();
         self.transition(DialogState::Terminated(id, reason));
+        self.checkpoint(super::persistence::DialogCheckpointReason::Terminated, None)
+            .await?;
         result.map(|_| ())
     }
 
@@ -1666,7 +2044,7 @@ impl DialogInner {
     /// the extra branch. The BYE is built from that response's own remote
     /// target (Contact) and route set (Record-Route); the confirmed dialog's
     /// state is not touched and no dialog is registered for the branch.
-    pub(super) async fn bye_forked_branch(&self, resp: &Response) -> Result<()> {
+    pub(super) async fn bye_forked_branch(self: &Arc<Self>, resp: &Response) -> Result<()> {
         let contact_uri = resp
             .typed_contact_headers()?
             .first()
@@ -1723,7 +2101,11 @@ impl DialogInner {
     /// retransmitted our 2xx (`answered_2xx`) for 64*T1 and ended without an
     /// ACK. The dialog is terminated with [`TerminatedReason::Timeout`] and the
     /// session is ended with a BYE.
-    pub(super) async fn end_session_without_ack(&self, tx: &Transaction, answered_2xx: bool) {
+    pub(super) async fn end_session_without_ack(
+        self: &Arc<Self>,
+        tx: &Transaction,
+        answered_2xx: bool,
+    ) {
         if !answered_2xx
             || tx.state != crate::transaction::TransactionState::Terminated
             || self.is_terminated()
@@ -1747,10 +2129,19 @@ impl DialogInner {
         }
     }
 
+    /// Capture a single revision. Mutate dialogs through their methods; direct
+    /// writes to DialogInner public fields bypass these synchronization guarantees.
     pub fn snapshot(&self) -> DialogSnapshot {
+        let state_guard = self.state.lock();
+        self.snapshot_locked(&state_guard)
+    }
+
+    pub(crate) fn snapshot_locked(&self, state_guard: &DialogState) -> DialogSnapshot {
+        let usage = self.invite_usage.lock();
+        let lifecycle = self.lifecycle.lock();
         let id = self.id.lock().clone();
 
-        let state = match &*self.state.lock() {
+        let state = match state_guard {
             DialogState::Calling(_) => DialogSnapshotState::Calling,
             DialogState::Trying(_) => DialogSnapshotState::Trying,
             DialogState::Early(_, _) => DialogSnapshotState::Early,
@@ -1768,6 +2159,20 @@ impl DialogInner {
         };
 
         DialogSnapshot {
+            runtime: super::snapshot::DialogSnapshotRuntime {
+                revision: lifecycle.revision + usage.revision,
+                lifecycle: lifecycle.facts.clone(),
+                pending: super::snapshot::DialogPendingState {
+                    local_invite: usage.client_pending,
+                    remote_invite: usage.server_pending,
+                    remote_invite_awaiting_ack: usage.server_waiting_ack != 0,
+                    initial_ack: lifecycle.pending_initial_ack,
+                    negotiations: lifecycle.negotiations,
+                    remote_termination: lifecycle.pending_remote_bye
+                        && !state_guard.is_terminated(),
+                    local_termination: lifecycle.emitted & 2 != 0 && !state_guard.is_terminated(),
+                },
+            },
             state,
 
             role: self.role,
@@ -1804,6 +2209,10 @@ impl DialogInner {
             return Ok(None);
         }
 
+        if !snapshot.runtime.pending.is_empty() {
+            return Err(crate::Error::Error("dialog snapshot contains unfinished signaling; application recovery policy is required".into()));
+        }
+
         // Ensure To has tag
         let mut to = snapshot.to.clone();
         let to_tag = match snapshot.role {
@@ -1830,6 +2239,7 @@ impl DialogInner {
         }
 
         let role = snapshot.role;
+        let lifecycle = super::lifecycle::LifecycleState::restored(&snapshot.runtime)?;
 
         let initial_request = Mutex::new(Self::build_restored_initial_request(
             role,
@@ -1870,13 +2280,19 @@ impl DialogInner {
 
             endpoint_inner,
             state_sender,
-            lifecycle: Mutex::new(super::lifecycle::LifecycleState::default()),
+            persistence: Mutex::new(None),
+            persistence_owner: Mutex::new(alloc::sync::Weak::new()),
+            lifecycle: Mutex::new(lifecycle),
             tu_sender,
 
             initial_request,
             session_id: Mutex::new(snapshot.session_id),
             supports_100rel: snapshot.supports_100rel,
-            remote_reliable: Mutex::new(None),
+            remote_reliable: Mutex::new(Vec::new()),
+            reliable_clients: Mutex::new(BTreeMap::new()),
+            reliable_config: Mutex::new(None),
+            session_timer: Mutex::new(None),
+            reliable_servers: Mutex::new(BTreeMap::new()),
             remote_ack: Mutex::new(None),
             server_connection: Mutex::new(None),
             dialback_target: Mutex::new(None),
@@ -1958,6 +2374,29 @@ impl DialogInner {
             version: Version::V2,
         }
     }
+    pub(crate) fn complete_initial_ack(&self) {
+        let _snapshot_gate = self.state.lock();
+        let mut lifecycle = self.lifecycle.lock();
+        if lifecycle.pending_initial_ack {
+            lifecycle.pending_initial_ack = false;
+            lifecycle.revision += 1;
+        }
+    }
+
+    pub(crate) fn begin_negotiation(&self) {
+        let _snapshot_gate = self.state.lock();
+        let mut lifecycle = self.lifecycle.lock();
+        lifecycle.negotiations += 1;
+        lifecycle.revision += 1;
+    }
+
+    pub(crate) fn finish_negotiation(&self) {
+        let _snapshot_gate = self.state.lock();
+        let mut lifecycle = self.lifecycle.lock();
+        lifecycle.negotiations -= 1;
+        lifecycle.revision += 1;
+    }
+
     pub(crate) fn record_initial_acceptance(
         &self,
         response: &Response,
@@ -1986,15 +2425,21 @@ impl DialogInner {
         );
     }
 
-    pub(crate) fn record_remote_bye(&self, time: super::lifecycle::LifecycleTime) {
-        let state = self.state.lock();
+    pub(crate) fn terminate_remote_bye(
+        &self,
+        reason: TerminatedReason,
+        time: super::lifecycle::LifecycleTime,
+    ) {
+        let id = self.id.lock().clone();
+        let mut state = self.state.lock();
         if !state.is_terminated() {
             self.lifecycle.lock().emit(
-                self.id.lock().clone(),
+                id.clone(),
                 self.role,
                 time,
                 super::lifecycle::DialogLifecycleKind::RemoteByeReceived,
             );
+            self.transition_locked(&mut state, DialogState::Terminated(id, reason));
         }
     }
 
@@ -2042,6 +2487,11 @@ impl DialogInner {
         // Publish the full dialog key before notifying the application. A
         // concurrent handler cannot inspect the state until this lock releases.
         register();
+        {
+            let mut lifecycle = self.lifecycle.lock();
+            lifecycle.pending_initial_ack = true;
+            lifecycle.revision += 1;
+        }
         if let DialogState::Confirmed(id, response) = &confirmed {
             self.lifecycle.lock().emit(
                 id.clone(),
@@ -2092,17 +2542,114 @@ impl DialogInner {
                 },
             );
         }
+        self.lifecycle.lock().revision += 1;
+        if matches!(state, DialogState::Terminated(..)) {
+            if let Some(timer) = self.session_timer.lock().as_ref() {
+                timer.stop();
+            }
+        }
         *old_state = state.clone();
+        if state.is_terminated() {
+            self.enqueue_checkpoint_locked(
+                old_state,
+                super::persistence::DialogCheckpointReason::Terminated,
+                None,
+            );
+        }
         // Try to send state update, but don't fail if channel is closed
         self.state_sender.send(state).ok();
+    }
+
+    #[cfg_attr(not(feature = "platform-tokio"), allow(unused_mut))]
+    async fn process_reliable_invite_handle(
+        &self,
+        tx: &mut Transaction,
+        mut rx: TransactionCommandReceiver,
+    ) -> Result<()> {
+        use crate::platform::{select3, Which3};
+        let mut deadline =
+            core::pin::pin!(crate::platform::sleep(self.endpoint_inner.option.t1x64));
+        let mut commands_closed = false;
+        loop {
+            let selected = {
+                let command = if commands_closed {
+                    futures::future::pending().boxed()
+                } else {
+                    rx.recv().boxed()
+                };
+                let event = core::pin::pin!(tx.tu_receiver.recv());
+                select3(command, event, &mut deadline).await
+            };
+            match selected {
+                Which3::A(Some(TransactionCommand::Respond {
+                    status,
+                    headers,
+                    body,
+                })) => {
+                    let response = self.make_response(&tx.original, status, headers, body);
+                    tx.respond(response).await?;
+                }
+                Which3::A(None) => {
+                    commands_closed = true;
+                    // A final response may be waiting for SDP's PRACK.
+                    if tx
+                        .reliable_provisional
+                        .lock()
+                        .as_ref()
+                        .is_none_or(|s| !s.pending())
+                    {
+                        return tx.reply(StatusCode::NotImplemented).await;
+                    }
+                }
+                Which3::B(Some(event)) => match tx.dispatch_event(event).await {
+                    Some(Some(SipMessage::Request(req))) if req.method == Method::Cancel => {
+                        return tx.reply(StatusCode::RequestTerminated).await;
+                    }
+                    Some(None) => return Ok(()),
+                    _ => {}
+                },
+                Which3::B(None) => return Ok(()),
+                Which3::C(_) => return tx.reply(StatusCode::ServerTimeOut).await,
+            }
+            if tx
+                .last_response
+                .as_ref()
+                .is_some_and(|r| r.status_code.kind() != StatusCodeKind::Provisional)
+            {
+                return Ok(());
+            }
+        }
     }
 
     #[cfg_attr(not(feature = "platform-tokio"), allow(unused_mut))]
     pub async fn process_transaction_handle(
         &self,
         tx: &mut Transaction,
+        rx: TransactionCommandReceiver,
+    ) -> Result<()> {
+        let negotiation = tx.original.method == Method::Update;
+        if negotiation {
+            self.begin_negotiation();
+        }
+        let result = self.process_transaction_handle_inner(tx, rx).await;
+        if negotiation {
+            self.finish_negotiation();
+            self.checkpoint(
+                super::persistence::DialogCheckpointReason::SignalingCompleted,
+                None,
+            )
+            .await?;
+        }
+        result
+    }
+
+    #[cfg_attr(not(feature = "platform-tokio"), allow(unused_mut))]
+    async fn process_transaction_handle_inner(
+        &self,
+        tx: &mut Transaction,
         mut rx: TransactionCommandReceiver,
     ) -> Result<()> {
+        self.bind_persistence(tx);
         let target = if Self::is_target_refresh(&tx.original.method) {
             match Self::parse_target_refresh_contact(&tx.original) {
                 Ok(target) => target,
@@ -2112,6 +2659,9 @@ impl DialogInner {
             None
         };
         let cseq = tx.original.cseq_header()?.seq()?;
+        if tx.reliable_provisional.lock().is_some() {
+            return self.process_reliable_invite_handle(tx, rx).await;
+        }
         let timeout_duration = self.endpoint_inner.option.t1x64;
         let result = crate::platform::timeout(timeout_duration, async {
             while let Some(cmd) = rx.recv().await {

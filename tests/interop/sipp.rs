@@ -10,10 +10,13 @@ use std::{
     process::Stdio,
 };
 use tokio::process::{Child, Command};
+mod bridge;
 mod extended;
 mod faults;
+mod prack_sdp;
 mod prack_uas;
 mod registration;
+mod session_timer;
 mod subscription;
 
 pub(super) struct Sipp {
@@ -66,18 +69,24 @@ impl Sipp {
         // duplicate detector would otherwise consume it before the XML step.
         let duplicate_flags = if matches!(
             scenario,
-            "duplicate_200" | "prack_lost_response" | "application_lost_bye_response"
+            "duplicate_200"
+                | "prack_lost_response"
+                | "bridge_offerless_peer"
+                | "application_lost_bye_response"
+                | "prack_uas_retransmit"
         ) {
             vec!["-nr"]
         } else {
             vec![]
         };
         let child = Command::new(binary)
-            .args(if scenario.starts_with("prack_uas") {
-                vec![local_uri.host_with_port.to_string()]
-            } else {
-                vec![]
-            })
+            .args(
+                if scenario.starts_with("prack_uas") || scenario.starts_with("session_uas") {
+                    vec![local_uri.host_with_port.to_string()]
+                } else {
+                    vec![]
+                },
+            )
             .args(duplicate_flags)
             .current_dir(dir)
             .arg("-sf")
@@ -162,7 +171,7 @@ impl Sipp {
         message
     }
 
-    async fn marker(&mut self, marker: &str) -> TestResult {
+    pub(super) async fn marker(&mut self, marker: &str) -> TestResult {
         until_result(marker, || {
             let text = match std::fs::read_to_string(&self.log) {
                 Ok(text) => text,
