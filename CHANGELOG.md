@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Client INVITE transactions retain exact ACKs separately for each dialog
+  identity and CSeq. Alternating forked 2xx retransmissions reuse their own
+  Via branch, SDP body, routes, and destination, including after the owner
+  drops the transaction. The finished cache expires with TimerCleanup.
+  An unknown fork after drop is no longer acknowledged by rewriting another
+  fork's ACK; keep driving the Accepted transaction to handle new forks.
+  The public `last_ack` field remains the most recently prepared/sent ACK.
+
 ## 0.8.1
 
 Fourteen fixes and additions merged (#223–#236).

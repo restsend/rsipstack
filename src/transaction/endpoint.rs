@@ -118,6 +118,7 @@ pub struct EndpointInner {
     pub timers: Timer<TransactionTimer>,
     pub transport_layer: TransportLayer,
     pub finished_transactions: RwMap<TransactionKey, Option<SipMessage>>,
+    pub(crate) finished_invite_acks: RwMap<TransactionKey, super::ack_cache::AckCache>,
     pub transactions: RwMap<TransactionKey, TransactionEventSender>,
     pub(crate) record_receipt_times: core::sync::atomic::AtomicBool,
     pub(crate) receipt_times: RwMap<TransactionKey, Arc<super::receipt::ReceiptTimes>>,
@@ -248,6 +249,7 @@ impl EndpointInner {
             receipt_times: RwMap::new(),
             legacy_ack_tags: RwMap::new(),
             finished_transactions: RwMap::<TransactionKey, Option<SipMessage>>::new(),
+            finished_invite_acks: RwMap::new(),
             waiting_ack: RwMap::<DialogId, TransactionKey>::new(),
             waiting_ack_cseq: RwMap::new(),
             timer_interval: timer_interval.unwrap_or(Duration::from_millis(20)),
@@ -331,6 +333,7 @@ impl EndpointInner {
                     trace!(%key, "TimerCleanup");
                     self.transactions.remove(&key);
                     self.finished_transactions.remove(&key);
+                    self.finished_invite_acks.remove(&key);
                     self.legacy_ack_tags.remove(&key);
                     self.waiting_ack.retain(|_, v| v != &key);
                     self.waiting_ack_cseq.retain(|_, v| v != &key);
@@ -488,6 +491,28 @@ impl EndpointInner {
                 }
             }
             SipMessage::Response(resp) => {
+                if resp.status_code.kind() == crate::sip::StatusCodeKind::Successful
+                    && !resp.has_multiple_vias()
+                {
+                    // A finished INVITE may have acknowledged several forks.
+                    // Never rewrite one fork's ACK to stand in for another.
+                    let cached = self.finished_invite_acks.with(|caches| {
+                        caches.get(&key).map(|cache| {
+                            super::ack_cache::response_key(resp)
+                                .ok()
+                                .and_then(|identity| cache.get(&identity))
+                                .cloned()
+                        })
+                    });
+                    if let Some(cached) = cached {
+                        if let Some(ack) = cached {
+                            connection
+                                .send(ack.request.into(), ack.destination.as_ref())
+                                .await?;
+                        }
+                        return Ok(());
+                    }
+                }
                 let last_message = self
                     .finished_transactions
                     .get(&key)
