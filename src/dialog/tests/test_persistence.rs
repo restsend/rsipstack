@@ -29,6 +29,7 @@ enum Gate {
     Never,
     InitialRequest,
     Answer,
+    ReinviteAnswer,
     ByeResponse,
     UasResponse,
     Info,
@@ -68,6 +69,9 @@ impl Storage {
                     && matches!(&c.message, Some(SipMessage::Request(r)) if r.method == Method::Invite)
             }
             Gate::Answer => c.reason == Reason::BeforeAck,
+            Gate::ReinviteAnswer => {
+                c.reason == Reason::BeforeAck && c.snapshot.runtime.pending.negotiations != 0
+            }
             Gate::ByeResponse => {
                 c.reason == Reason::BeforeResponse
                     && matches!(&c.message, Some(SipMessage::Response(r)) if r.cseq_header().unwrap().method().unwrap() == Method::Bye)
@@ -626,5 +630,166 @@ async fn persistence_request_is_not_sent_if_peer_ends_during_commit() -> crate::
     assert_eq!(response.status_code, StatusCode::OK);
     assert_eq!(response.cseq_header()?.method()?, Method::Bye);
     silent(&call.peer).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn persistence_incoming_reinvite_saves_response_and_ack_completion() -> crate::Result<()> {
+    use crate::dialog::dialog::DialogState;
+    let store = Storage::new(Gate::UasResponse);
+    let mut call = start(store.clone(), Duration::from_secs(2)).await?;
+    let initial = established(&mut call).await;
+    store.committed.lock().unwrap().clear();
+    let remote = call.peer.local_addr()?;
+    let invite = Request::try_from(format!(
+        "INVITE sip:alice@{} SIP/2.0\r\nVia: SIP/2.0/UDP {remote};branch=z9hG4bK-persist-reinvite\r\nFrom: <sip:bob@example.com>;tag=peer\r\nTo: {}\r\nCall-ID: {}\r\nCSeq: 10 INVITE\r\nContact: <sip:bob@{remote}>\r\nMax-Forwards: 70\r\nContent-Length: 0\r\n\r\n",
+        call.local, initial.from_header()?.value(), initial.call_id_header()?.value()
+    ).as_str())?;
+    call.peer
+        .send_to(invite.to_string().as_bytes(), call.local)
+        .await?;
+    let handle = tokio::time::timeout(Duration::from_secs(2), async {
+        while let Some(state) = call._states.recv().await {
+            if let DialogState::Updated(_, _, handle) = state {
+                return handle;
+            }
+        }
+        panic!("missing re-INVITE handle");
+    })
+    .await
+    .unwrap();
+    handle.respond(StatusCode::OK, None, None).await?;
+    entered(&store).await;
+    let pending_revision = {
+        let attempts = store.attempts.lock().unwrap();
+        let before = attempts.last().unwrap();
+        assert_eq!(before.reason, Reason::BeforeResponse);
+        assert_eq!(before.snapshot.runtime.pending.negotiations, 1);
+        assert!(!before.snapshot.is_quiescent());
+        before.snapshot.runtime.revision
+    };
+    silent(&call.peer).await;
+    store.release.cancel();
+    let SipMessage::Response(response) = receive(&call.peer).await else {
+        panic!("expected re-INVITE response");
+    };
+    assert_eq!(response.status_code, StatusCode::OK);
+    assert_eq!(response.cseq_header()?.seq()?, 10);
+    let mut ack = invite;
+    ack.method = Method::Ack;
+    ack.cseq_header_mut()?.mut_method(Method::Ack)?;
+    call.peer
+        .send_to(ack.to_string().as_bytes(), call.local)
+        .await?;
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let completed = store.committed.lock().unwrap().iter().any(|checkpoint| {
+                checkpoint.reason == Reason::SignalingCompleted
+                    && checkpoint.snapshot.is_quiescent()
+                    && checkpoint.snapshot.runtime.revision > pending_revision
+            });
+            if completed {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("matching ACK must produce a quiescent checkpoint");
+    assert!(call.dialog.snapshot().is_quiescent());
+    Ok(())
+}
+
+#[tokio::test]
+async fn persistence_reinvite_commit_precedes_deferred_ack_handler() -> crate::Result<()> {
+    use crate::dialog::reinvite::{AckBody, InviteAnswerHandler, ReinviteOptions};
+    use crate::sip::{Header, Response};
+    struct DeferredAnswer {
+        entered: CancellationToken,
+        release: CancellationToken,
+    }
+    const SDP: &[u8] = b"v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\nm=audio 10000 RTP/AVP 0\r\n";
+    #[async_trait]
+    impl InviteAnswerHandler for DeferredAnswer {
+        async fn answer(&self, _: Response) -> crate::Result<AckBody> {
+            self.entered.cancel();
+            self.release.cancelled().await;
+            Ok(AckBody::sdp(SDP.to_vec()))
+        }
+        fn fallback_answer(&self, _: &Response) -> AckBody {
+            AckBody::sdp(SDP.to_vec())
+        }
+    }
+    for fail in [false, true] {
+        let store = Storage::new(Gate::ReinviteAnswer);
+        let mut call = start(store.clone(), Duration::from_secs(2)).await?;
+        established(&mut call).await;
+        store.committed.lock().unwrap().clear();
+        let handler = Arc::new(DeferredAnswer {
+            entered: CancellationToken::new(),
+            release: CancellationToken::new(),
+        });
+        let options = ReinviteOptions {
+            answer_handler: Some(handler.clone()),
+            ..Default::default()
+        };
+        let dialog = call.dialog.clone();
+        let invite = dialog.prepare_reinvite(None, None)?;
+        let sender = tokio::spawn(async move { dialog.send_reinvite(invite, options).await });
+        let invite = request(&call.peer, Method::Invite).await;
+        let mut success = Response::try_from(
+            response(&invite, &format!("sip:bob@{}", call.peer.local_addr()?)).as_str(),
+        )?;
+        success.body = SDP.to_vec();
+        success
+            .headers
+            .unique_push(Header::ContentType("application/sdp".into()));
+        success
+            .headers
+            .unique_push(Header::ContentLength((SDP.len() as u32).into()));
+        call.peer
+            .send_to(success.to_string().as_bytes(), call.local)
+            .await?;
+        entered(&store).await;
+        assert!(
+            !handler.entered.is_cancelled(),
+            "answer handler ran before storage committed"
+        );
+        assert!(!call.dialog.snapshot().is_quiescent());
+        silent(&call.peer).await;
+        store.fail.store(fail, Ordering::SeqCst);
+        store.release.cancel();
+        if fail {
+            assert!(tokio::time::timeout(Duration::from_secs(2), sender)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_err());
+            assert!(!handler.entered.is_cancelled());
+            assert!(call.dialog.persistence_status().unwrap().failure.is_some());
+            silent(&call.peer).await;
+        } else {
+            tokio::time::timeout(Duration::from_secs(2), handler.entered.cancelled())
+                .await
+                .unwrap();
+            silent(&call.peer).await;
+            handler.release.cancel();
+            let ack = request(&call.peer, Method::Ack).await;
+            assert_eq!(ack.body, SDP);
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(2), sender)
+                    .await
+                    .unwrap()
+                    .unwrap()?
+                    .unwrap()
+                    .status_code,
+                StatusCode::OK
+            );
+            assert!(store.committed.lock().unwrap().iter().any(|checkpoint| {
+                checkpoint.reason == Reason::SignalingCompleted
+                    && checkpoint.snapshot.is_quiescent()
+            }));
+        }
+    }
     Ok(())
 }
