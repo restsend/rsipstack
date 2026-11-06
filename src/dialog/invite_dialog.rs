@@ -102,6 +102,15 @@ impl InviteDialog {
         self.inner.remote_ack.lock().clone()
     }
 
+    /// Enable full 100rel before starting the dialog. Prefer configuring the layer
+    /// before call creation; changes during an INVITE exchange are unsupported.
+    pub fn set_reliable_provisional(
+        &self,
+        config: Option<super::reliable::ReliableProvisionalConfig>,
+    ) {
+        *self.inner.reliable_config.lock() = config;
+    }
+
     /// The initial INVITE request that created this dialog.
     pub fn initial_request(&self) -> Request {
         self.inner.initial_request.lock().clone()
@@ -132,7 +141,9 @@ impl InviteDialog {
         self.inner
             .tu_sender
             .send(TransactionEvent::Respond(resp.clone()))?;
-        self.inner.transition(DialogState::Early(self.id(), resp));
+        if self.inner.reliable_config.lock().is_none() || !self.inner.supports_100rel {
+            self.inner.transition(DialogState::Early(self.id(), resp));
+        }
         Ok(())
     }
 
@@ -148,7 +159,9 @@ impl InviteDialog {
         self.inner
             .tu_sender
             .send(TransactionEvent::Respond(resp.clone()))?;
-        self.inner.transition(DialogState::WaitAck(self.id(), resp));
+        if self.inner.reliable_config.lock().is_none() || !self.inner.supports_100rel {
+            self.inner.transition(DialogState::WaitAck(self.id(), resp));
+        }
         Ok(())
     }
 
@@ -419,13 +432,21 @@ impl InviteDialog {
                         // Not held back by a PRACK (RFC 3262); again after
                         // the transition for a cancel() racing this one.
                         self.send_deferred_cancel();
-                        self.inner.handle_provisional_response(&resp).await?;
+                        if !self
+                            .inner
+                            .handle_provisional_response(&resp, &tx.original)
+                            .await?
+                        {
+                            continue;
+                        }
                         self.inner.transition(DialogState::Early(self.id(), resp));
                         self.send_deferred_cancel();
                         continue;
                     }
 
                     // A challenge to a cancelled INVITE is its final response.
+                    self.inner
+                        .clear_remote_reliable(tx.original.cseq_header()?.seq()?);
                     if matches!(
                         status,
                         StatusCode::ProxyAuthenticationRequired | StatusCode::Unauthorized
@@ -859,6 +880,11 @@ impl InviteDialog {
             self.inner.observe_peer_session_uuid(peer_uuid);
         }
 
+        self.inner.attach_reliable_server(tx)?;
+        if self.inner.reject_required_100rel(tx).await? {
+            return Ok(());
+        }
+
         let cseq = tx.original.cseq_header()?.seq()?;
         // ACK and CANCEL reuse their INVITE's CSeq and are matched by the
         // transaction layer. Neither participates in the dialog sequence.
@@ -900,6 +926,10 @@ impl InviteDialog {
             }
         }
 
+        // A locally originated dialog can receive PRACK for its re-INVITE.
+        if tx.original.method == Method::PRack {
+            return self.handle_prack(tx).await;
+        }
         if self.inner.is_confirmed() {
             // Validate before the application can change its media state or
             // accept the request. Receiving a Contact alone does not commit it.
@@ -1053,29 +1083,7 @@ impl InviteDialog {
     }
 
     async fn handle_prack(&mut self, tx: &mut Transaction) -> Result<()> {
-        debug!(id = %self.id(), uri = %tx.original.uri, "received prack");
-
-        let rack_ok = tx.original.rack_value().is_some()
-            || tx
-                .original
-                .header_value("RAck")
-                .and_then(|value| {
-                    let mut items = value.split_whitespace();
-                    let rseq = items.next()?.parse::<u32>().ok()?;
-                    let cseq = items.next()?.parse::<u32>().ok()?;
-                    let method = items.next()?.parse::<Method>().ok()?;
-                    Some((rseq, cseq, method))
-                })
-                .is_some();
-
-        if !rack_ok {
-            warn!(id = %self.id(), "received PRACK without RAck header");
-            tx.reply(StatusCode::BadRequest).await?;
-            return Ok(());
-        }
-
-        tx.reply(StatusCode::OK).await?;
-        Ok(())
+        self.inner.receive_prack(tx).await
     }
 
     async fn handle_options(&mut self, tx: &mut Transaction) -> Result<()> {

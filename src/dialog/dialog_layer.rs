@@ -38,6 +38,9 @@ pub struct DialogLayerInner {
         crate::platform::sync::Mutex<Option<super::lifecycle::DialogLifecycleSender>>,
     pub(super) last_seq: AtomicU32,
     pub(super) dialogs: RwMap<String, Dialog>,
+    retired_reliable: RwMap<String, Dialog>,
+    pub(super) reliable_config:
+        crate::platform::sync::Mutex<Option<super::reliable::ReliableProvisionalConfig>>,
 }
 pub type DialogLayerInnerRef = Arc<DialogLayerInner>;
 
@@ -145,6 +148,8 @@ impl DialogLayer {
                 last_seq: AtomicU32::new(0),
                 lifecycle_sender: crate::platform::sync::Mutex::new(None),
                 dialogs: RwMap::new(),
+                retired_reliable: RwMap::new(),
+                reliable_config: crate::platform::sync::Mutex::new(None),
             }),
         }
     }
@@ -159,6 +164,14 @@ impl DialogLayer {
                 .store(true, Ordering::Relaxed);
         }
         *self.inner.lifecycle_sender.lock() = sender;
+    }
+
+    /// Configure new INVITE dialogs. Existing dialogs retain their configuration.
+    pub fn set_reliable_provisional(
+        &self,
+        config: Option<super::reliable::ReliableProvisionalConfig>,
+    ) {
+        *self.inner.reliable_config.lock() = config;
     }
 
     pub fn get_or_create_server_invite(
@@ -224,6 +237,8 @@ impl DialogLayer {
         dialog.inner.lifecycle.lock().sender = self.inner.lifecycle_sender.lock().clone();
         *tx.initial_dialog.lock() = Some(Arc::downgrade(&dialog.inner));
         dialog.inner.reserve_invite(tx)?;
+        *dialog.inner.reliable_config.lock() = self.inner.reliable_config.lock().clone();
+        dialog.inner.attach_reliable_server(tx)?;
         dialog.inner.set_server_connection(tx.connection.clone());
         self.inner
             .dialogs
@@ -558,6 +573,7 @@ impl DialogLayer {
 
         inner.credential = credential;
         let inner = Arc::new(inner);
+        *inner.reliable_config.lock() = self.inner.reliable_config.lock().clone();
         let dialog = Dialog::from_inner(inner.role, inner.clone());
 
         let key = dialog.id().to_string();
@@ -578,13 +594,41 @@ impl DialogLayer {
 
     pub fn remove_dialog(&self, id: &DialogId) {
         if let Some(d) = self.inner.dialogs.remove(&id.to_string()) {
-            d.on_remove()
+            let pending = match &d {
+                Dialog::Invite(d) => d
+                    .inner
+                    .reliable_servers
+                    .lock()
+                    .values()
+                    .any(|s| s.pending()),
+                _ => false,
+            };
+            if pending {
+                let key = id.to_string();
+                self.inner.retired_reliable.insert(key.clone(), d);
+                let layer = self.inner.clone();
+                let delay = self.endpoint.option.t1x64;
+                crate::platform::spawn(async move {
+                    crate::platform::sleep(delay).await;
+                    if let Some(dialog) = layer.retired_reliable.remove(&key) {
+                        dialog.on_remove();
+                    }
+                });
+            } else {
+                d.on_remove();
+            }
         }
     }
 
     pub fn match_dialog(&self, tx: &Transaction) -> Option<Dialog> {
         let id = DialogId::try_from(tx).ok()?;
-        self.get_dialog(&id)
+        self.get_dialog(&id).or_else(|| {
+            if tx.original.method == crate::sip::Method::PRack {
+                self.inner.retired_reliable.get(&id.to_string())
+            } else {
+                None
+            }
+        })
     }
 
     pub fn new_dialog_state_channel(&self) -> (DialogStateSender, DialogStateReceiver) {

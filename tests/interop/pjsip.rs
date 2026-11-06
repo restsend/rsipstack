@@ -1,3 +1,4 @@
+mod bridge;
 mod faults;
 mod mid_dialog;
 use super::{bounded, log_dir, sdp, until, Peer, Stack};

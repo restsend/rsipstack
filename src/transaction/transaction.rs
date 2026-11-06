@@ -195,6 +195,8 @@ pub struct Transaction {
     retransmission: bool,
     is_cleaned_up: bool,
     invite_reservation: Mutex<Option<InviteReservation>>,
+    pub(crate) reliable_provisional:
+        crate::platform::sync::Mutex<Option<Arc<crate::dialog::reliable::ReliableServer>>>,
 }
 
 impl Transaction {
@@ -244,6 +246,7 @@ impl Transaction {
             tu_sender,
             is_cleaned_up: false,
             invite_reservation: Mutex::new(None),
+            reliable_provisional: crate::platform::sync::Mutex::new(None),
         };
         tx.endpoint_inner
             .attach_transaction(&tx.key, tx.tu_sender.clone());
@@ -483,6 +486,11 @@ impl Transaction {
     /// - the connection is missing,
     /// - the underlying transport send fails.
     ///
+    /// When full 100rel is enabled on this INVITE, a subsequent reliable 1xx
+    /// or a 2xx waiting for SDP's PRACK can be queued. Success then means the
+    /// response was accepted for delivery. Keep driving the owning transaction
+    /// to transmit it after PRACK; `last_response` reflects what was sent.
+    ///
     /// # Cancel safety
     ///
     /// **NOT cancel-safe.** The mutation order is: store `last_response`
@@ -509,6 +517,20 @@ impl Transaction {
                 ));
             }
         }
+
+        let reliable = self.reliable_provisional.lock().clone();
+        let response = if let Some(server) = &reliable {
+            match server.prepare(response) {
+                Ok(Some(response)) => response,
+                Ok(None) => return Ok(()),
+                Err(e) => {
+                    server.fail(e.to_string());
+                    return Err(e);
+                }
+            }
+        } else {
+            response
+        };
 
         let new_state = match response.status_code.kind() {
             StatusCodeKind::Provisional => match response.status_code {
@@ -598,7 +620,11 @@ impl Transaction {
             }
         }
         guard.0 = None;
-        self.transition(new_state).map(|_| ())
+        self.transition(new_state)?;
+        if let (Some(server), Some(response)) = (reliable, self.last_response.as_ref()) {
+            server.sent(response);
+        }
+        Ok(())
     }
 
     fn add_ack_cseq_route(&self, dialog_id: &DialogId) -> Option<(DialogId, u32)> {
@@ -1273,6 +1299,12 @@ impl Transaction {
                 if last.status_code == resp.status_code
                     && last.body == resp.body
                     && last.rseq_value() == resp.rseq_value()
+                    && last.cseq_header().ok() == resp.cseq_header().ok()
+                    && last.call_id_header().ok() == resp.call_id_header().ok()
+                    && last.from_header().and_then(|h| h.tag()).ok()
+                        == resp.from_header().and_then(|h| h.tag()).ok()
+                    && last.to_header().and_then(|h| h.tag()).ok()
+                        == resp.to_header().and_then(|h| h.tag()).ok()
                 {
                     // ignore duplicate response
                     return None;
