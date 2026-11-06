@@ -672,7 +672,10 @@ impl ServerInviteDialog {
             );
             // ACK is never answered. Other stale requests are rejected
             // regardless of the original dialog role (RFC 3261 section 12.2.2).
-            if !matches!(tx.original.method, Method::Ack | Method::Cancel) {
+            if !matches!(
+                tx.original.method,
+                crate::sip::Method::Ack | crate::sip::Method::Cancel
+            ) {
                 tx.reply(crate::sip::StatusCode::ServerInternalError)
                     .await?;
             }
