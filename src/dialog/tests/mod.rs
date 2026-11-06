@@ -28,3 +28,5 @@ mod test_target_refresh;
 mod test_uas_ack_timeout;
 mod test_via_listen_addr;
 mod test_warn_logs;
+
+mod test_reinvite_control;

@@ -843,39 +843,7 @@ impl ServerInviteDialog {
     }
 
     async fn handle_reinvite(&mut self, tx: &mut Transaction) -> Result<()> {
-        debug!(id = %self.id(), "received re-invite {}", tx.original.uri);
-        let (handle, rx) = TransactionHandle::new();
-        self.inner
-            .transition(DialogState::Updated(self.id(), tx.original.clone(), handle));
-
-        self.inner.process_transaction_handle(tx, rx).await?;
-        let answered_2xx = tx
-            .last_response
-            .as_ref()
-            .is_some_and(|resp| resp.status_code.kind() == crate::sip::StatusCodeKind::Successful);
-        let mut acked = false;
-
-        while let Some(msg) = tx.receive().await {
-            if let SipMessage::Request(req) = msg {
-                if req.method == crate::sip::Method::Ack {
-                    debug!(id = %self.id(),"received ack for re-invite {}", req.uri);
-                    self.inner.remote_ack.lock().replace(req);
-                    self.inner.transition(DialogState::Confirmed(
-                        self.id(),
-                        tx.last_response.clone().unwrap_or_default(),
-                    ));
-                    acked = true;
-                    break;
-                }
-            }
-        }
-        // A matching ACK ends the Accepted transaction; `acked` keeps the
-        // timeout path (no ACK within 64*T1) from firing on a confirmed
-        // re-INVITE.
-        self.inner
-            .end_session_without_ack(tx, answered_2xx && !acked)
-            .await;
-        Ok(())
+        self.inner.process_reinvite(tx, true).await
     }
 
     async fn handle_invite(&mut self, tx: &mut Transaction) -> Result<()> {

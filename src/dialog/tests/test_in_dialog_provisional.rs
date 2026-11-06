@@ -22,7 +22,7 @@ const PEER_TAG: &str = "peer-tag";
 
 /// Receive the next request with `method` on the raw peer socket, skipping
 /// anything else (retransmissions, ACKs we are not waiting for).
-async fn recv_request(socket: &UdpSocket, method: Method) -> (Request, SocketAddr) {
+pub(super) async fn recv_request(socket: &UdpSocket, method: Method) -> (Request, SocketAddr) {
     let mut buf = vec![0u8; 4096];
     loop {
         let (len, from) = tokio::time::timeout(Duration::from_secs(2), socket.recv_from(&mut buf))
@@ -40,7 +40,7 @@ async fn recv_request(socket: &UdpSocket, method: Method) -> (Request, SocketAdd
 
 /// Build a response to `req` as the peer UA, adding the peer's To tag when
 /// the request does not carry one yet.
-fn response(req: &Request, code: u16, reason: &str, contact: &str) -> String {
+pub(super) fn response(req: &Request, code: u16, reason: &str, contact: &str) -> String {
     let to = req.to_header().unwrap().value().to_string();
     let to = if to.contains(";tag=") {
         to
@@ -63,7 +63,13 @@ fn response(req: &Request, code: u16, reason: &str, contact: &str) -> String {
     )
 }
 
-async fn reply(socket: &UdpSocket, to: SocketAddr, req: &Request, code: u16, reason: &str) {
+pub(super) async fn reply(
+    socket: &UdpSocket,
+    to: SocketAddr,
+    req: &Request,
+    code: u16,
+    reason: &str,
+) {
     let contact = format!("sip:bob@{}", socket.local_addr().unwrap());
     socket
         .send_to(response(req, code, reason, &contact).as_bytes(), to)
@@ -81,8 +87,23 @@ fn drain_states(rx: &mut DialogStateReceiver) -> Vec<DialogState> {
 
 /// Set up a UAC endpoint and a raw UDP peer, and establish a dialog whose
 /// initial INVITE is answered 100 → 183 → 200. Returns the confirmed dialog.
-async fn establish(
+pub(super) async fn establish(
     token: &CancellationToken,
+) -> crate::Result<(InviteDialog, DialogStateReceiver, UdpSocket)> {
+    establish_with_credential(token, None).await
+}
+
+pub(super) async fn establish_with_credential(
+    token: &CancellationToken,
+    credential: Option<crate::dialog::authenticate::Credential>,
+) -> crate::Result<(InviteDialog, DialogStateReceiver, UdpSocket)> {
+    establish_with_options(token, credential, Default::default()).await
+}
+
+pub(super) async fn establish_with_options(
+    token: &CancellationToken,
+    credential: Option<crate::dialog::authenticate::Credential>,
+    options: crate::transaction::endpoint::EndpointOption,
 ) -> crate::Result<(InviteDialog, DialogStateReceiver, UdpSocket)> {
     let peer = UdpSocket::bind("127.0.0.1:0").await?;
     let peer_port = peer.local_addr()?.port();
@@ -97,6 +118,7 @@ async fn establish(
     let uac_addr = udp.get_addr().addr.clone();
     transport_layer.add_transport(udp.into());
     let endpoint = EndpointBuilder::new()
+        .with_option(options)
         .with_user_agent("rsipstack-test")
         .with_transport_layer(transport_layer)
         .with_cancel_token(token.child_token())
@@ -125,6 +147,7 @@ async fn establish(
 
     let (state_sender, mut state_receiver) = unbounded_channel();
     let invite_option = InviteOption {
+        credential,
         caller: Uri::try_from("sip:alice@example.com")?,
         callee: Uri::try_from(format!("sip:bob@127.0.0.1:{peer_port};transport=udp").as_str())?,
         contact: Uri::try_from(format!("sip:alice@{uac_addr}").as_str())?,

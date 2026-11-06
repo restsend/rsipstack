@@ -12,7 +12,7 @@
 //! [`ClientInviteDialog`]: crate::dialog::client_dialog::ClientInviteDialog
 
 use super::dialog::DialogInner;
-use super::dialog::InitialInviteAck;
+use super::dialog::InviteAck;
 use super::dialog::{Dialog, DialogInnerRef, DialogState, TerminatedReason, TransactionHandle};
 use super::subscription::{ClientSubscriptionDialog, ServerSubscriptionDialog};
 use super::DialogId;
@@ -52,7 +52,7 @@ pub struct InviteDialog {
 
 // Wake local teardown if the INVITE driver is dropped during ACK. It must
 // report an interrupted ACK instead of waiting forever or sending BYE first.
-struct InitialAckGuard(Arc<InitialInviteAck>);
+struct InitialAckGuard(Arc<InviteAck>);
 
 impl Drop for InitialAckGuard {
     fn drop(&mut self) {
@@ -374,7 +374,7 @@ impl InviteDialog {
         let mut dialog_id = self.id();
         let mut final_response = None;
         loop {
-            let ack = InitialInviteAck::new();
+            let ack = InviteAck::new();
             let _ack_guard = InitialAckGuard(ack.clone());
             let mut established = Ok(false);
             let msg = tx
@@ -1115,39 +1115,7 @@ impl InviteDialog {
     }
 
     async fn handle_reinvite(&mut self, tx: &mut Transaction) -> Result<()> {
-        debug!(id = %self.id(), "received re-invite {}", tx.original.uri);
-        let (handle, rx) = TransactionHandle::new();
-        self.inner
-            .transition(DialogState::Updated(self.id(), tx.original.clone(), handle));
-
-        self.inner.process_transaction_handle(tx, rx).await?;
-        let answered_2xx = tx
-            .last_response
-            .as_ref()
-            .is_some_and(|resp| resp.status_code.kind() == StatusCodeKind::Successful);
-        let mut acked = false;
-
-        while let Some(msg) = tx.receive().await {
-            if let SipMessage::Request(req) = msg {
-                if req.method == Method::Ack {
-                    debug!(id = %self.id(), "received ack for re-invite {}", req.uri);
-                    self.inner.remote_ack.lock().replace(req);
-                    self.inner.transition(DialogState::Confirmed(
-                        self.id(),
-                        tx.last_response.clone().unwrap_or_default(),
-                    ));
-                    acked = true;
-                    break;
-                }
-            }
-        }
-        // A matching ACK ends the Accepted transaction; `acked` keeps the
-        // timeout path (no ACK within 64*T1) from firing on a confirmed
-        // re-INVITE.
-        self.inner
-            .end_session_without_ack(tx, answered_2xx && !acked)
-            .await;
-        Ok(())
+        self.inner.process_reinvite(tx, true).await
     }
 
     async fn handle_invite(&mut self, tx: &mut Transaction) -> Result<()> {
