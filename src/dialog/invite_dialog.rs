@@ -398,6 +398,9 @@ impl InviteDialog {
                 })
                 .await;
             ack.finish();
+            if msg.is_some() {
+                self.inner.complete_initial_ack();
+            }
             let cancelled = established?;
             let Some(msg) = msg else { break };
             if matches!(&msg, SipMessage::Response(r) if r.status_code.kind() != StatusCodeKind::Provisional)
@@ -530,14 +533,14 @@ impl InviteDialog {
     fn update_remote_target_from_2xx(&self, resp: &Response) -> Result<()> {
         self.inner.update_route_set_from_response(resp);
         let contact = resp.contact_header()?;
-        self.inner.remote_contact.lock().replace(contact.clone());
 
         let contact_uri = resp
             .typed_contact_headers()?
             .first()
             .map(|c| c.uri.clone())
             .ok_or_else(|| crate::Error::Error("missing Contact header".to_string()))?;
-        *self.inner.remote_uri.lock() = contact_uri;
+        self.inner
+            .set_remote_target(contact_uri, Some(contact.clone()));
         Ok(())
     }
 
@@ -867,11 +870,7 @@ impl InviteDialog {
         let sequence = if matches!(tx.original.method, Method::Ack | Method::Cancel) {
             Ok(self.inner.remote_seq.load(Ordering::Relaxed))
         } else {
-            self.inner
-                .remote_seq
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |remote_seq| {
-                    (cseq >= remote_seq).then_some(cseq)
-                })
+            self.inner.admit_remote_seq(cseq, &tx.original.method)
         };
         if let Err(remote_seq) = sequence {
             match self.role() {
@@ -1017,17 +1016,16 @@ impl InviteDialog {
     }
 
     async fn handle_bye(&mut self, tx: &mut Transaction) -> Result<()> {
-        self.inner.record_remote_bye(
-            tx.original_received_at
-                .unwrap_or_else(super::lifecycle::LifecycleTime::now),
-        );
         debug!(id = %self.id(), uri = %tx.original.uri, "received bye");
         let reason = match self.role() {
             TransactionRole::Server => TerminatedReason::UacBye,
             TransactionRole::Client => TerminatedReason::UasBye,
         };
-        self.inner
-            .transition(DialogState::Terminated(self.id(), reason));
+        self.inner.terminate_remote_bye(
+            reason,
+            tx.original_received_at
+                .unwrap_or_else(super::lifecycle::LifecycleTime::now),
+        );
         tx.reply(StatusCode::OK).await?;
         Ok(())
     }
@@ -1135,7 +1133,10 @@ impl InviteDialog {
     }
 
     async fn handle_reinvite(&mut self, tx: &mut Transaction) -> Result<()> {
-        self.inner.process_reinvite(tx, true).await
+        self.inner.begin_negotiation();
+        let result = self.inner.process_reinvite(tx, true).await;
+        self.inner.finish_negotiation();
+        result
     }
 
     async fn handle_invite(&mut self, tx: &mut Transaction) -> Result<()> {

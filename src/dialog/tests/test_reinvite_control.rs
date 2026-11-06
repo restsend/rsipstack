@@ -77,6 +77,10 @@ async fn deferred_ack_waits_for_answer_and_retransmits_identically() -> crate::R
     peer.send_to(success.to_string().as_bytes(), address)
         .await?;
     assert_eq!(received_offer.recv().await.unwrap().body, OFFER);
+    let during_answer = dialog.snapshot();
+    assert_eq!(during_answer.runtime.pending.negotiations, 1);
+    assert!(during_answer.runtime.pending.local_invite);
+    assert!(!during_answer.is_quiescent());
     peer.send_to(success.to_string().as_bytes(), address)
         .await?;
     let overlapping = dialog.prepare_reinvite(None, Some(OFFER.to_vec()))?;
@@ -100,6 +104,7 @@ async fn deferred_ack_waits_for_answer_and_retransmits_identically() -> crate::R
     assert_eq!(ack.body, ANSWER);
     assert_eq!(ack.cseq_header()?.seq()?, sequence);
     assert_eq!(pending.await.unwrap()?.unwrap().status_code.code(), 200);
+    assert!(dialog.snapshot().is_quiescent());
     peer.send_to(success.to_string().as_bytes(), address)
         .await?;
     let (repeated, _) = recv_request(&peer, Method::Ack).await;
@@ -161,6 +166,7 @@ async fn cancelled_reinvite_waits_for_provisional_and_preserves_session() -> cra
     recv_request(&peer, Method::Ack).await;
     assert_eq!(pending.await.unwrap()?.unwrap().status_code.code(), 487);
     assert!(matches!(dialog.state(), DialogState::Confirmed(..)));
+    assert!(dialog.snapshot().is_quiescent());
     Ok(())
 }
 
@@ -612,6 +618,10 @@ async fn incoming_offerless_reinvite_exposes_only_matching_ack_answer() -> crate
         .await
         .unwrap();
     receive_response(&peer, Method::Invite, 200).await?;
+    let awaiting_ack = dialog.snapshot();
+    assert_eq!(awaiting_ack.runtime.pending.negotiations, 1);
+    assert!(awaiting_ack.runtime.pending.remote_invite_awaiting_ack);
+    assert!(!awaiting_ack.is_quiescent());
     let mut ack = request;
     ack.method = Method::Ack;
     ack.headers.unique_push(Header::CSeq("9 ACK".into()));
@@ -634,5 +644,12 @@ async fn incoming_offerless_reinvite_exposes_only_matching_ack_answer() -> crate
     assert_eq!(received.body, ANSWER);
     assert_eq!(received.cseq_header()?.seq()?, 10);
     assert!(dialog.state().is_confirmed());
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !dialog.snapshot().is_quiescent() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("matching ACK must finish the snapshot negotiation");
     Ok(())
 }
