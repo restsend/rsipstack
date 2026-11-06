@@ -2,6 +2,11 @@
 
 ## Unreleased — proposed 0.9.0
 
+- Opt-in persistence now saves every INVITE final response before its ACK,
+  including rejection and authentication challenges. A successful re-INVITE
+  checkpoint contains the accepted Contact and the observed response in one
+  coherent snapshot boundary. Failed writes continue to block protected sends.
+
 - **Breaking (requires maintainer approval for 0.9.0):** `DialogSnapshot` adds
   coherent `runtime` metadata and becomes `#[non_exhaustive]`. External callers
   must use `DialogSnapshot::builder(...)` and include `..` in destructuring

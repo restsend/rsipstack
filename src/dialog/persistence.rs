@@ -75,8 +75,10 @@ pub enum DialogCheckpointReason {
     LocalTerminationRequested,
     /// Before sending a final response to an incoming request.
     BeforeResponse,
-    /// A successful INVITE response was received; before its automatic ACK.
-    /// Includes re-INVITEs and fork cleanup; lifecycle facts identify initial acceptance.
+    /// An INVITE final response was received; before its automatic ACK.
+    /// Includes failures/challenges, re-INVITEs, and fork cleanup. A successful
+    /// re-INVITE's snapshot already contains its accepted Contact. The message
+    /// preserves the observed response; lifecycle facts identify initial acceptance.
     BeforeAck,
     /// A completed ACK/negotiation permits future quiescent restoration.
     SignalingCompleted,
