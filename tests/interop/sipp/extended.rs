@@ -108,6 +108,9 @@ fn assert_alive(stack: &Stack) -> TestResult {
 async fn scenario(name: &str, transport: &str, case: Case) -> TestResult {
     let dir = log_dir(name)?;
     let stack = Stack::start(transport, &dir).await?;
+    if matches!(case, Case::Prack(_)) {
+        super::prack_uas::enable(&stack);
+    }
     let mut peer =
         Sipp::start_with_keys(case.file(), transport, &dir, &stack.uri, &case.keys()).await?;
     let credential = matches!(case, Case::Auth(..)).then(|| Credential {
@@ -379,7 +382,7 @@ async fn scenario(name: &str, transport: &str, case: Case) -> TestResult {
     Ok(())
 }
 
-fn verify_proxy_digest(request: &Request) -> TestResult {
+pub(super) fn verify_proxy_digest(request: &Request) -> TestResult {
     use std::{
         io::Write,
         process::{Command, Stdio},
@@ -439,7 +442,7 @@ cases! {
     (udp_prack_basic, tcp_prack_basic, Case::Prack("prack_basic")),
     (udp_prack_duplicate, tcp_prack_duplicate, Case::Prack("prack_duplicate")),
     (udp_prack_sequential, tcp_prack_sequential, Case::Prack("prack_sequential")),
-    (udp_known_gap_prack_rseq_gap, tcp_known_gap_prack_rseq_gap, Case::Prack("prack_gap")),
+    (udp_prack_rseq_gap, tcp_prack_rseq_gap, Case::Prack("prack_gap")),
     (udp_record_route, tcp_record_route, Case::RecordRoute),
     (udp_target_refresh, tcp_target_refresh, Case::TargetRefresh),
     (udp_session_id, tcp_session_id, Case::SessionId),

@@ -1,0 +1,68 @@
+name: Session timer soak
+
+on:
+  workflow_dispatch:
+    inputs:
+      method:
+        type: choice
+        default: update
+        options: [update, reinvite]
+        description: Automatic session refresh method
+      calls:
+        type: number
+        default: 8
+        description: Concurrent calls per round (2-256)
+      rounds:
+        type: number
+        default: 3
+        description: Rounds including warmup (2-1000, subject to job timeout)
+      refreshes:
+        type: number
+        default: 3
+        description: Successful refreshes per call (2-100)
+      rss_growth_mib:
+        type: number
+        default: 64
+        description: Maximum test-process RSS growth after warmup
+
+permissions:
+  contents: read
+
+jobs:
+  soak:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      CARGO_TERM_COLOR: always
+      RSIPSTACK_SOAK_CALLS: ${{ inputs.calls }}
+      RSIPSTACK_SOAK_ROUNDS: ${{ inputs.rounds }}
+      RSIPSTACK_SOAK_REFRESHES: ${{ inputs.refreshes }}
+      RSIPSTACK_SOAK_RSS_GROWTH_MIB: ${{ inputs.rss_growth_mib }}
+      SOAK_METHOD: ${{ inputs.method }}
+      RSIPSTACK_INTEROP_LOG_DIR: ${{ github.workspace }}/target/interop/results/soak
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install SIPp build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libssl-dev libncurses-dev python3 curl
+      - uses: actions/cache@v4
+        with:
+          path: |
+            target/interop/sipp-*
+            target/interop/sipp.tar.gz
+            target/interop/sipp
+            target/interop/pugixml.tar.gz
+          key: soak-sipp-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/interop/build-sipp.sh') }}
+      - name: Run real-time concurrent sessions
+        run: bash scripts/interop/run-soak.sh "$SOAK_METHOD"
+      - name: Save metrics and SIP traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: session-soak-logs
+          path: |
+            target/interop/results/
+            target/interop/sipp-build.log
+          if-no-files-found: warn
+          retention-days: 14
