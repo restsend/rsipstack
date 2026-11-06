@@ -6,9 +6,10 @@ use crate::prelude::*;
 
 #[derive(Default)]
 pub(crate) struct InviteUsage {
-    client_pending: bool,
-    server_pending: bool,
-    server_waiting_ack: usize,
+    pub(crate) revision: u64,
+    pub(crate) client_pending: bool,
+    pub(crate) server_pending: bool,
+    pub(crate) server_waiting_ack: usize,
 }
 
 enum Phase {
@@ -36,6 +37,7 @@ impl InviteReservation {
         {
             return Err(TransactionRole::Server);
         }
+        state.revision += 1;
         let phase = match role {
             TransactionRole::Client => {
                 state.client_pending = true;
@@ -66,6 +68,7 @@ impl InviteReservation {
                 TransactionState::Completed | TransactionState::Accepted,
             ) => {
                 let mut usage = self.usage.lock();
+                usage.revision += 1;
                 usage.server_pending = false;
                 usage.server_waiting_ack += 1;
                 self.phase = Some(Phase::ServerWaitingAck);
@@ -77,6 +80,7 @@ impl InviteReservation {
     fn release(&mut self) {
         if let Some(phase) = self.phase.take() {
             let mut usage = self.usage.lock();
+            usage.revision += 1;
             match phase {
                 Phase::ClientPending => usage.client_pending = false,
                 Phase::ServerPending => usage.server_pending = false,

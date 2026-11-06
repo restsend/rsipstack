@@ -78,6 +78,15 @@ impl InviteDialog {
         self.inner.state.lock().clone()
     }
 
+    /// Inspect checkpoint progress and any permanent storage failure.
+    pub fn persistence_status(&self) -> Option<super::persistence::DialogPersistenceStatus> {
+        self.inner
+            .persistence
+            .lock()
+            .as_ref()
+            .map(|runtime| runtime.status.lock().clone())
+    }
+
     pub fn snapshot(&self) -> super::dialog::DialogSnapshot {
         self.inner.snapshot()
     }
@@ -259,7 +268,7 @@ impl InviteDialog {
                 StatusCode::ServerInternalError,
             ));
         }
-        {
+        let deferred = {
             // Decided under the state lock, so `process_invite` either sees
             // the deferred CANCEL after leaving Calling or we see it left.
             let state = self.inner.state.lock();
@@ -268,16 +277,27 @@ impl InviteDialog {
                     self.inner.record_local_termination();
                     self.inner.cancel_requested.store(true, Ordering::SeqCst);
                     self.inner.cancel_deferred.store(true, Ordering::SeqCst);
-                    return Ok(());
+                    true
                 }
                 DialogState::Trying(_) | DialogState::Early(_, _) => {
                     self.inner.record_local_termination();
                     self.inner.cancel_requested.store(true, Ordering::SeqCst);
+                    false
                 }
                 _ => return Ok(()),
             }
+        };
+        self.inner
+            .checkpoint(
+                super::persistence::DialogCheckpointReason::LocalTerminationRequested,
+                None,
+            )
+            .await?;
+        if deferred {
+            Ok(())
+        } else {
+            self.send_cancel().await
         }
-        self.send_cancel().await
     }
 
     /// Send the CANCEL `cancel()` deferred in Calling, once the INVITE got a
@@ -375,7 +395,10 @@ impl InviteDialog {
         self.inner.reserve_invite(tx)?;
         self.inner.transition(DialogState::Calling(self.id()));
         let mut auth = AuthRetry::new();
-        tx.track_receipt_times(self.inner.lifecycle.lock().sender.is_some());
+        self.inner.bind_persistence(tx);
+        tx.track_receipt_times(
+            self.inner.lifecycle.lock().sender.is_some() || self.inner.persistence.lock().is_some(),
+        );
         tx.send().await?;
         // Record the flow the INVITE actually went out on, so later
         // in-dialog requests (BYE / re-INVITE / INFO) reuse it instead of
@@ -397,7 +420,19 @@ impl InviteDialog {
                     }
                 })
                 .await;
+            tx.check_persistence()?;
             ack.finish();
+            if msg.is_some() {
+                self.inner.complete_initial_ack();
+                if self.inner.is_confirmed() || self.inner.is_terminated() {
+                    self.inner
+                        .checkpoint(
+                            super::persistence::DialogCheckpointReason::SignalingCompleted,
+                            None,
+                        )
+                        .await?;
+                }
+            }
             let cancelled = established?;
             let Some(msg) = msg else { break };
             if matches!(&msg, SipMessage::Response(r) if r.status_code.kind() != StatusCodeKind::Provisional)
@@ -449,7 +484,11 @@ impl InviteDialog {
                             )
                             .await?;
                             self.inner.reserve_invite(tx)?;
-                            tx.track_receipt_times(self.inner.lifecycle.lock().sender.is_some());
+                            self.inner.bind_persistence(tx);
+                            tx.track_receipt_times(
+                                self.inner.lifecycle.lock().sender.is_some()
+                                    || self.inner.persistence.lock().is_some(),
+                            );
                             tx.send().await?;
                             self.inner.set_server_connection(tx.connection.clone());
                             self.inner.update_remote_tag("").ok();
@@ -530,14 +569,14 @@ impl InviteDialog {
     fn update_remote_target_from_2xx(&self, resp: &Response) -> Result<()> {
         self.inner.update_route_set_from_response(resp);
         let contact = resp.contact_header()?;
-        self.inner.remote_contact.lock().replace(contact.clone());
 
         let contact_uri = resp
             .typed_contact_headers()?
             .first()
             .map(|c| c.uri.clone())
             .ok_or_else(|| crate::Error::Error("missing Contact header".to_string()))?;
-        *self.inner.remote_uri.lock() = contact_uri;
+        self.inner
+            .set_remote_target(contact_uri, Some(contact.clone()));
         Ok(())
     }
 
@@ -843,6 +882,7 @@ impl InviteDialog {
 
     /// Handle an incoming transaction routed to this dialog.
     pub async fn handle(&mut self, tx: &mut Transaction) -> Result<()> {
+        self.inner.bind_persistence(tx);
         trace!(
             id = %self.id(),
             method = %tx.original.method,
@@ -867,11 +907,7 @@ impl InviteDialog {
         let sequence = if matches!(tx.original.method, Method::Ack | Method::Cancel) {
             Ok(self.inner.remote_seq.load(Ordering::Relaxed))
         } else {
-            self.inner
-                .remote_seq
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |remote_seq| {
-                    (cseq >= remote_seq).then_some(cseq)
-                })
+            self.inner.admit_remote_seq(cseq, &tx.original.method)
         };
         if let Err(remote_seq) = sequence {
             match self.role() {
@@ -1017,17 +1053,16 @@ impl InviteDialog {
     }
 
     async fn handle_bye(&mut self, tx: &mut Transaction) -> Result<()> {
-        self.inner.record_remote_bye(
-            tx.original_received_at
-                .unwrap_or_else(super::lifecycle::LifecycleTime::now),
-        );
         debug!(id = %self.id(), uri = %tx.original.uri, "received bye");
         let reason = match self.role() {
             TransactionRole::Server => TerminatedReason::UacBye,
             TransactionRole::Client => TerminatedReason::UasBye,
         };
-        self.inner
-            .transition(DialogState::Terminated(self.id(), reason));
+        self.inner.terminate_remote_bye(
+            reason,
+            tx.original_received_at
+                .unwrap_or_else(super::lifecycle::LifecycleTime::now),
+        );
         tx.reply(StatusCode::OK).await?;
         Ok(())
     }
@@ -1135,7 +1170,16 @@ impl InviteDialog {
     }
 
     async fn handle_reinvite(&mut self, tx: &mut Transaction) -> Result<()> {
-        self.inner.process_reinvite(tx, true).await
+        self.inner.begin_negotiation();
+        let result = self.inner.process_reinvite(tx, true).await;
+        self.inner.finish_negotiation();
+        self.inner
+            .checkpoint(
+                super::persistence::DialogCheckpointReason::SignalingCompleted,
+                None,
+            )
+            .await?;
+        result
     }
 
     async fn handle_invite(&mut self, tx: &mut Transaction) -> Result<()> {
@@ -1177,8 +1221,15 @@ impl InviteDialog {
                     SipMessage::Response(_) => {}
                 }
             }
+            tx.check_persistence()?;
             let answered_2xx = self.inner.waiting_ack();
             self.inner.end_session_without_ack(tx, answered_2xx).await;
+            self.inner
+                .checkpoint(
+                    super::persistence::DialogCheckpointReason::SignalingCompleted,
+                    None,
+                )
+                .await?;
             Ok::<(), crate::Error>(())
         };
         match handle_loop.await {

@@ -12,10 +12,12 @@ pub mod dialog_layer;
 pub mod invitation;
 pub mod invite_dialog;
 pub mod lifecycle;
+pub mod persistence;
 pub mod publication;
 pub mod registration;
 pub mod reinvite;
 pub mod server_dialog;
+pub mod snapshot;
 pub mod subscription;
 
 #[cfg(test)]

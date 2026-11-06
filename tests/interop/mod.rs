@@ -4,6 +4,7 @@ mod failure;
 pub use failure::{Failure, Required, TestResult};
 mod applications;
 mod b2bua;
+mod checkpoints;
 mod faults;
 mod pjsip;
 mod proxy;
@@ -513,6 +514,7 @@ impl Stack {
             .with_transport_inspector(Box::new(Received(inspector)))
             .build();
         let layer = Arc::new(DialogLayer::new(endpoint.inner.clone()));
+        checkpoints::configure(&layer, dir)?;
         let mut transactions = endpoint.incoming_transactions().required()?;
         tasks.push(errors.spawn("endpoint serve", async move {
             endpoint.inner.serve().await.required()
