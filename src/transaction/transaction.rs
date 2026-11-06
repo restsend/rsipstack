@@ -1,3 +1,4 @@
+use super::ack_cache::{self, AckCache, CachedAck};
 use super::endpoint::EndpointInnerRef;
 use super::invite_usage::{InviteReservation, InviteUsage};
 use super::key::TransactionKey;
@@ -177,6 +178,7 @@ pub struct Transaction {
     pub last_ack: Option<Request>,
     // Unencoded dialog routes, retained across target refresh and auth retry.
     pub(crate) dialog_route_set: Option<Vec<crate::sip::Route>>,
+    successful_acks: AckCache,
     /// Defer the first successful ACK until an application supplies its body.
     pub(crate) defer_success_ack: bool,
     pub(crate) force_success_ack: bool,
@@ -228,6 +230,7 @@ impl Transaction {
             last_response: None,
             last_ack: None,
             dialog_route_set: None,
+            successful_acks: AckCache::new(),
             defer_success_ack: false,
             force_success_ack: false,
             timer_a: None,
@@ -694,7 +697,8 @@ impl Transaction {
 
     /// Send an ACK for a final response on a client INVITE transaction.
     ///
-    /// Constructs the ACK from `last_ack` (cached) or `last_response` +
+    /// Reuses an ACK cached by dialog identity and INVITE CSeq, or builds one
+    /// from `last_response` +
     /// the original INVITE, resolves the destination (Contact for 2xx
     /// per RFC 3261 §13.2.2.4; Via/Record-Route for 3xx-6xx per §17.1.1.3),
     /// and sends through either the supplied `connection` argument or, for
@@ -743,16 +747,22 @@ impl Transaction {
                 ));
             }
         }
-        let ack = match self.last_ack.clone() {
-            // A retransmission of the same 2xx re-uses the cached ACK. A
-            // forked 2xx (different To tag) establishes a different dialog
-            // (RFC 3261 §13.2.2.4): rebuild the ACK from that response so it
-            // carries its To tag, remote target and route set (§12.2.1.1).
-            // Non-2xx finals have a single branch — the cached ACK always
-            // matches there.
-            Some(ack) if Self::cached_ack_matches_response(&ack, self.last_response.as_ref()) => {
-                ack
-            }
+        let previous = self
+            .last_response
+            .as_ref()
+            .filter(|response| response.status_code.kind() == StatusCodeKind::Successful)
+            .and_then(|response| ack_cache::response_key(response).ok())
+            .and_then(|key| self.successful_acks.get(&key))
+            .cloned();
+        // Honor an explicitly supplied ACK for this response; otherwise use
+        // the exact ACK cached for this fork, even after another fork replied.
+        let ack = self
+            .last_ack
+            .clone()
+            .filter(|ack| Self::cached_ack_matches_response(ack, self.last_response.as_ref()))
+            .or_else(|| previous.as_ref().map(|ack| ack.request.clone()));
+        let ack = match ack {
+            Some(ack) => ack,
             _ => {
                 let resp = self.last_response.as_ref().ok_or(Error::TransactionError(
                     "no last response found to send ACK".to_string(),
@@ -778,21 +788,26 @@ impl Transaction {
 
                 if !reuse_existing {
                     // 2xx response, set destination from request
-                    let routes = crate::sip::routing::ack_routes(
-                        &self.original,
-                        resp,
-                        self.dialog_route_set.as_deref(),
-                    )?;
-                    let target = crate::sip::routing::next_hop(&ack.uri, &routes)?;
-                    let addr = match self.endpoint_inner.locator.as_ref() {
-                        Some(locator) => match locator.locate(&target).await {
-                            Ok(addr) => Some(addr),
-                            Err(e) => {
-                                warn!(key = %self.key, error = %e, "ack locator failed");
-                                None
+                    let addr = match previous.as_ref().and_then(|ack| ack.destination.clone()) {
+                        Some(addr) => Some(addr),
+                        None => {
+                            let routes = crate::sip::routing::ack_routes(
+                                &self.original,
+                                resp,
+                                self.dialog_route_set.as_deref(),
+                            )?;
+                            let target = crate::sip::routing::next_hop(&ack.uri, &routes)?;
+                            match self.endpoint_inner.locator.as_ref() {
+                                Some(locator) => match locator.locate(&target).await {
+                                    Ok(addr) => Some(addr),
+                                    Err(e) => {
+                                        warn!(key = %self.key, error = %e, "ack locator failed");
+                                        None
+                                    }
+                                },
+                                None => (&target).try_into().ok(),
                             }
-                        },
-                        None => (&target).try_into().ok(),
+                        }
                     };
                     if let Some(addr) = addr {
                         match self
@@ -823,10 +838,24 @@ impl Transaction {
             ack.to_owned().into()
         };
 
-        match ack.clone() {
-            SipMessage::Request(ref ack_req) => self.last_ack.replace(ack_req.clone()),
-            _ => None,
-        };
+        if let SipMessage::Request(ref request) = ack {
+            if self
+                .last_response
+                .as_ref()
+                .is_some_and(|response| response.status_code.kind() == StatusCodeKind::Successful)
+            {
+                if let Ok(key) = ack_cache::request_key(request) {
+                    self.successful_acks.insert(
+                        key,
+                        CachedAck {
+                            request: request.clone(),
+                            destination: self.destination.clone(),
+                        },
+                    );
+                }
+            }
+            self.last_ack = Some(request.clone());
+        }
 
         // Try to send if we have a connection; log errors instead of propagating
         // so the transaction always transitions to Terminated.
@@ -1826,28 +1855,14 @@ impl Transaction {
             .map(|id| -> Option<TransactionTimer> { self.endpoint_inner.timers.cancel(id) });
     }
 
-    /// Whether the cached ACK acknowledges the response currently stored in
-    /// `last_response`: true when the tags match (a retransmission) — a
-    /// different tag means a forked 2xx that needs its own ACK.
+    /// Match the full dialog identity and INVITE CSeq, rather than just a tag.
     fn cached_ack_matches_response(ack: &Request, resp: Option<&Response>) -> bool {
         let Some(resp) = resp else {
             return true;
         };
-        let ack_tag = ack
-            .to_header()
-            .ok()
-            .and_then(|h| h.tag().ok())
-            .flatten()
-            .map(|t| t.value().to_string());
-        let resp_tag = resp
-            .to_header()
-            .ok()
-            .and_then(|h| h.tag().ok())
-            .flatten()
-            .map(|t| t.value().to_string());
-        match (ack_tag, resp_tag) {
-            (Some(a), Some(b)) => a == b,
-            _ => true,
+        match (ack_cache::request_key(ack), ack_cache::response_key(resp)) {
+            (Ok(ack), Ok(response)) => ack == response,
+            _ => false,
         }
     }
 
@@ -1929,6 +1944,17 @@ impl Transaction {
                 _ => None,
             }
         };
+        let last_message = last_message.or_else(|| {
+            self.successful_acks
+                .values()
+                .next()
+                .map(|ack| SipMessage::Request(ack.request.clone()))
+        });
+        if !self.successful_acks.is_empty() {
+            self.endpoint_inner
+                .finished_invite_acks
+                .insert(self.key.clone(), core::mem::take(&mut self.successful_acks));
+        }
         self.endpoint_inner
             .detach_transaction(&self.key, last_message);
     }
