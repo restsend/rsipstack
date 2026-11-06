@@ -30,6 +30,8 @@ enum Gate {
     InitialRequest,
     Answer,
     ReinviteAnswer,
+    SessionRetry,
+    TimerResponse,
     ByeResponse,
     UasResponse,
     Info,
@@ -71,6 +73,16 @@ impl Storage {
             Gate::Answer => c.reason == Reason::BeforeAck,
             Gate::ReinviteAnswer => {
                 c.reason == Reason::BeforeAck && c.snapshot.runtime.pending.negotiations != 0
+            }
+            Gate::SessionRetry => {
+                c.reason == Reason::OutgoingRequest
+                    && matches!(&c.message, Some(SipMessage::Request(r))
+                        if r.method == Method::Invite && r.to_string().contains("Min-SE: 180\r\n"))
+            }
+            Gate::TimerResponse => {
+                c.reason == Reason::BeforeResponse
+                    && matches!(&c.message, Some(SipMessage::Response(r))
+                        if r.cseq_header().unwrap().method().unwrap() == Method::Update)
             }
             Gate::ByeResponse => {
                 c.reason == Reason::BeforeResponse
@@ -152,6 +164,14 @@ impl Drop for Call {
 }
 
 async fn start(storage: Arc<Storage>, timeout: Duration) -> crate::Result<Call> {
+    start_with_timer(storage, timeout, None).await
+}
+
+async fn start_with_timer(
+    storage: Arc<Storage>,
+    timeout: Duration,
+    timer: Option<crate::dialog::session_timer::SessionTimerConfig>,
+) -> crate::Result<Call> {
     let stop = CancellationToken::new();
     let transport = TransportLayer::new(stop.child_token());
     let udp =
@@ -167,6 +187,7 @@ async fn start(storage: Arc<Storage>, timeout: Duration) -> crate::Result<Call> 
     let (sender, facts) = dialog_lifecycle_channel();
     layer.set_lifecycle_events(Some(sender));
     layer.set_persistence(Some(storage.config(timeout)))?;
+    layer.set_session_timer(timer)?;
     let mut incoming = endpoint.incoming_transactions()?;
     let endpoint_ref = endpoint.inner.clone();
     let endpoint = tokio::spawn(async move { endpoint_ref.serve().await });
@@ -791,5 +812,129 @@ async fn persistence_reinvite_commit_precedes_deferred_ack_handler() -> crate::R
             }));
         }
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn persistence_session_422_retry_keeps_storage_barrier() -> crate::Result<()> {
+    use crate::dialog::session_timer::SessionTimerConfig;
+    for fail in [false, true] {
+        let store = Storage::new(Gate::SessionRetry);
+        let mut call = start_with_timer(
+            store.clone(),
+            Duration::from_secs(2),
+            Some(SessionTimerConfig {
+                expires: 90,
+                ..Default::default()
+            }),
+        )
+        .await?;
+        let initial = request(&call.peer, Method::Invite).await;
+        let rejection = format!(
+            "SIP/2.0 422 Session Interval Too Small\r\nVia: {}\r\nFrom: {}\r\nTo: {};tag=retry\r\nCall-ID: {}\r\nCSeq: {}\r\nMin-SE: 180\r\nContent-Length: 0\r\n\r\n",
+            initial.via_header()?.value(), initial.from_header()?.value(),
+            initial.to_header()?.value(), initial.call_id_header()?.value(),
+            initial.cseq_header()?.value(),
+        );
+        call.peer.send_to(rejection.as_bytes(), call.local).await?;
+        request(&call.peer, Method::Ack).await;
+        entered(&store).await;
+        silent(&call.peer).await;
+        store.fail.store(fail, Ordering::SeqCst);
+        store.release.cancel();
+        if fail {
+            assert!(tokio::time::timeout(Duration::from_secs(2), &mut call.task)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_err());
+            silent(&call.peer).await;
+            assert!(call.dialog.persistence_status().unwrap().failure.is_some());
+        } else {
+            let retry = request(&call.peer, Method::Invite).await;
+            assert!(retry.cseq_header()?.seq()? > initial.cseq_header()?.seq()?);
+            assert_ne!(retry.via_header()?, initial.via_header()?);
+            let success = response(&retry, &format!("sip:bob@{}", call.peer.local_addr()?))
+                .replace(
+                    "Content-Length: 0",
+                    "Session-Expires: 180;refresher=uac\r\nContent-Length: 0",
+                );
+            call.peer.send_to(success.as_bytes(), call.local).await?;
+            request(&call.peer, Method::Ack).await;
+            tokio::time::timeout(Duration::from_secs(2), &mut call.task)
+                .await
+                .unwrap()
+                .unwrap()?;
+            let checkpoints = store.committed.lock().unwrap();
+            assert_eq!(
+                checkpoints
+                    .iter()
+                    .filter(|c| c.reason == Reason::OutgoingRequest)
+                    .count(),
+                2
+            );
+            assert_eq!(
+                checkpoints
+                    .iter()
+                    .filter(|c| c.reason == Reason::BeforeAck)
+                    .count(),
+                1
+            );
+            assert_eq!(call.dialog.snapshot().runtime.lifecycle.len(), 1);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn persistence_automatic_update_records_pending_and_refreshed_target() -> crate::Result<()> {
+    use crate::dialog::session_timer::SessionTimerConfig;
+    let store = Storage::new(Gate::TimerResponse);
+    let mut call = start_with_timer(
+        store.clone(),
+        Duration::from_secs(2),
+        Some(SessionTimerConfig {
+            expires: 90,
+            ..Default::default()
+        }),
+    )
+    .await?;
+    let initial = established(&mut call).await;
+    let remote = call.peer.local_addr()?;
+    let target: Uri = format!("sip:refreshed@{remote}").try_into()?;
+    let update = format!(
+        "UPDATE sip:alice@{} SIP/2.0\r\nVia: SIP/2.0/UDP {remote};branch=z9hG4bK-timer-update\r\nFrom: <sip:bob@example.com>;tag=peer\r\nTo: {}\r\nCall-ID: {}\r\nCSeq: 10 UPDATE\r\nContact: <{target}>\r\nSupported: timer\r\nSession-Expires: 180;refresher=uac\r\nMax-Forwards: 70\r\nContent-Length: 0\r\n\r\n",
+        call.local, initial.from_header()?.value(), initial.call_id_header()?.value(),
+    );
+    call.peer.send_to(update.as_bytes(), call.local).await?;
+    entered(&store).await;
+    {
+        let attempts = store.attempts.lock().unwrap();
+        let pending = &attempts.last().unwrap().snapshot;
+        assert_eq!(pending.runtime.pending.negotiations, 1);
+        assert_ne!(pending.remote_uri, target);
+        assert!(!pending.is_quiescent());
+    }
+    silent(&call.peer).await;
+    store.release.cancel();
+    let SipMessage::Response(response) = receive(&call.peer).await else {
+        panic!("expected automatic UPDATE response");
+    };
+    assert_eq!(response.status_code, StatusCode::OK);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if store.committed.lock().unwrap().iter().any(|c| {
+                c.reason == Reason::SignalingCompleted
+                    && c.snapshot.is_quiescent()
+                    && c.snapshot.remote_uri == target
+            }) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("automatic UPDATE must persist the committed remote target");
+    assert!(call.dialog.snapshot().is_quiescent());
     Ok(())
 }

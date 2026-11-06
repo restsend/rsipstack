@@ -3,7 +3,7 @@
 This harness is a growing collection of real-process interoperability tests,
 not a certification of complete SIP conformance. A passing case covers only
 the exchange and assertions stated for that case.
-The current baseline is upstream `895d443` (0.8.1) plus the re-INVITE bridge.
+This matrix describes the current PR stack on upstream `895d443` (0.8.1).
 
 ## Established-dialog re-INVITE bridge
 

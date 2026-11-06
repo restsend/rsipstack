@@ -48,6 +48,12 @@ Applications must remove terminated dialogs from their registry as usual.
 time, automatic refresh/expiration counts, and worker liveness for diagnostics.
 An interval in a stopped worker is historical, not an active session.
 
+When dialog persistence is enabled, 422 retries retain the storage barrier and
+receipt timestamps. Automatically answered bodyless UPDATE requests record a
+pending negotiation before their response and commit the refreshed remote
+target after completion. Storage failures prevent protected signaling from
+continuing, as for other dialog operations.
+
 Timer agreements/deadlines are not persisted in `DialogSnapshot`. Restart
 recovery must explicitly renegotiate or terminate according to application
 policy. This change does not implement proxy timer policy or timer/media
@@ -69,6 +75,10 @@ Eight independent SIPp exchanges cover UAC/UAS with UPDATE/re-INVITE over
 UDP/TCP, including a UAC 422 retry and a UAS refresher change. These short wire
 tests request explicit refreshes; real automatic refresh intervals belong to
 the separate soak runner.
+
+Persistence regressions additionally cover delayed and failed storage for a
+422 retry and a delayed automatic UPDATE response with a changed Contact:
+`cargo test --lib persistence_`.
 
 Protocol reference: [RFC 4028](https://www.rfc-editor.org/rfc/rfc4028.html),
 particularly sections 7, 9, and 10.

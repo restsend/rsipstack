@@ -562,6 +562,12 @@ impl SessionTimer {
         next.destination = tx.destination.clone();
         next.defer_success_ack = tx.defer_success_ack;
         next.force_success_ack = tx.force_success_ack;
+        // A 422 retry is a new transaction, but belongs to the same durable
+        // dialog and must retain receipt timing for its initial acceptance.
+        inner.bind_persistence(&next);
+        next.track_receipt_times(
+            inner.lifecycle.lock().sender.is_some() || inner.persistence.lock().is_some(),
+        );
         Ok(Some(next))
     }
     async fn expire(&self, generation: Option<u64>) {
@@ -797,11 +803,23 @@ impl DialogInner {
                     return Ok(true);
                 }
             };
-            tx.respond(self.make_response(&tx.original, StatusCode::OK, None, None))
-                .await?;
-            if let Some(contact) = contact {
-                self.accept_target_refresh(tx.original.cseq_header()?.seq()?, &contact);
+            self.begin_negotiation();
+            let result = async {
+                tx.respond(self.make_response(&tx.original, StatusCode::OK, None, None))
+                    .await?;
+                if let Some(contact) = contact {
+                    self.accept_target_refresh(tx.original.cseq_header()?.seq()?, &contact);
+                }
+                Ok::<(), crate::Error>(())
             }
+            .await;
+            self.finish_negotiation();
+            self.checkpoint(
+                super::persistence::DialogCheckpointReason::SignalingCompleted,
+                None,
+            )
+            .await?;
+            result?;
             return Ok(true);
         }
         Ok(false)

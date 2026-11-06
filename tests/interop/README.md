@@ -91,7 +91,7 @@ See [COVERAGE.md](COVERAGE.md) for the complete matrix, reproducible known gaps,
 and the features this suite does not exercise. The default (`all`) and `sipp`
 include known-gap probes and currently **return nonzero**. `regression`
 explicitly reports and excludes them; it does not change their assertions.
-The documented counts describe upstream baseline `895d443` plus the re-INVITE bridge; results can differ when
+The documented counts describe this PR stack on upstream `895d443`; results can differ when
 run against another revision or with uncommitted application changes.
 
 PJSUA checks calls in both directions, UDP loss/retransmission, hold/resume and UPDATE initiated by
