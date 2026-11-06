@@ -8,6 +8,7 @@ pub mod endpoint;
 pub(crate) mod invite_usage;
 pub mod key;
 pub mod message;
+mod receipt;
 mod timer;
 pub mod transaction;
 pub use endpoint::Endpoint;

@@ -34,6 +34,8 @@ use tracing::debug;
 /// * `last_seq` uses atomic operations for lock-free increments
 /// * `dialogs` uses RwLock for concurrent read access with exclusive writes
 pub struct DialogLayerInner {
+    pub(super) lifecycle_sender:
+        crate::platform::sync::Mutex<Option<super::lifecycle::DialogLifecycleSender>>,
     pub(super) last_seq: AtomicU32,
     pub(super) dialogs: RwMap<String, Dialog>,
 }
@@ -141,9 +143,22 @@ impl DialogLayer {
             endpoint,
             inner: Arc::new(DialogLayerInner {
                 last_seq: AtomicU32::new(0),
+                lifecycle_sender: crate::platform::sync::Mutex::new(None),
                 dialogs: RwMap::new(),
             }),
         }
+    }
+
+    /// Subscribe to facts for subsequently created INVITE dialogs. Existing
+    /// dialogs retain their subscription. None disables new subscriptions.
+    /// A slow or closed receiver never delays SIP processing.
+    pub fn set_lifecycle_events(&self, sender: Option<super::lifecycle::DialogLifecycleSender>) {
+        if sender.is_some() {
+            self.endpoint
+                .record_receipt_times
+                .store(true, Ordering::Relaxed);
+        }
+        *self.inner.lifecycle_sender.lock() = sender;
     }
 
     pub fn get_or_create_server_invite(
@@ -206,6 +221,8 @@ impl DialogLayer {
         }
 
         let dialog = InviteDialog::from_inner(Arc::new(dlg_inner));
+        dialog.inner.lifecycle.lock().sender = self.inner.lifecycle_sender.lock().clone();
+        *tx.initial_dialog.lock() = Some(Arc::downgrade(&dialog.inner));
         dialog.inner.reserve_invite(tx)?;
         dialog.inner.set_server_connection(tx.connection.clone());
         self.inner

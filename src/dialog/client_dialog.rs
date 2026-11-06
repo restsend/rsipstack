@@ -615,6 +615,10 @@ impl ClientInviteDialog {
     }
 
     async fn handle_bye(&mut self, tx: &mut Transaction) -> Result<()> {
+        self.inner.record_remote_bye(
+            tx.original_received_at
+                .unwrap_or_else(super::lifecycle::LifecycleTime::now),
+        );
         debug!(id = %self.id(), uri = %tx.original.uri, "received bye");
         self.inner
             .transition(DialogState::Terminated(self.id(), TerminatedReason::UasBye));

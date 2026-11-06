@@ -296,6 +296,13 @@ impl ServerInviteDialog {
         if self.inner.is_terminated() || self.inner.is_confirmed() {
             return Ok(());
         }
+        {
+            let state = self.inner.state.lock();
+            if state.is_terminated() || state.is_confirmed() {
+                return Ok(());
+            }
+            self.inner.record_local_termination();
+        }
         debug!(id=%self.id(), ?code, ?reason, "rejecting dialog");
         let headers = reason.map(|reason| vec![crate::sip::Header::Reason(reason.into())]);
         let resp = self.inner.make_response(
@@ -738,6 +745,10 @@ impl ServerInviteDialog {
     }
 
     async fn handle_bye(&mut self, tx: &mut Transaction) -> Result<()> {
+        self.inner.record_remote_bye(
+            tx.original_received_at
+                .unwrap_or_else(super::lifecycle::LifecycleTime::now),
+        );
         debug!(id = %self.id(), uri = %tx.original.uri, "received bye");
         self.inner
             .transition(DialogState::Terminated(self.id(), TerminatedReason::UacBye));
@@ -847,6 +858,7 @@ impl ServerInviteDialog {
     }
 
     async fn handle_invite(&mut self, tx: &mut Transaction) -> Result<()> {
+        *tx.initial_dialog.lock() = Some(Arc::downgrade(&self.inner));
         let handle_loop = async {
             if matches!(tx.original.method, crate::sip::Method::Invite)
                 && self.inner.transition_if_calling()

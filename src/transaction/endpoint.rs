@@ -119,6 +119,8 @@ pub struct EndpointInner {
     pub transport_layer: TransportLayer,
     pub finished_transactions: RwMap<TransactionKey, Option<SipMessage>>,
     pub transactions: RwMap<TransactionKey, TransactionEventSender>,
+    pub(crate) record_receipt_times: core::sync::atomic::AtomicBool,
+    pub(crate) receipt_times: RwMap<TransactionKey, Arc<super::receipt::ReceiptTimes>>,
     pub(crate) legacy_ack_tags: RwMap<TransactionKey, Option<String>>,
     pub waiting_ack: RwMap<DialogId, TransactionKey>,
     /// Server INVITE transactions waiting for the ACK of their 2xx, by dialog
@@ -242,6 +244,8 @@ impl EndpointInner {
             timers: Timer::new(),
             transport_layer,
             transactions: RwMap::<TransactionKey, TransactionEventSender>::new(),
+            record_receipt_times: core::sync::atomic::AtomicBool::new(false),
+            receipt_times: RwMap::new(),
             legacy_ack_tags: RwMap::new(),
             finished_transactions: RwMap::<TransactionKey, Option<SipMessage>>::new(),
             waiting_ack: RwMap::<DialogId, TransactionKey>::new(),
@@ -376,6 +380,10 @@ impl EndpointInner {
         connection: SipConnection,
         from: &SipAddr,
     ) -> Result<()> {
+        let received_at = self
+            .record_receipt_times
+            .load(core::sync::atomic::Ordering::Relaxed)
+            .then(crate::dialog::lifecycle::LifecycleTime::now);
         let mut key = match &msg {
             SipMessage::Request(req) => {
                 TransactionKey::from_request(req, super::key::TransactionRole::Server)?
@@ -549,6 +557,9 @@ impl EndpointInner {
         };
 
         if let Some(tu) = self.transactions.get(&key) {
+            if let (Some(time), Some(receipts)) = (received_at, self.receipt_times.get(&key)) {
+                receipts.record(&msg, time);
+            }
             tu.send(TransactionEvent::Received(msg, Some(connection)))
                 .map_err(|e| Error::TransactionError(e.to_string(), key))?;
             return Ok(());
@@ -573,8 +584,9 @@ impl EndpointInner {
             _ => {}
         }
 
-        let tx =
+        let mut tx =
             Transaction::new_server(key.clone(), request.clone(), self.clone(), Some(connection));
+        tx.original_received_at = received_at;
 
         self.incoming_sender.send(tx).ok();
         Ok(())
@@ -665,6 +677,7 @@ impl EndpointInner {
     pub fn detach_transaction(&self, key: &TransactionKey, last_message: Option<SipMessage>) {
         trace!(%key, "detach transaction");
         self.transactions.remove(key);
+        self.receipt_times.remove(key);
 
         if last_message.is_none() {
             self.legacy_ack_tags.remove(key);

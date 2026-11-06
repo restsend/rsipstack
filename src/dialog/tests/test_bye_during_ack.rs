@@ -42,6 +42,7 @@ struct Call {
     layer: Arc<DialogLayer>,
     dialog: InviteDialog,
     states: DialogStateReceiver,
+    facts: super::super::lifecycle::DialogLifecycleReceiver,
     invite: Request,
     uac: std::net::SocketAddr,
     release: CancellationToken,
@@ -85,6 +86,10 @@ fn response(req: &Request, to: &str, contact: &str) -> String {
 }
 
 async fn start(async_api: bool, provisional: bool) -> crate::Result<Call> {
+    start_observed(async_api, provisional, false).await
+}
+
+async fn start_observed(async_api: bool, provisional: bool, observe: bool) -> crate::Result<Call> {
     let shutdown = CancellationToken::new();
     let entered = CancellationToken::new();
     let release = CancellationToken::new();
@@ -109,6 +114,10 @@ async fn start(async_api: bool, provisional: bool) -> crate::Result<Call> {
     let ep = endpoint.inner.clone();
     tokio::spawn(async move { ep.serve().await });
     let layer = Arc::new(DialogLayer::new(endpoint.inner.clone()));
+    let (sender, facts) = super::super::lifecycle::dialog_lifecycle_channel();
+    if observe {
+        layer.set_lifecycle_events(Some(sender));
+    }
     let router = layer.clone();
     let stop = shutdown.clone();
     tokio::spawn(async move {
@@ -171,6 +180,7 @@ async fn start(async_api: bool, provisional: bool) -> crate::Result<Call> {
         layer,
         dialog,
         states,
+        facts,
         invite,
         uac,
         release,
@@ -374,5 +384,126 @@ async fn test_interrupted_ack_releases_waiting_bye_with_error() -> crate::Result
             .is_err(),
         "interrupted ACK must not let BYE overtake it"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn lifecycle_answer_and_valid_bye_precede_blocked_ack() -> crate::Result<()> {
+    use super::super::lifecycle::DialogLifecycleKind as K;
+    let mut call = start_observed(true, false, true).await?;
+    let accepted = call.facts.try_recv().expect("answer before ACK finishes");
+    assert!(matches!(accepted.kind, K::InviteAccepted { .. }));
+    assert_eq!(accepted.sequence, 1);
+    assert_eq!(accepted.dialog_id, call.dialog.id());
+    let local = call
+        .invite
+        .from_header()?
+        .tag()?
+        .unwrap()
+        .value()
+        .to_string();
+    assert_eq!(
+        remote_bye(&call, "wrong", &local, 100).await,
+        StatusCode::CallTransactionDoesNotExist
+    );
+    assert!(call.facts.try_recv().is_err());
+    assert_eq!(remote_bye(&call, "peer", &local, 2).await, StatusCode::OK);
+    let bye = call.facts.try_recv().unwrap();
+    let ended = call.facts.try_recv().unwrap();
+    assert!(matches!(bye.kind, K::RemoteByeReceived));
+    assert!(matches!(ended.kind, K::DialogTerminated { .. }));
+    assert_eq!((bye.sequence, ended.sequence), (2, 3));
+    assert!(bye.occurred_at.monotonic >= accepted.occurred_at.monotonic);
+    assert!(ended.occurred_at.monotonic >= bye.occurred_at.monotonic);
+    assert!(call.facts.try_recv().is_err());
+    call.release.cancel();
+    request(&call.peer, Method::Ack).await;
+    tokio::time::timeout(Duration::from_secs(2), &mut call.join)
+        .await
+        .unwrap()
+        .unwrap()?;
+    assert!(call.facts.try_recv().is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn lifecycle_local_end_precedes_ack_and_bye_response() -> crate::Result<()> {
+    use super::super::lifecycle::DialogLifecycleKind as K;
+    let mut call = start_observed(true, false, true).await?;
+    let accepted = call.facts.try_recv().unwrap();
+    let dialog = call.dialog.clone();
+    let mut bye = Box::pin(dialog.bye());
+    assert!(tokio::time::timeout(Duration::from_millis(30), &mut bye)
+        .await
+        .is_err());
+    let requested = call
+        .facts
+        .try_recv()
+        .expect("local end while ACK is blocked");
+    assert!(matches!(requested.kind, K::LocalTerminationRequested));
+    assert_eq!(requested.sequence, accepted.sequence + 1);
+    assert!(call.facts.try_recv().is_err());
+    call.release.cancel();
+    let peer = async {
+        request(&call.peer, Method::Ack).await;
+        let req = request(&call.peer, Method::Bye).await;
+        call.peer
+            .send_to(
+                response(&req, req.to_header()?.value(), "sip:bob@example.com").as_bytes(),
+                call.uac,
+            )
+            .await?;
+        crate::Result::Ok(())
+    };
+    let (a, b) = tokio::join!(bye, peer);
+    a?;
+    b?;
+    let ended = call.facts.try_recv().unwrap();
+    assert!(matches!(ended.kind, K::DialogTerminated { .. }));
+    assert!(ended.occurred_at.monotonic > requested.occurred_at.monotonic);
+    assert_eq!(ended.sequence, 3);
+    Ok(())
+}
+
+#[tokio::test]
+async fn lifecycle_duplicate_2xx_and_info_do_not_repeat_answer() -> crate::Result<()> {
+    let mut call = start_observed(true, false, true).await?;
+    assert_eq!(call.facts.try_recv().unwrap().sequence, 1);
+    call.release.cancel();
+    request(&call.peer, Method::Ack).await;
+    tokio::time::timeout(Duration::from_secs(2), &mut call.join)
+        .await
+        .unwrap()
+        .unwrap()?;
+    let ok = response(
+        &call.invite,
+        &format!("{};tag=peer", call.invite.to_header()?.value()),
+        &format!("sip:answered@{}", call.peer.local_addr()?),
+    );
+    call.peer.send_to(ok.as_bytes(), call.uac).await?;
+    request(&call.peer, Method::Ack).await;
+    // The legacy state channel can re-announce Confirmed after INFO. Facts
+    // must not infer a new answer from that state notification.
+    call.dialog.inner.transition(DialogState::Confirmed(
+        call.dialog.id(),
+        crate::sip::Response::default(),
+    ));
+    assert!(call.facts.try_recv().is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn lifecycle_closed_receiver_does_not_prevent_remote_bye() -> crate::Result<()> {
+    let mut call = start_observed(true, false, true).await?;
+    call.facts.close();
+    let local = call
+        .invite
+        .from_header()?
+        .tag()?
+        .unwrap()
+        .value()
+        .to_string();
+    assert_eq!(remote_bye(&call, "peer", &local, 2).await, StatusCode::OK);
+    assert!(call.dialog.state().is_terminated());
     Ok(())
 }
