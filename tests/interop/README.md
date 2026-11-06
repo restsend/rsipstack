@@ -2,8 +2,9 @@
 
 Run the current rsipstack checkout against independent PJSUA (PJSIP) and SIPp
 processes on loopback. No SIP server, account, audio device or Docker is needed.
-The Rust driver exercises the public dialog API and checks both SIP messages
-and dialog state events.
+The Rust driver exercises the public transaction/dialog APIs and checks both
+SIP messages and dialog state events. Additional three-process cases run a
+standalone rsipstack proxy or B2BUA between independent SIP peers.
 
 ## Setup and commands
 
@@ -20,11 +21,13 @@ brew install cmake pkg-config openssl@3 python
 From the repository root:
 
 ```sh
-bash scripts/interop/run.sh regression                # supported baseline (147 tests)
-bash scripts/interop/run.sh all                       # all 161; includes 14 known-gap probes
+bash scripts/interop/run.sh regression                # supported baseline (173 tests)
+bash scripts/interop/run.sh all                       # all 183; includes 10 known-gap probes
 bash scripts/interop/run.sh pjsip                     # 72 PJSUA regression tests
 bash scripts/interop/run.sh pjsip mid_dialog          # 36 mid-dialog PJSUA cases
 bash scripts/interop/run.sh sipp                      # 89 SIPp tests, including known gaps
+bash scripts/interop/run.sh proxy                     # 11 standalone proxy cases
+bash scripts/interop/run.sh b2bua                     # 11 linked two-dialog B2BUA cases
 bash scripts/interop/run.sh sipp prack                # all 19 PRACK cases, including known gaps
 bash scripts/interop/run.sh regression prack          # 11 passing PRACK regression cases
 bash scripts/interop/run.sh faults                    # 26 UDP loss/delay/race cases
@@ -61,7 +64,8 @@ See [COVERAGE.md](COVERAGE.md) for the complete matrix, reproducible known gaps,
 and the features this suite does not exercise. The default (`all`) and `sipp`
 include known-gap probes and currently **return nonzero**. `regression`
 explicitly reports and excludes them; it does not change their assertions.
-The documented counts describe the baseline commit; results can differ when
+The documented counts describe upstream baseline `004f607` plus these application
+tests; results can differ when
 run against another revision or with uncommitted application changes.
 
 PJSUA checks calls in both directions, UDP loss/retransmission, hold/resume and UPDATE initiated by
@@ -79,7 +83,8 @@ may send RTP to loopback discard port 9. No test asserts media delivery or
 quality. RTP/audio quality, scale and downstream application
 behavior (such as CDR/billing) require separate tests.
 
-SIPp's repeated-200 and lost-PRACK-response cases use `-nr` so its UDP duplicate
+SIPp's repeated-200, lost-PRACK-response and application lost-BYE-response cases
+use `-nr` so its UDP duplicate
 detector does not consume the repeated request before the explicit XML receive
 step. The peer still has to receive the real retransmission from rsipstack.
 Handshake messages/log markers coordinate state checks without timed sleeps.
@@ -104,6 +109,10 @@ The runner prints a fresh `target/interop/results/<UTC timestamp>-<pid>/` direct
 - `<test>/fault-plan.tsv`, `fault-events.tsv`, `fault-packets.log`: the fault
   schedule, observed/applied/delivered events and raw UDP datagrams (fault cases).
 - `<test>/background-errors.log`: endpoint, dialog handler and trace-writing errors.
+- `<test>/caller/`, `callee/`: independent peer logs in three-process cases.
+- `<test>/application/sip.frames`: length-framed TX/RX messages from the standalone
+  application; `events.log` records calls/dialog states, `summary.txt` checks
+  active call and dialog counts plus background errors at shutdown.
 - `<test>/PASS`: written only after protocol checks, peer shutdown and dialog
   handlers succeed, with no recorded background errors.
 
@@ -125,12 +134,61 @@ Manual dispatch also allows `all` and `known-gaps`. It caches pinned peers and
 uploads logs even on failure.
 There are no credentials or external SIP services involved.
 
+## Standalone proxy and B2BUA
+
+The runner builds `examples/interop_proxy.rs` or `examples/interop_b2bua.rs`
+from the current checkout. Each case starts the application as a separate OS
+process. Normal cases use two PJSUA instances; late-answer and packet-loss
+cases use a PJSUA caller and a SIPp callee.
+
+Both groups cover UDP/TCP calls, BYE from either peer, 486 rejection, CANCEL,
+and a downstream 200 arriving after CANCEL. An additional UDP case withholds
+the first BYE response and requires the same transaction to be retransmitted.
+SIPp independently checks its Via, CSeq and Call-ID before replying.
+
+The proxy preserves Call-ID, dialog tags, CSeq and Contact, adds/removes its Via,
+decrements Max-Forwards and Record-Routes the call. The B2BUA creates two dialog
+legs with different Call-IDs and caller tags, maps progress/final responses,
+and propagates cancellation/termination. A late 200 after cancellation is
+forwarded by the proxy; the B2BUA keeps 487 on the cancelled caller leg and
+ACKs/BYEs the answered callee leg. The SIPp callee requires both ACK and BYE,
+allowing either arrival order because forwarding and UDP can reorder them.
+Assertions check SDP, ACK correlation, dialog identity and final responses.
+Each B2BUA leg must emit exactly one terminal event; both registries must be
+empty. Shutdown also joins application tasks and reports background failures.
+SIP transaction retention timers are cancelled only at process shutdown; these
+counts do not claim that every transaction timer has naturally expired.
+
+To run either program manually against a loopback peer:
+
+```sh
+cargo run --example interop_proxy -- \
+  --listen 127.0.0.1:5062 --transport udp \
+  --target 'sip:callee@127.0.0.1:5064;transport=udp' \
+  --log-dir target/interop/manual-proxy
+```
+
+Use `--example interop_b2bua` for the linked-dialog application. The program
+prints `READY`, then accepts calls; type `quit` after the calls finish to check
+cleanup and stop. Tests use dynamically chosen ports. `INTEROP_PROXY_BIN` and
+`INTEROP_B2BUA_BIN` can select alternative application executables for direct
+test invocation; those must implement the same CLI, trace and shutdown contract.
+
+These are deliberately small test applications with one configured next hop,
+loopback addresses and offer-in-INVITE SDP passthrough. They do not implement
+production proxy/B2BUA policy, authentication, registration, forking, multiple
+route hops, media relay, PRACK or session modification. In particular the
+proxy uses the current public transaction API, whose server-INVITE layer also
+retransmits 2xx until ACK; proxy-specific 2xx retransmission policy is not
+validated by these scenarios. TCP disconnect/reconnect behavior and application
+crash recovery remain outside this initial matrix.
+
 ## Controlled UDP faults and replay
 
 `bash scripts/interop/run.sh faults` selects only the 26 fault scenarios.
-`bash scripts/interop/run.sh regression faults` runs their 24 regression cases;
-`bash scripts/interop/run.sh known-gaps faults` reproduces two known gaps on
-the upstream baseline. Existing local library fixes can change those results.
+All 26 are regression cases on upstream `004f607`, including the previously
+failing blocked-ACK cases fixed by PR #235. A `known-gaps faults` selection now
+matches no tests and fails explicitly rather than reporting a misleading pass.
 The six small fault-engine checks also run under normal `cargo test`; they
 need loopback sockets but no external peer binaries or downloads.
 

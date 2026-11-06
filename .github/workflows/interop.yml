@@ -10,7 +10,7 @@ on:
       suite:
         type: choice
         default: regression
-        options: [regression, all, pjsip, sipp, faults, known-gaps]
+        options: [regression, all, pjsip, sipp, proxy, b2bua, faults, known-gaps]
         description: Suite to run (all includes documented known gaps)
 
 permissions:
@@ -42,7 +42,7 @@ jobs:
             target/interop/sipp
             target/interop/pugixml.tar.gz
           key: sip-peers-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/interop/build-*.sh') }}
-      - name: Run PJSIP and SIPp scenarios
+      - name: Run PJSIP, SIPp and standalone application scenarios
         run: bash scripts/interop/run.sh "${{ inputs.suite || 'regression' }}"
       - name: Save SIP traces and results
         if: always()

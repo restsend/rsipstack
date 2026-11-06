@@ -16,14 +16,14 @@ mod prack_uas;
 mod registration;
 mod subscription;
 
-struct Sipp {
+pub(super) struct Sipp {
     child: Child,
     pub uri: Uri,
     log: PathBuf,
 }
 
 impl Sipp {
-    async fn start(
+    pub(super) async fn start(
         scenario: &str,
         transport: &str,
         dir: &Path,
@@ -62,9 +62,12 @@ impl Sipp {
         }
         let rendered = dir.join("scenario.xml");
         std::fs::write(&rendered, xml).required()?;
-        // This scenario receives the same ACK twice on purpose. SIPp's UDP
+        // These scenarios explicitly require a repeated request. SIPp's UDP
         // duplicate detector would otherwise consume it before the XML step.
-        let duplicate_flags = if matches!(scenario, "duplicate_200" | "prack_lost_response") {
+        let duplicate_flags = if matches!(
+            scenario,
+            "duplicate_200" | "prack_lost_response" | "application_lost_bye_response"
+        ) {
             vec!["-nr"]
         } else {
             vec![]
@@ -180,7 +183,7 @@ impl Sipp {
         .map_err(|e| Failure(self.diagnostic(&e.0)))
     }
 
-    async fn finish(mut self) -> TestResult {
+    pub(super) async fn finish(mut self) -> TestResult {
         let status = bounded("SIPp result", self.child.wait())
             .await?
             .required()?;

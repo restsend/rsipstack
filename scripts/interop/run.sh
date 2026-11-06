@@ -3,14 +3,14 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$ROOT"
 usage() {
-    echo "Usage: bash scripts/interop/run.sh [all|regression|pjsip|sipp|faults|known-gaps] [test-name-filter]"
+    echo "Usage: bash scripts/interop/run.sh [all|regression|pjsip|sipp|proxy|b2bua|faults|known-gaps] [test-name-filter]"
 }
 if [[ ${1:-} == --help ]]; then usage; exit 0; fi
 if [[ $# -gt 2 ]]; then usage >&2; exit 2; fi
 SUITE=${1:-all}
 case "$SUITE" in
     all|regression|known-gaps|faults) PREFIX=interop:: ;;
-    pjsip|sipp) PREFIX="interop::$SUITE::" ;;
+    pjsip|sipp|proxy|b2bua) PREFIX="interop::$SUITE::" ;;
     *) usage >&2; exit 2 ;;
 esac
 FILTER=${2:-}
@@ -44,7 +44,7 @@ path.with_name("test-names.txt").write_text("\n".join(names) + "\n")
 PY
 TESTS=()
 while IFS= read -r name; do TESTS+=("$name"); done < "$RSIPSTACK_INTEROP_LOG_DIR/test-names.txt"
-if python3 -c 'import pathlib,sys; sys.exit(not any("::pjsip::" in n for n in pathlib.Path(sys.argv[1]).read_text().splitlines()))' "$RSIPSTACK_INTEROP_LOG_DIR/test-names.txt"; then
+if python3 -c 'import pathlib,sys; sys.exit(not any(any(p in n for p in ("::pjsip::", "::proxy::", "::b2bua::")) for n in pathlib.Path(sys.argv[1]).read_text().splitlines()))' "$RSIPSTACK_INTEROP_LOG_DIR/test-names.txt"; then
     if [[ -z ${PJSUA_BIN:-} ]]; then
         bash scripts/interop/build-pjsua.sh
         export PJSUA_BIN="$ROOT/target/interop/pjsua"
@@ -52,7 +52,12 @@ if python3 -c 'import pathlib,sys; sys.exit(not any("::pjsip::" in n for n in pa
     [[ -x "$PJSUA_BIN" ]] || { echo "PJSUA_BIN is not executable: $PJSUA_BIN" >&2; exit 1; }
     export PJSUA_BIN=$(python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$PJSUA_BIN")
 fi
-if python3 -c 'import pathlib,sys; sys.exit(not any("::sipp::" in n for n in pathlib.Path(sys.argv[1]).read_text().splitlines()))' "$RSIPSTACK_INTEROP_LOG_DIR/test-names.txt"; then
+for APP in proxy b2bua; do
+    if python3 -c 'import pathlib,sys; sys.exit(not any("::"+sys.argv[2]+"::" in n for n in pathlib.Path(sys.argv[1]).read_text().splitlines()))' "$RSIPSTACK_INTEROP_LOG_DIR/test-names.txt" "$APP"; then
+        cargo build --example "interop_$APP"
+    fi
+done
+if python3 -c 'import pathlib,sys; sys.exit(not any("::sipp::" in n or "_sipp_" in n for n in pathlib.Path(sys.argv[1]).read_text().splitlines()))' "$RSIPSTACK_INTEROP_LOG_DIR/test-names.txt"; then
     if [[ -z ${SIPP_BIN:-} ]]; then
         bash scripts/interop/build-sipp.sh
         export SIPP_BIN="$ROOT/target/interop/sipp"

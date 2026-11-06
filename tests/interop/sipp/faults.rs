@@ -363,10 +363,10 @@ macro_rules! cases {
     )*};
 }
 cases! {
-    (udp_known_gap_remote_bye_during_blocked_ack, RemoteByeBlockedAck),
+    (udp_remote_bye_during_blocked_ack, RemoteByeBlockedAck),
     (udp_remote_bye_during_held_ack, RemoteByeHeldAck),
     (udp_wrong_tag_bye_during_blocked_ack, WrongBye),
-    (udp_known_gap_local_bye_waits_for_blocked_ack, LocalBye),
+    (udp_local_bye_waits_for_blocked_ack, LocalBye),
     (udp_cancel_crossed_held_200, Cancel200),
     (udp_crossed_held_byes, CrossedBye),
 }

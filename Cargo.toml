@@ -104,3 +104,11 @@ required-features = ["bench"]
 name = "proxy"
 path = "examples/proxy.rs"
 required-features = ["bench"]
+
+[[example]]
+name = "interop_proxy"
+required-features = ["platform-tokio"]
+
+[[example]]
+name = "interop_b2bua"
+required-features = ["platform-tokio"]
