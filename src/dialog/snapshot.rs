@@ -12,6 +12,42 @@ pub struct DialogLifecycleRecord {
     pub kind: DialogLifecycleKind,
 }
 
+impl DialogLifecycleRecord {
+    /// Reconstruct a fact from application-owned storage.
+    ///
+    /// Preserves the supplied sequence and optional wall-clock timestamp; it
+    /// does not generate a new event or time. The complete history is validated
+    /// when restoring a confirmed snapshot through
+    /// [`DialogLayer::restore_from_snapshot`](super::dialog_layer::DialogLayer::restore_from_snapshot).
+    ///
+    /// ```
+    /// use core::time::Duration;
+    /// use rsipstack::dialog::{
+    ///     lifecycle::DialogLifecycleKind,
+    ///     snapshot::DialogLifecycleRecord,
+    /// };
+    /// use rsipstack::sip::StatusCode;
+    ///
+    /// let record = DialogLifecycleRecord::new(
+    ///     1,
+    ///     Some(Duration::from_millis(1_700_000_000_123)),
+    ///     DialogLifecycleKind::InviteAccepted { status: StatusCode::OK },
+    /// );
+    /// assert_eq!(record.sequence, 1);
+    /// ```
+    pub fn new(
+        sequence: u64,
+        since_unix_epoch: Option<Duration>,
+        kind: DialogLifecycleKind,
+    ) -> Self {
+        Self {
+            sequence,
+            since_unix_epoch,
+            kind,
+        }
+    }
+}
+
 /// In-flight work is recorded for recovery decisions, not replayed as SIP
 /// transactions. Interrupted application handlers remain pending conservatively.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
