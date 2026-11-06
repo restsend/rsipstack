@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- In-dialog requests and successful INVITE ACKs now support strict routing
+  (RFC 3261 section 12.2.1.1): the first strict route becomes the Request-URI
+  and remains the network next hop; the remote target is appended to Route.
+  Dialog transactions retain the original route set across authentication
+  retries and target refresh, including offerless re-INVITE ACK answers.
+  Route parameters and multiple values per header are preserved. Public
+  signatures are unchanged; direct `Request::destination()` remains a raw
+  message helper without dialog routing context.
+
 ## 0.8.1
 
 Fourteen fixes and additions merged (#223–#236).

@@ -470,7 +470,7 @@ impl DialogInner {
                 "offerless re-INVITE requires a nonempty ACK answer".into(),
             ));
         }
-        let mut ack = self.endpoint_inner.make_ack(&tx.original, response)?;
+        let mut ack = tx.make_ack(response)?;
         ack.body = body.body;
         ack.headers
             .unique_push(Header::ContentType(body.content_type.into()));

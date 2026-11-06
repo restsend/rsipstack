@@ -175,6 +175,8 @@ pub struct Transaction {
     pub connection: Option<SipConnection>,
     pub last_response: Option<Response>,
     pub last_ack: Option<Request>,
+    // Unencoded dialog routes, retained across target refresh and auth retry.
+    pub(crate) dialog_route_set: Option<Vec<crate::sip::Route>>,
     /// Defer the first successful ACK until an application supplies its body.
     pub(crate) defer_success_ack: bool,
     pub(crate) force_success_ack: bool,
@@ -225,6 +227,7 @@ impl Transaction {
             state,
             last_response: None,
             last_ack: None,
+            dialog_route_set: None,
             defer_success_ack: false,
             force_success_ack: false,
             timer_a: None,
@@ -421,7 +424,10 @@ impl Transaction {
         let mut resolved = match &self.destination {
             Some(addr) => addr.clone(),
             None => {
-                let dest = self.original.destination();
+                let dest = match self.dialog_route_set.as_deref() {
+                    Some(routes) => crate::sip::routing::next_hop(&self.original.uri, routes)?,
+                    None => self.original.destination(),
+                };
                 if let Some(locator) = self.endpoint_inner.locator.as_ref() {
                     locator.locate(&dest).await?
                 } else {
@@ -678,6 +684,14 @@ impl Transaction {
         }
     }
 
+    pub(crate) fn make_ack(&self, response: &Response) -> Result<Request> {
+        self.endpoint_inner.make_ack_with_route_set(
+            &self.original,
+            response,
+            self.dialog_route_set.as_deref(),
+        )
+    }
+
     /// Send an ACK for a final response on a client INVITE transaction.
     ///
     /// Constructs the ACK from `last_ack` (cached) or `last_response` +
@@ -744,7 +758,7 @@ impl Transaction {
                     "no last response found to send ACK".to_string(),
                     self.key.clone(),
                 ))?;
-                self.endpoint_inner.make_ack(&self.original, resp)?
+                self.make_ack(resp)?
             }
         };
 
@@ -764,7 +778,12 @@ impl Transaction {
 
                 if !reuse_existing {
                     // 2xx response, set destination from request
-                    let target = ack.destination();
+                    let routes = crate::sip::routing::ack_routes(
+                        &self.original,
+                        resp,
+                        self.dialog_route_set.as_deref(),
+                    )?;
+                    let target = crate::sip::routing::next_hop(&ack.uri, &routes)?;
                     let addr = match self.endpoint_inner.locator.as_ref() {
                         Some(locator) => match locator.locate(&target).await {
                             Ok(addr) => Some(addr),
@@ -1886,8 +1905,7 @@ impl Transaction {
                                 && !self.defer_success_ack)
                                 || resp.status_code.kind() != StatusCodeKind::Successful;
                             if auto_ack {
-                                if let Ok(ack) = self.endpoint_inner.make_ack(&self.original, resp)
-                                {
+                                if let Ok(ack) = self.make_ack(resp) {
                                     self.last_ack.replace(ack);
                                 }
                             }
