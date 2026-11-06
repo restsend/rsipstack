@@ -188,6 +188,8 @@ pub struct Transaction {
     pub timer_g: Option<u64>, // server invite only (non-2xx final response retransmits per RFC 6026 §7.1)
     pub timer_l: Option<u64>, // server invite only (Accepted-state 64*T1 per RFC 6026 §7.1)
     pub timer_m: Option<u64>, // client invite only (Accepted-state 64*T1 per RFC 6026 §7.2)
+    pub(crate) persistence_dialog: Mutex<alloc::sync::Weak<crate::dialog::dialog::DialogInner>>,
+    persistence_sent: bool,
     pub(crate) original_received_at: Option<crate::dialog::lifecycle::LifecycleTime>,
     receipt_times: Option<Arc<super::receipt::ReceiptTimes>>,
     last_received_at: Option<crate::dialog::lifecycle::LifecycleTime>,
@@ -237,6 +239,8 @@ impl Transaction {
             timer_d: None,
             timer_k: None,
             timer_g: None,
+            persistence_dialog: Mutex::new(alloc::sync::Weak::new()),
+            persistence_sent: false,
             original_received_at: None,
             receipt_times: None,
             last_received_at: None,
@@ -254,6 +258,19 @@ impl Transaction {
         tx.endpoint_inner
             .attach_transaction(&tx.key, tx.tu_sender.clone());
         tx
+    }
+
+    pub(crate) fn check_persistence(&self) -> Result<()> {
+        let dialog = self.persistence_dialog.lock().upgrade();
+        if let Some(dialog) = dialog {
+            let runtime = dialog.persistence.lock().clone();
+            if let Some(runtime) = runtime {
+                if let Some(error) = runtime.status.lock().failure.clone() {
+                    return Err(Error::Error(error));
+                }
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn track_receipt_times(&mut self, enabled: bool) {
@@ -312,6 +329,30 @@ impl Transaction {
     }
     // send client request
     pub async fn send(&mut self) -> Result<()> {
+        self.check_persistence()?;
+        if !self.persistence_sent {
+            let dialog = self.persistence_dialog.lock().upgrade();
+            if let Some(dialog) = dialog {
+                dialog
+                    .checkpoint(
+                        crate::dialog::persistence::DialogCheckpointReason::OutgoingRequest,
+                        Some(self.original.clone().into()),
+                    )
+                    .await?;
+                if dialog.is_terminated()
+                    && !matches!(
+                        self.original.method,
+                        Method::Bye | Method::Cancel | Method::Ack
+                    )
+                    && self.original.to_header()?.tag()?.is_some()
+                {
+                    return Err(Error::Error(
+                        "dialog terminated while saving request".into(),
+                    ));
+                }
+            }
+            self.persistence_sent = true;
+        }
         match self.transaction_type {
             TransactionType::ClientInvite | TransactionType::ClientNonInvite => {}
             _ => {
@@ -511,6 +552,7 @@ impl Transaction {
     /// is acceptable. Prefer the `TransactionEvent::Respond` channel for
     /// cancellation-aware integration.
     pub async fn respond(&mut self, response: Response) -> Result<()> {
+        self.check_persistence()?;
         match self.transaction_type {
             TransactionType::ServerInvite | TransactionType::ServerNonInvite => {}
             _ => {
@@ -580,6 +622,17 @@ impl Transaction {
         } else {
             response.to_owned().into()
         };
+        if new_state != TransactionState::Trying && new_state != TransactionState::Proceeding {
+            let dialog = self.persistence_dialog.lock().upgrade();
+            if let Some(dialog) = dialog {
+                dialog
+                    .checkpoint(
+                        crate::dialog::persistence::DialogCheckpointReason::BeforeResponse,
+                        Some(response.clone()),
+                    )
+                    .await?;
+            }
+        }
         trace!(key = %self.key, response = %response, "responding");
 
         match response.clone() {
@@ -628,6 +681,10 @@ impl Transaction {
             }
         }
         guard.0 = None;
+        let final_response = !matches!(
+            new_state,
+            TransactionState::Trying | TransactionState::Proceeding
+        );
         // Non-INVITE termination moves last_response into the endpoint cache.
         let timer_response = session_timer.as_ref().and(self.last_response.clone());
         self.transition(new_state)?;
@@ -636,6 +693,17 @@ impl Transaction {
         }
         if let (Some(server), Some(response)) = (reliable, self.last_response.as_ref()) {
             server.sent(response);
+        }
+        if final_response {
+            let dialog = self.persistence_dialog.lock().upgrade();
+            if let Some(dialog) = dialog {
+                dialog
+                    .checkpoint(
+                        crate::dialog::persistence::DialogCheckpointReason::SignalingCompleted,
+                        None,
+                    )
+                    .await?;
+            }
         }
         Ok(())
     }
@@ -752,6 +820,7 @@ impl Transaction {
     /// inappropriate retransmits. Do not place inside `tokio::select!`
     /// unless this hazard is acceptable.
     pub async fn send_ack(&mut self, mut connection: Option<SipConnection>) -> Result<()> {
+        self.check_persistence()?;
         if self.transaction_type != TransactionType::ClientInvite {
             return Err(Error::TransactionError(
                 "send_ack is only valid for client invite transactions".to_string(),
@@ -843,6 +912,7 @@ impl Transaction {
             ack.to_owned().into()
         };
 
+        self.check_persistence()?;
         match ack.clone() {
             SipMessage::Request(ref ack_req) => self.last_ack.replace(ack_req.clone()),
             _ => None,
@@ -928,9 +998,15 @@ impl Transaction {
         &mut self,
         mut observer: impl FnMut(&Response, crate::dialog::lifecycle::LifecycleTime) + Send,
     ) -> Option<SipMessage> {
+        if self.check_persistence().is_err() {
+            return None;
+        }
         while let Some(event) = self.tu_receiver.recv().await {
             if let Some(result) = self.dispatch_event_observed(event, &mut observer).await {
                 return result;
+            }
+            if self.check_persistence().is_err() {
+                return None;
             }
         }
         None
@@ -1346,6 +1422,23 @@ impl Transaction {
             self.last_received_at
                 .unwrap_or_else(crate::dialog::lifecycle::LifecycleTime::now),
         );
+        let dialog = self.persistence_dialog.lock().upgrade();
+        if let Some(dialog) = dialog {
+            if resp.status_code.kind() == StatusCodeKind::Successful
+                && self.original.method == Method::Invite
+            {
+                if let Err(error) = dialog
+                    .checkpoint(
+                        crate::dialog::persistence::DialogCheckpointReason::BeforeAck,
+                        Some(resp.clone().into()),
+                    )
+                    .await
+                {
+                    tracing::warn!(%error, "INVITE checkpoint failed before ACK");
+                    return None;
+                }
+            }
+        }
         if auto_ack_client_invite {
             if let Err(e) = self.send_ack(connection).await {
                 warn!(
@@ -1368,6 +1461,7 @@ impl Transaction {
         key: &TransactionKey,
         duration: &Duration,
     ) -> Result<()> {
+        self.check_persistence()?;
         if let Some(last_response) = &self.last_response {
             if let Some(connection) = &self.connection {
                 let last_response =
@@ -1392,6 +1486,7 @@ impl Transaction {
     }
 
     async fn on_timer(&mut self, timer: TransactionTimer) -> Result<()> {
+        self.check_persistence()?;
         match self.state {
             TransactionState::Calling | TransactionState::Trying | TransactionState::Proceeding
                 if self.state != TransactionState::Proceeding

@@ -913,6 +913,10 @@ impl DialogLayer {
         }
         let dialog = InviteDialog::from_inner(Arc::new(dlg_inner));
         dialog.inner.lifecycle.lock().sender = self.inner.lifecycle_sender.lock().clone();
+        dialog
+            .inner
+            .configure_persistence(self.inner.persistence_config.lock().clone());
+        dialog.inner.bind_persistence(&tx);
         dialog.inner.reserve_invite(&tx)?;
         *dialog.inner.reliable_config.lock() = self.inner.reliable_config.lock().clone();
         if let Some(config) = self.inner.session_timer_config.lock().clone() {
