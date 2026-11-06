@@ -50,7 +50,26 @@ fn dialog() -> (
 fn handle(inner: &Arc<DialogInner>, method: Method, cseq: u32) {
     let request = request(method, cseq);
     let key = TransactionKey::from_request(&request, TransactionRole::Server).unwrap();
-    let mut tx = Transaction::new_server(key, request, inner.endpoint_inner.clone(), None);
+    let (_, incoming) = unbounded_channel();
+    let (outgoing, _responses) = unbounded_channel();
+    let connection = crate::transport::channel::ChannelConnection::create_connection(
+        incoming,
+        outgoing,
+        "127.0.0.1:5060"
+            .parse::<std::net::SocketAddr>()
+            .unwrap()
+            .into(),
+        None,
+    )
+    .now_or_never()
+    .unwrap()
+    .unwrap();
+    let mut tx = Transaction::new_server(
+        key,
+        request,
+        inner.endpoint_inner.clone(),
+        Some(connection.into()),
+    );
     // In an early server dialog these requests complete synchronously. This
     // exercises the actual dialog admission path without transport scheduling.
     InviteDialog::from_inner(inner.clone())
