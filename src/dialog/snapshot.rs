@@ -1,7 +1,158 @@
 //! Recovery metadata captured together with the dialog's routing state.
+#![doc = include_str!("../../MIGRATING-0.9.md")]
+use super::dialog::{DialogSnapshot, DialogSnapshotState, SessionIdState};
 use super::lifecycle::DialogLifecycleKind;
+use super::DialogId;
+use crate::sip::{headers::Route, typed, Uri};
+use crate::transaction::key::TransactionRole;
 use alloc::vec::Vec;
 use core::time::Duration;
+
+/// Reconstruct application-owned snapshot data through [`DialogSnapshot::builder`].
+///
+/// State, CSeq values and runtime metadata have no implicit defaults. Optional
+/// contacts and Session-ID default to `None`, routes to an empty vector, and
+/// 100rel support to `false`. Preserve all stored values when rebuilding a
+/// snapshot; defaults do not migrate storage or infer missing recovery data.
+#[derive(Clone, Debug)]
+#[must_use]
+pub struct DialogSnapshotBuilder {
+    id: DialogId,
+    role: TransactionRole,
+    from: typed::From,
+    to: typed::To,
+    remote_uri: Uri,
+    state: Option<DialogSnapshotState>,
+    local_cseq: Option<u32>,
+    remote_cseq: Option<u32>,
+    runtime: Option<DialogSnapshotRuntime>,
+    local_contact: Option<Uri>,
+    remote_contact: Option<crate::sip::headers::untyped::Contact>,
+    route_set: Vec<Route>,
+    supports_100rel: bool,
+    session_id: Option<SessionIdState>,
+}
+
+impl DialogSnapshotBuilder {
+    pub(crate) fn new(
+        id: DialogId,
+        role: TransactionRole,
+        from: typed::From,
+        to: typed::To,
+        remote_uri: Uri,
+    ) -> Self {
+        Self {
+            id,
+            role,
+            from,
+            to,
+            remote_uri,
+            state: None,
+            local_cseq: None,
+            remote_cseq: None,
+            runtime: None,
+            local_contact: None,
+            remote_contact: None,
+            route_set: Vec::new(),
+            supports_100rel: false,
+            session_id: None,
+        }
+    }
+
+    /// Set the persisted dialog state; building does not imply confirmation.
+    pub fn state(mut self, state: DialogSnapshotState) -> Self {
+        self.state = Some(state);
+        self
+    }
+
+    /// Set the persisted local sequence counter, without resetting it.
+    pub fn local_cseq(mut self, cseq: u32) -> Self {
+        self.local_cseq = Some(cseq);
+        self
+    }
+
+    /// Set the persisted remote sequence counter, including an explicit zero.
+    pub fn remote_cseq(mut self, cseq: u32) -> Self {
+        self.remote_cseq = Some(cseq);
+        self
+    }
+
+    /// Set recovery metadata, preserving pending operations and lifecycle facts.
+    ///
+    /// For pre-0.9 records, pass `DialogSnapshotRuntime::default()` only after
+    /// the application has established that no signaling was in flight. Missing
+    /// metadata alone is not evidence of a quiescent dialog.
+    pub fn runtime(mut self, runtime: DialogSnapshotRuntime) -> Self {
+        self.runtime = Some(runtime);
+        self
+    }
+
+    pub fn local_contact(mut self, contact: Option<Uri>) -> Self {
+        self.local_contact = contact;
+        self
+    }
+
+    pub fn remote_contact(
+        mut self,
+        contact: Option<crate::sip::headers::untyped::Contact>,
+    ) -> Self {
+        self.remote_contact = contact;
+        self
+    }
+
+    pub fn route_set(mut self, routes: Vec<Route>) -> Self {
+        self.route_set = routes;
+        self
+    }
+
+    pub fn supports_100rel(mut self, supported: bool) -> Self {
+        self.supports_100rel = supported;
+        self
+    }
+
+    pub fn session_id(mut self, session_id: Option<SessionIdState>) -> Self {
+        self.session_id = session_id;
+        self
+    }
+
+    /// Check required inputs and the lifecycle history of a confirmed snapshot.
+    ///
+    /// This does not restore a dialog or prove it can be resumed. In particular,
+    /// pending operations and non-confirmed states remain representable for
+    /// application recovery decisions. Restore still rejects confirmed snapshots
+    /// with pending signaling and skips non-confirmed snapshots. Mutable public
+    /// fields are rechecked at restore time.
+    pub fn build(self) -> crate::Result<DialogSnapshot> {
+        let snapshot = DialogSnapshot {
+            id: self.id,
+            role: self.role,
+            from: self.from,
+            to: self.to,
+            remote_uri: self.remote_uri,
+            state: self
+                .state
+                .ok_or_else(|| crate::Error::Error("snapshot state is required".into()))?,
+            local_cseq: self
+                .local_cseq
+                .ok_or_else(|| crate::Error::Error("snapshot local CSeq is required".into()))?,
+            remote_cseq: self
+                .remote_cseq
+                .ok_or_else(|| crate::Error::Error("snapshot remote CSeq is required".into()))?,
+            runtime: self.runtime.ok_or_else(|| {
+                crate::Error::Error("snapshot runtime metadata is required".into())
+            })?,
+            local_contact: self.local_contact,
+            remote_contact: self.remote_contact,
+            route_set: self.route_set,
+            supports_100rel: self.supports_100rel,
+            session_id: self.session_id,
+        };
+        if snapshot.state == DialogSnapshotState::Confirmed {
+            super::lifecycle::LifecycleState::restored(&snapshot.runtime)?;
+        }
+        Ok(snapshot)
+    }
+}
 
 /// A persisted fact deliberately excludes process-local monotonic time.
 #[derive(Clone, Debug)]

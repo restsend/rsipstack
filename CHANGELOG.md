@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — proposed 0.9.0
+
+- **Breaking (requires maintainer approval for 0.9.0):** `DialogSnapshot` adds
+  coherent `runtime` metadata and becomes `#[non_exhaustive]`. External callers
+  must use `DialogSnapshot::builder(...)` and include `..` in destructuring
+  patterns. State, both CSeq values and runtime metadata must be explicit.
+- **Recovery behavior:** confirmed snapshots with unfinished signaling or invalid
+  lifecycle history are rejected. Stored transactions and handlers are not
+  replayed. Lifecycle records can be reconstructed with `DialogLifecycleRecord::new`.
+- See [the migration guide](MIGRATING-0.9.md) for storage defaults, legacy-record
+  handling, and the release compatibility plan. The release target is proposed;
+  this change does not itself bump or publish the package version.
+
 ## 0.8.1
 
 Fourteen fixes and additions merged (#223–#236).

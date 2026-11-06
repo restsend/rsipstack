@@ -451,7 +451,12 @@ pub struct SessionIdState {
     pub local: String,
     pub remote: Option<String>,
 }
+/// A coherent snapshot for application-owned storage and recovery.
+///
+/// Use [`Self::builder`] to reconstruct stored data. Direct field access remains
+/// available; destructuring outside this crate must include `..`.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct DialogSnapshot {
     /// Captured with routing, CSeq, lifecycle facts, and transaction admission.
     pub runtime: super::snapshot::DialogSnapshotRuntime,
@@ -476,6 +481,20 @@ pub struct DialogSnapshot {
     pub session_id: Option<SessionIdState>,
 }
 impl DialogSnapshot {
+    /// Reconstruct a snapshot without depending on its complete field list.
+    ///
+    /// State, both CSeq values, and runtime metadata must be supplied explicitly
+    /// before building. See [`super::snapshot`] for the 0.9 migration guide.
+    pub fn builder(
+        id: DialogId,
+        role: TransactionRole,
+        from: crate::sip::typed::From,
+        to: crate::sip::typed::To,
+        remote_uri: crate::sip::Uri,
+    ) -> super::snapshot::DialogSnapshotBuilder {
+        super::snapshot::DialogSnapshotBuilder::new(id, role, from, to, remote_uri)
+    }
+
     /// Only confirmed snapshots with no unfinished signaling can be resumed.
     pub fn is_quiescent(&self) -> bool {
         self.state == DialogSnapshotState::Confirmed && self.runtime.pending.is_empty()
