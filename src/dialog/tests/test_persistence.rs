@@ -838,6 +838,14 @@ async fn persistence_session_422_retry_keeps_storage_barrier() -> crate::Result<
         );
         call.peer.send_to(rejection.as_bytes(), call.local).await?;
         request(&call.peer, Method::Ack).await;
+        // The rejected attempt must be durable before its ACK, independently
+        // of the later retry's outgoing-request barrier.
+        assert!(store.committed.lock().unwrap().iter().any(|checkpoint| {
+            checkpoint.reason == Reason::BeforeAck
+                && matches!(&checkpoint.message, Some(SipMessage::Response(response))
+                    if response.status_code == StatusCode::SessionIntervalTooSmall
+                        && response.cseq_header().unwrap() == initial.cseq_header().unwrap())
+        }));
         entered(&store).await;
         silent(&call.peer).await;
         store.fail.store(fail, Ordering::SeqCst);
@@ -877,8 +885,12 @@ async fn persistence_session_422_retry_keeps_storage_barrier() -> crate::Result<
                 checkpoints
                     .iter()
                     .filter(|c| c.reason == Reason::BeforeAck)
-                    .count(),
-                1
+                    .map(|c| match &c.message {
+                        Some(SipMessage::Response(response)) => response.status_code.clone(),
+                        _ => panic!("BeforeAck must preserve the observed final response"),
+                    })
+                    .collect::<Vec<_>>(),
+                vec![StatusCode::SessionIntervalTooSmall, StatusCode::OK]
             );
             assert_eq!(call.dialog.snapshot().runtime.lifecycle.len(), 1);
         }
