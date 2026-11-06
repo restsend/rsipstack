@@ -162,7 +162,7 @@ impl Sipp {
         message
     }
 
-    async fn marker(&mut self, marker: &str) -> TestResult {
+    pub(super) async fn marker(&mut self, marker: &str) -> TestResult {
         until_result(marker, || {
             let text = match std::fs::read_to_string(&self.log) {
                 Ok(text) => text,
