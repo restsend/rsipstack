@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<scenario name="UAC timer 422 retry and INVITE refresh">
+  <recv request="INVITE"/>
+  <send><![CDATA[
+SIP/2.0 422 Session Interval Too Small
+[last_Via:]
+[last_From:]
+[last_To:];tag=sipp-test
+[last_Call-ID:]
+[last_CSeq:]
+Contact: <[sipp_uri]>
+Min-SE: 120
+Content-Length: [len]
+
+
+]]></send>
+  <recv request="ACK"/>
+  <recv request="INVITE"><action>
+    <ereg regexp="120;refresher=uac" search_in="hdr" header="Session-Expires:" check_it="true" assign_to="_"/>
+    <ereg regexp="120" search_in="hdr" header="Min-SE:" check_it="true" assign_to="_"/>
+  </action></recv>
+  <send><![CDATA[
+SIP/2.0 200 OK
+[last_Via:]
+[last_From:]
+[last_To:];tag=sipp-test
+[last_Call-ID:]
+[last_CSeq:]
+Contact: <[sipp_uri]>
+Session-Expires: 120;refresher=uac
+Require: timer
+Allow: INVITE, UPDATE, BYE
+Content-Type: application/sdp
+Content-Length: [len]
+
+v=0
+o=sipp 1 1 IN IP4 127.0.0.1
+s=interop
+c=IN IP4 127.0.0.1
+t=0 0
+m=audio 9 RTP/AVP 0
+a=inactive
+
+]]></send>
+  <recv request="ACK"/>
+  <recv request="INVITE"/>
+  <send><![CDATA[
+SIP/2.0 200 OK
+[last_Via:]
+[last_From:]
+[last_To:]
+[last_Call-ID:]
+[last_CSeq:]
+Contact: <[sipp_uri]>
+Session-Expires: 180;refresher=uac
+Require: timer
+Content-Type: application/sdp
+Content-Length: [len]
+
+v=0
+o=sipp 1 1 IN IP4 127.0.0.1
+s=interop
+c=IN IP4 127.0.0.1
+t=0 0
+m=audio 9 RTP/AVP 0
+a=inactive
+
+]]></send>
+  <recv request="ACK"/>
+  <recv request="BYE"/>
+  <send><![CDATA[
+SIP/2.0 200 OK
+[last_Via:]
+[last_From:]
+[last_To:]
+[last_Call-ID:]
+[last_CSeq:]
+Contact: <[sipp_uri]>
+Content-Length: [len]
+
+
+]]></send>
+</scenario>

@@ -493,10 +493,9 @@ async fn reliable_response_duplicates_do_not_reapply_stale_contact() {
     assert_eq!(prack.uri.to_string(), NEW);
     assert_eq!(prack.route_header().unwrap().value(), ROUTE);
     inner.set_remote_target(OLD.try_into().unwrap(), Some(format!("<{OLD}>").into()));
-    assert_eq!(
-        inner.prepare_prack_request(&response).unwrap().unwrap(),
-        prack
-    );
+    // RFC 3262 duplicates are discarded; the existing PRACK transaction
+    // owns retransmission. Its old Contact must not be applied again.
+    assert!(inner.prepare_prack_request(&response).unwrap().is_none());
     assert_eq!(inner.remote_uri.lock().to_string(), OLD);
     response.headers.unique_push(Header::RSeq("4".into()));
     assert!(inner.prepare_prack_request(&response).unwrap().is_none());

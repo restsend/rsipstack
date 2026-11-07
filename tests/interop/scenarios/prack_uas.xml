@@ -23,7 +23,9 @@ a=rtpmap:0 PCMU/8000
 a=inactive
 ]]></send>
   <recv response="100" optional="true"/>
-  <recv response="183"/>
+  <recv response="183"><action>
+    <ereg regexp="^ *([0-9]+)" search_in="hdr" header="RSeq:" check_it="true" assign_to="_,rseq"/>
+  </action></recv>
   <send><![CDATA[
 PRACK [rsip_uri] SIP/2.0
 Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=z9hG4bK-prack-[pid]

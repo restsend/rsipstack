@@ -15,6 +15,88 @@ A RFC 3261/3262 compliant SIP stack written in Rust. The goal of this project is
 - **Digest Authentication**: Built-in authentication support
 - **no_std / Embedded**: alloc-only core with an embassy backend
 
+## Reliable provisional responses (100rel / PRACK)
+
+Full UAC and UAS signaling is enabled explicitly on the dialog layer:
+
+```rust,ignore
+use rsipstack::dialog::reliable::ReliableProvisionalConfig;
+
+// media implements the async PrackHandler trait.
+let mut config = ReliableProvisionalConfig::new(media);
+config.require = false; // true additionally sends Require: 100rel on INVITEs
+dialog_layer.set_reliable_provisional(Some(config));
+```
+
+The setting applies to new calls and restored confirmed dialogs. The UAS sends
+reliable 101–199 only when the INVITE advertises or requires 100rel. Without this
+configuration, required 100rel is rejected with 420/Unsupported; ordinary calls
+keep their existing behavior. The legacy `InviteOption::support_prack` switch
+does not install a media handler and is not needed with the full configuration.
+
+The stack assigns RSeq, validates RAck, keeps state per dialog and INVITE CSeq,
+retransmits reliable provisionals from T1 with exponential backoff (without a
+T2 cap), and rejects the INVITE after 64*T1 without PRACK. It serializes reliable
+provisionals and defers final 2xx while a reliable SDP response is unacknowledged.
+CANCEL/non-2xx finals discard a queued successful final; late PRACK remains
+routable for 64*T1 when a dialog is removed. PRACK requests use independent
+transactions, including authentication and retransmission, so waiting for their
+responses does not block INVITE final responses or cancellation.
+
+`PrackHandler` is the media boundary:
+
+- `on_reliable_response`: for `Offer`, return an SDP answer for PRACK. For
+  `Answer`, consume the answer and return either no body or a new SDP offer.
+- `on_prack`: consume an SDP answer received in PRACK; return an SDP answer
+  when PRACK contains an offer.
+- `on_prack_result`: receives the final PRACK response, including the answer
+  to an offer sent in PRACK; `None` means transaction timeout.
+- `on_error`: reports transport, timeout, protocol or media-handler failures.
+
+`SdpKind::Ignored` marks subsequent SDP for an INVITE whose initial description
+has already been processed. Do not renegotiate from that body. The ordinary
+Early/Confirmed events retain raw SIP messages for observation; applications
+using the handler should not apply their SDP a second time. Media negotiation,
+codec selection, rejected-media answers, RTP, and coordination with application
+UPDATE/re-INVITE offers remain the media application's responsibility. A failed
+UAS media callback returns 500 and fails the pending INVITE rather than leaving
+a deferred final response waiting indefinitely.
+
+The existing INVITE/ACK API still handles SDP first delivered in a final 2xx.
+For an offerless INVITE that might receive its first offer in 2xx instead of
+reliable 1xx, disable automatic 2xx ACKs (`EndpointOption::auto_ack_2xx = false`)
+and supply the SDP answer through the application's ACK handling. The new
+handler owns SDP in reliable provisional responses and PRACK, not ordinary
+INVITE/ACK or UPDATE exchanges.
+
+For an initial server INVITE, use the usual `ringing()` and `accept()` methods;
+for a re-INVITE, use its `TransactionHandle`. Keep the INVITE transaction's owning
+task running: it sends queued responses and retransmissions. With 100rel enabled,
+Early/WaitAck notifications reflect actual response transmission, which may occur
+after `ringing()`/`accept()` returns. Configure the layer before creating calls;
+do not change a dialog's configuration during an INVITE exchange.
+
+An independent UDP signaling probe is provided in `examples/prack_probe.rs`.
+It accepts an application-prepared SDP file and sends no RTP:
+
+```bash
+cargo run --example prack_probe -- \
+  0.0.0.0:5062 sip:100@example.net sip:destination@example.net \
+  sip:100@YOUR_PUBLIC_IP:5062 ./compatible-sdp.txt --require
+```
+
+The probe sends the file as the INVITE offer. Optional digest credentials
+come from `SIP_USERNAME`, `SIP_PASSWORD`, and `SIP_REALM`. The probe sends BYE
+after an answered call and does not modify any application configuration.
+
+The regression suite covers RFC 3262 sections 3–5 and the SDP patterns clarified
+by RFC 6337, including real UDP stack-to-stack calls and deterministic timers:
+
+```bash
+cargo test --lib test_reliable_provisional
+bash scripts/interop/run.sh regression prack
+```
+
 ## no_std / Embedded Support
 
 rsipstack compiles without `std` (`alloc`-only) for embassy-based targets —
