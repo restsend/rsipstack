@@ -142,7 +142,9 @@ impl core::convert::TryFrom<String> for Scheme {
 
 #[cfg(test)]
 mod tests {
-    use crate::sip::typed::{Authorization, ProxyAuthorization, WwwAuthenticate, ProxyAuthenticate};
+    use crate::sip::typed::{
+        Authorization, ProxyAuthenticate, ProxyAuthorization, WwwAuthenticate,
+    };
 
     #[test]
     fn authorization_qop_is_unquoted() {
@@ -156,11 +158,20 @@ mod tests {
                 let auth = Authorization::parse(&input).unwrap();
                 let proxy = ProxyAuthorization::parse(&input).unwrap();
                 for output in [auth.to_string(), proxy.to_string()] {
-                    assert!(output.contains(&format!(", qop={}, nc=00000001, cnonce=\"client-nonce\"", qop)), "{output}");
+                    assert!(
+                        output.contains(&format!(
+                            ", qop={}, nc=00000001, cnonce=\"client-nonce\"",
+                            qop
+                        )),
+                        "{output}"
+                    );
                     assert!(!output.contains("qop=\""), "{output}");
                 }
                 assert_eq!(Authorization::parse(&auth.to_string()).unwrap(), auth);
-                assert_eq!(ProxyAuthorization::parse(&proxy.to_string()).unwrap(), proxy);
+                assert_eq!(
+                    ProxyAuthorization::parse(&proxy.to_string()).unwrap(),
+                    proxy
+                );
             }
         }
     }
