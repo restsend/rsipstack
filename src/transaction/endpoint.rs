@@ -778,6 +778,10 @@ impl EndpointInner {
         Some(self.transactions.with(|m| m.keys().cloned().collect()))
     }
 
+    pub(crate) fn shutdown_token(&self) -> CancellationToken {
+        self.cancel_token.clone()
+    }
+
     pub fn get_stats(&self) -> EndpointStats {
         let waiting_ack = self.waiting_ack.len();
         let running_transactions = self.transactions.len();

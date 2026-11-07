@@ -3,7 +3,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$ROOT"
 usage() {
-    echo "Usage: bash scripts/interop/run.sh [all|regression|pjsip|sipp|proxy|b2bua|faults|known-gaps] [test-name-filter]"
+    echo "Usage: bash scripts/interop/run.sh [all|regression|pjsip|sipp|proxy|b2bua|faults|known-gaps|soak] [test-name-filter]"
 }
 if [[ ${1:-} == --help ]]; then usage; exit 0; fi
 if [[ $# -gt 2 ]]; then usage >&2; exit 2; fi
@@ -11,6 +11,7 @@ SUITE=${1:-all}
 case "$SUITE" in
     all|regression|known-gaps|faults) PREFIX=interop:: ;;
     pjsip|sipp|proxy|b2bua) PREFIX="interop::$SUITE::" ;;
+    soak) PREFIX="interop::sipp::soak::" ;;
     *) usage >&2; exit 2 ;;
 esac
 FILTER=${2:-}
@@ -26,6 +27,8 @@ import os, pathlib, sys
 path = pathlib.Path(sys.argv[1])
 names = [line.removesuffix(": test") for line in path.read_text().splitlines()
          if line.endswith(": test") and sys.argv[2] in line.removesuffix(": test")]
+if sys.argv[3] != "soak":
+    names = [name for name in names if "::soak::" not in name]
 if sys.argv[3] == "faults":
     names = [name for name in names if "::faults::" in name]
 gaps = [name for name in names if "known_gap_" in name]

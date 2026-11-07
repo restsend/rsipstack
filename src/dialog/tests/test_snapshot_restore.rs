@@ -120,3 +120,105 @@ async fn snapshot_restore_still_skips_non_confirmed_states() -> crate::Result<()
     assert!(layer.is_empty());
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshots_never_mix_target_uri_and_contact() -> crate::Result<()> {
+    let layer = DialogLayer::new(EndpointBuilder::new().build().inner);
+    let original = snapshot(TransactionRole::Client);
+    let (states, _) = unbounded_channel();
+    layer.restore_from_snapshot(original.clone(), states)?;
+    let Some(Dialog::Invite(dialog)) = layer.get_dialog(&original.id) else {
+        unreachable!()
+    };
+    let uri = Uri::try_from("sip:target0@example.com")?;
+    dialog.inner.set_remote_target(
+        uri.clone(),
+        Some(crate::sip::headers::untyped::Contact::from(
+            crate::sip::typed::Contact::from(uri),
+        )),
+    );
+    let writer = dialog.clone();
+    let task = std::thread::spawn(move || {
+        for n in 1..5000 {
+            let uri = Uri::try_from(format!("sip:target{n}@example.com").as_str()).unwrap();
+            writer.inner.set_remote_target(
+                uri.clone(),
+                Some(crate::sip::headers::untyped::Contact::from(
+                    crate::sip::typed::Contact::from(uri),
+                )),
+            );
+            writer.inner.update_remote_tag(&format!("tag{n}")).unwrap();
+            writer.inner.increment_local_seq();
+        }
+    });
+    let mut revision = 0;
+    for _ in 0..5000 {
+        let current = dialog.snapshot();
+        use crate::sip::prelude::ToTypedHeader;
+        assert_eq!(
+            current.remote_uri,
+            current.remote_contact.as_ref().unwrap().typed()?.uri
+        );
+        assert_eq!(current.id.remote_tag, current.to.tag().unwrap().value());
+        assert!(current.runtime.revision >= revision);
+        revision = current.runtime.revision;
+    }
+    task.join().unwrap();
+    Ok(())
+}
+
+#[tokio::test]
+async fn snapshot_restore_retains_facts_without_replaying_them() -> crate::Result<()> {
+    use crate::dialog::dialog::{DialogState, TerminatedReason};
+    use crate::dialog::lifecycle::{
+        dialog_lifecycle_channel, DialogLifecycleKind as K, LifecycleTime,
+    };
+    let layer = DialogLayer::new(EndpointBuilder::new().build().inner);
+    let original = snapshot(TransactionRole::Client);
+    let (states, _) = unbounded_channel();
+    layer.restore_from_snapshot(original.clone(), states.clone())?;
+    let Some(Dialog::Invite(dialog)) = layer.get_dialog(&original.id) else {
+        unreachable!()
+    };
+    dialog
+        .inner
+        .record_initial_acceptance(&crate::sip::Response::default(), LifecycleTime::now());
+    let saved = dialog.snapshot();
+    // Response::default() is 200 OK; this is an already established dialog.
+    assert_eq!(saved.runtime.lifecycle.len(), 1);
+    assert!(saved.is_quiescent());
+    let restored = DialogLayer::new(EndpointBuilder::new().build().inner);
+    let (sender, mut events) = dialog_lifecycle_channel();
+    restored.set_lifecycle_events(Some(sender));
+    assert!(restored.restore_from_snapshot(saved, states)?);
+    assert!(events.try_recv().is_err());
+    let Some(Dialog::Invite(dialog)) = restored.get_dialog(&original.id) else {
+        unreachable!()
+    };
+    dialog.inner.transition(DialogState::Terminated(
+        dialog.id(),
+        TerminatedReason::Timeout,
+    ));
+    let event = events.try_recv().unwrap();
+    assert_eq!(event.sequence, 2);
+    assert!(matches!(event.kind, K::DialogTerminated { .. }));
+    assert_eq!(dialog.snapshot().runtime.lifecycle.len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn unfinished_or_corrupt_snapshot_is_not_silently_resumed() -> crate::Result<()> {
+    let layer = DialogLayer::new(EndpointBuilder::new().build().inner);
+    let (states, _) = unbounded_channel();
+    let mut pending = snapshot(TransactionRole::Client);
+    pending.runtime.pending.negotiations = 1;
+    assert!(!pending.is_quiescent());
+    assert!(layer
+        .restore_from_snapshot(pending, states.clone())
+        .is_err());
+    let mut invalid = snapshot(TransactionRole::Client);
+    invalid.runtime.revision = u64::MAX;
+    assert!(layer.restore_from_snapshot(invalid, states).is_err());
+    assert!(layer.is_empty());
+    Ok(())
+}
