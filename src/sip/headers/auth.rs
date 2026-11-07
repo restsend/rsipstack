@@ -91,10 +91,10 @@ impl core::fmt::Display for AuthQop {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Auth { cnonce, nc } => {
-                write!(f, "qop=\"auth\", nc={:08}, cnonce=\"{}\"", nc, cnonce)
+                write!(f, "qop=auth, nc={:08}, cnonce=\"{}\"", nc, cnonce)
             }
             Self::AuthInt { cnonce, nc } => {
-                write!(f, "qop=\"auth-int\", nc={:08}, cnonce=\"{}\"", nc, cnonce)
+                write!(f, "qop=auth-int, nc={:08}, cnonce=\"{}\"", nc, cnonce)
             }
         }
     }
@@ -137,5 +137,49 @@ impl core::convert::TryFrom<String> for Scheme {
     type Error = crate::sip::Error;
     fn try_from(s: String) -> Result<Self, Self::Error> {
         Scheme::try_from(s.as_str())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::sip::typed::{Authorization, ProxyAuthorization, WwwAuthenticate, ProxyAuthenticate};
+
+    #[test]
+    fn authorization_qop_is_unquoted() {
+        for qop in ["auth", "auth-int"] {
+            // Accept both forms on input, but always emit the RFC 3261 token form.
+            for input_qop in [qop.to_string(), format!("\"{}\"", qop)] {
+                let input = format!(
+                    r#"Digest username="alice", realm="ims.test", nonce="nonce", uri="sip:ims.test", response="0123456789abcdef0123456789abcdef", algorithm=MD5, qop={}, nc=00000001, cnonce="client-nonce""#,
+                    input_qop
+                );
+                let auth = Authorization::parse(&input).unwrap();
+                let proxy = ProxyAuthorization::parse(&input).unwrap();
+                for output in [auth.to_string(), proxy.to_string()] {
+                    assert!(output.contains(&format!(", qop={}, nc=00000001, cnonce=\"client-nonce\"", qop)), "{output}");
+                    assert!(!output.contains("qop=\""), "{output}");
+                }
+                assert_eq!(Authorization::parse(&auth.to_string()).unwrap(), auth);
+                assert_eq!(ProxyAuthorization::parse(&proxy.to_string()).unwrap(), proxy);
+            }
+        }
+    }
+
+    #[test]
+    fn challenge_qop_remains_quoted() {
+        for qop in ["auth", "auth-int"] {
+            let input = format!(
+                r#"Digest realm="ims.test", nonce="nonce", stale=true, algorithm=MD5, qop="{}""#,
+                qop
+            );
+            let www = WwwAuthenticate::parse(&input).unwrap();
+            let proxy = ProxyAuthenticate::parse(&input).unwrap();
+            for output in [www.to_string(), proxy.to_string()] {
+                assert!(output.contains(&format!(", qop=\"{}\"", qop)), "{output}");
+                assert!(output.contains("stale=true"), "{output}");
+            }
+            assert_eq!(WwwAuthenticate::parse(&www.to_string()).unwrap(), www);
+            assert_eq!(ProxyAuthenticate::parse(&proxy.to_string()).unwrap(), proxy);
+        }
     }
 }
