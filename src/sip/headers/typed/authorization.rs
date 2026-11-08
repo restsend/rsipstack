@@ -19,7 +19,7 @@ fn find_qop(params: &[(&str, &str)]) -> Result<Option<AuthQop>, Error> {
             cnonce: find_param(params, "cnonce")
                 .ok_or_else(|| Error::InvalidParam("missing cnonce".into()))?
                 .into(),
-            nc: u8::from_str_radix(
+            nc: u32::from_str_radix(
                 find_param(params, "nc").ok_or_else(|| Error::InvalidParam("missing nc".into()))?,
                 16,
             )
@@ -29,7 +29,7 @@ fn find_qop(params: &[(&str, &str)]) -> Result<Option<AuthQop>, Error> {
             cnonce: find_param(params, "cnonce")
                 .ok_or_else(|| Error::InvalidParam("missing cnonce".into()))?
                 .into(),
-            nc: u8::from_str_radix(
+            nc: u32::from_str_radix(
                 find_param(params, "nc").ok_or_else(|| Error::InvalidParam("missing nc".into()))?,
                 16,
             )

@@ -36,10 +36,24 @@ impl core::convert::TryFrom<&str> for Algorithm {
         match s.trim() {
             s if s.eq_ignore_ascii_case("md5") => Ok(Self::Md5),
             s if s.eq_ignore_ascii_case("md5-sess") => Ok(Self::Md5Sess),
-            s if s.eq_ignore_ascii_case("sha256") => Ok(Self::Sha256),
-            s if s.eq_ignore_ascii_case("sha256-sess") => Ok(Self::Sha256Sess),
-            s if s.eq_ignore_ascii_case("sha512") => Ok(Self::Sha512),
-            s if s.eq_ignore_ascii_case("sha512-sess") => Ok(Self::Sha512Sess),
+            // RFC 7616 §5 registers the SHA family with hyphens ("SHA-256"),
+            // while draft-era deployments commonly emit "SHA256"; accept both.
+            s if s.eq_ignore_ascii_case("sha-256") || s.eq_ignore_ascii_case("sha256") => {
+                Ok(Self::Sha256)
+            }
+            s if s.eq_ignore_ascii_case("sha-256-sess")
+                || s.eq_ignore_ascii_case("sha256-sess") =>
+            {
+                Ok(Self::Sha256Sess)
+            }
+            s if s.eq_ignore_ascii_case("sha-512") || s.eq_ignore_ascii_case("sha512") => {
+                Ok(Self::Sha512)
+            }
+            s if s.eq_ignore_ascii_case("sha-512-sess")
+                || s.eq_ignore_ascii_case("sha512-sess") =>
+            {
+                Ok(Self::Sha512Sess)
+            }
             s => Err(crate::sip::Error::ParseError(format!(
                 "invalid Algorithm: {}",
                 s
@@ -81,20 +95,43 @@ impl core::convert::TryFrom<&str> for Qop {
     }
 }
 
+impl Qop {
+    /// Parse a challenge's `qop-options` value (RFC 2617 §3.2.2): a quoted,
+    /// comma-separated list of the protections the server supports, e.g.
+    /// `qop="auth,auth-int"`. The client picks one; we prefer `auth` because
+    /// it is universally supported, while `auth-int` additionally requires
+    /// entity-body hashing that most SIP flows cannot afford.
+    pub fn parse_challenge(s: &str) -> Result<Self, crate::sip::Error> {
+        let mut auth = None;
+        let mut auth_int = None;
+        for option in s.split(',') {
+            match option.trim() {
+                o if o.eq_ignore_ascii_case("auth") => auth = Some(Self::Auth),
+                o if o.eq_ignore_ascii_case("auth-int") => auth_int = Some(Self::AuthInt),
+                _ => {}
+            }
+        }
+        auth.or(auth_int)
+            .ok_or_else(|| crate::sip::Error::ParseError(format!("unsupported Qop options: {}", s)))
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum AuthQop {
-    Auth { cnonce: String, nc: u8 },
-    AuthInt { cnonce: String, nc: u8 },
+    Auth { cnonce: String, nc: u32 },
+    AuthInt { cnonce: String, nc: u32 },
 }
 
 impl core::fmt::Display for AuthQop {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // `nc` is an 8-digit lowercase hex counter (RFC 2617 §3.2.2); u32 covers
+        // the full 8-hex-digit range without the wrap a u8 would impose at FF.
         match self {
             Self::Auth { cnonce, nc } => {
-                write!(f, "qop=auth, nc={:08}, cnonce=\"{}\"", nc, cnonce)
+                write!(f, "qop=auth, nc={:08x}, cnonce=\"{}\"", nc, cnonce)
             }
             Self::AuthInt { cnonce, nc } => {
-                write!(f, "qop=auth-int, nc={:08}, cnonce=\"{}\"", nc, cnonce)
+                write!(f, "qop=auth-int, nc={:08x}, cnonce=\"{}\"", nc, cnonce)
             }
         }
     }
@@ -142,6 +179,7 @@ impl core::convert::TryFrom<String> for Scheme {
 
 #[cfg(test)]
 mod tests {
+    use super::{Algorithm, AuthQop, Qop};
     use crate::sip::typed::{
         Authorization, ProxyAuthenticate, ProxyAuthorization, WwwAuthenticate,
     };
@@ -192,5 +230,90 @@ mod tests {
             assert_eq!(WwwAuthenticate::parse(&www.to_string()).unwrap(), www);
             assert_eq!(ProxyAuthenticate::parse(&proxy.to_string()).unwrap(), proxy);
         }
+    }
+
+    #[test]
+    fn challenge_qop_list_picks_supported_option() {
+        // RFC 2617 §3.2.2 allows a challenge to offer several qop options
+        // (a quoted list); RFC 2617 §3.2.1 lets the client pick one.
+        for list in [r#""auth,auth-int""#, r#""auth-int,auth""#] {
+            let input = format!(r#"Digest realm="ims.test", nonce="nonce", qop={}"#, list);
+            let www = WwwAuthenticate::parse(&input).unwrap();
+            let proxy = ProxyAuthenticate::parse(&input).unwrap();
+            assert_eq!(www.qop, Some(Qop::Auth), "{list}");
+            assert_eq!(proxy.qop, Some(Qop::Auth), "{list}");
+        }
+        // A single unquoted token stays accepted too.
+        let single = r#"Digest realm="ims.test", nonce="nonce", qop=auth-int"#;
+        assert_eq!(
+            WwwAuthenticate::parse(single).unwrap().qop,
+            Some(Qop::AuthInt)
+        );
+        // Unsupported-only options still fail, as with a single unknown value.
+        assert!(WwwAuthenticate::parse(r#"Digest realm="r", nonce="n", qop="digest""#).is_err());
+    }
+
+    #[test]
+    fn algorithm_accepts_hyphenated_rfc7616_names() {
+        for (raw, expected) in [
+            ("SHA-256", Algorithm::Sha256),
+            ("sha-256-sess", Algorithm::Sha256Sess),
+            ("SHA-512", Algorithm::Sha512),
+            ("sha-512-sess", Algorithm::Sha512Sess),
+        ] {
+            assert_eq!(Algorithm::try_from(raw).unwrap(), expected, "{raw}");
+        }
+        // Draft-era spellings keep parsing.
+        assert_eq!(Algorithm::try_from("SHA256").unwrap(), Algorithm::Sha256);
+        assert_eq!(Algorithm::try_from("MD5-sess").unwrap(), Algorithm::Md5Sess);
+    }
+
+    #[test]
+    fn nc_parses_and_displays_as_eight_hex_digits() {
+        // 8 hex digits span u32; nc=00000100 (256) exceeded a u8.
+        let make = |nc: &str| {
+            format!(
+                r#"Digest username="alice", realm="ims.test", nonce="nonce", uri="sip:ims.test", response="0123456789abcdef0123456789abcdef", algorithm=MD5, qop=auth, nc={nc}, cnonce="client-nonce""#
+            )
+        };
+        for nc in ["00000010", "00000100", "ffffffff"] {
+            let auth = Authorization::parse(&make(nc)).unwrap();
+            let expected = u32::from_str_radix(nc, 16).unwrap();
+            assert_eq!(
+                auth.qop,
+                Some(AuthQop::Auth {
+                    cnonce: "client-nonce".into(),
+                    nc: expected
+                }),
+                "{nc}"
+            );
+            // `nc` is a hex counter (RFC 2617 §3.2.2): the emitted form must
+            // round-trip instead of re-encoding the value in decimal.
+            let output = auth.to_string();
+            assert!(output.contains(&format!("nc={:08x}", expected)), "{output}");
+            assert_eq!(Authorization::parse(&output).unwrap(), auth);
+        }
+    }
+
+    #[test]
+    fn response_qop_without_cnonce_or_nc_is_rejected() {
+        let make = |extra: &str| {
+            format!(
+                r#"Digest username="alice", realm="ims.test", nonce="nonce", uri="sip:ims.test", response="0123456789abcdef0123456789abcdef", algorithm=MD5, qop=auth{}"#,
+                extra
+            )
+        };
+        assert!(
+            Authorization::parse(&make(", nc=00000001")).is_err(),
+            "missing cnonce"
+        );
+        assert!(
+            Authorization::parse(&make(", cnonce=\"client-nonce\"")).is_err(),
+            "missing nc"
+        );
+        assert!(Authorization::parse(&make(", nc=00000001, cnonce=\"client-nonce\"")).is_ok());
+        // Unknown qop values are rejected rather than silently dropped.
+        let unknown = r#"Digest username="alice", realm="ims.test", nonce="nonce", uri="sip:ims.test", response="0123456789abcdef0123456789abcdef", algorithm=MD5, qop=digest, nc=00000001, cnonce="client-nonce""#;
+        assert!(Authorization::parse(unknown).is_err());
     }
 }

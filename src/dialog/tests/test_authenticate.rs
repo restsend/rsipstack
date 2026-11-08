@@ -821,6 +821,80 @@ fn test_verify_digest_with_qop_auth() {
     );
 }
 
+/// Golden vectors against published RFC values and an independent
+/// implementation (hashlib), so a wire-format or hashing regression cannot
+/// pass by merely re-serializing our own output.
+#[test]
+fn compute_digest_matches_rfc2617_golden_vectors() {
+    use crate::dialog::authenticate::compute_digest;
+    use crate::sip::headers::auth::{Algorithm, AuthQop};
+    use crate::sip::Method;
+
+    // RFC 2617 §3.5 example (published expected value).
+    let qop = AuthQop::Auth {
+        cnonce: "0a4f113b".to_string(),
+        nc: 1,
+    };
+    let get = Method::Other("GET".into());
+    let expected_mechanisms = [
+        (Algorithm::Md5, "6629fae49393a05397450978507c4ef1"),
+        // Same inputs, session-key HA1 = H(H(A1):nonce:cnonce) per
+        // RFC 2617 §3.2.2.2 / RFC 7616 §5 (computed independently).
+        (Algorithm::Md5Sess, "8e3825c57e897f5a0dec6c2d4e5059d0"),
+        (
+            Algorithm::Sha256,
+            "5abdd07184ba512a22c53f41470e5eea7dcaa3a93a59b630c13dfe0a5dc6e38b",
+        ),
+        (
+            Algorithm::Sha256Sess,
+            "b8822e12417cb7750f4e2b8515f0dcf25b7dd26993e80bee1426201446a7f59b",
+        ),
+    ];
+    for (algorithm, expected) in expected_mechanisms {
+        let response = compute_digest(
+            "Mufasa",
+            "Circle Of Life",
+            "testrealm@host.com",
+            "dcd98b7102dd2f0e8b11d0f600bfb0c093",
+            &get,
+            "/dir/index.html",
+            algorithm,
+            Some(&qop),
+        );
+        assert_eq!(response, expected, "{algorithm:?}");
+    }
+}
+
+/// `nc` must be carried as an 8-digit *hex* counter both in the emitted
+/// header and in the digest KD string; decimal re-encoding desynchronizes
+/// the server's counter at nc >= 10 (0x0a).
+#[test]
+fn compute_digest_hashes_nc_as_hex() {
+    use crate::dialog::authenticate::compute_digest;
+    use crate::sip::headers::auth::{Algorithm, AuthQop};
+    use crate::sip::Method;
+
+    let qop = AuthQop::Auth {
+        cnonce: "0a4f113b".to_string(),
+        nc: 0x10,
+    };
+    let response = compute_digest(
+        "Mufasa",
+        "Circle Of Life",
+        "testrealm@host.com",
+        "dcd98b7102dd2f0e8b11d0f600bfb0c093",
+        &Method::Other("GET".into()),
+        "/dir/index.html",
+        Algorithm::Md5,
+        Some(&qop),
+    );
+    // Same inputs as the RFC 2617 §3.5 vector but nc=00000010.
+    assert_eq!(response, "fa475250162f10cbbb7487da3bd9896e");
+    // The emitted header keeps the hex form.
+    let qop_display = qop.to_string();
+    assert!(qop_display.contains("nc=00000010"), "{qop_display}");
+}
+
 #[test]
 fn test_verify_digest_real_world_unify_tls() {
     // Reproduce the exact scenario from GitHub issue #146 (TLS case)
