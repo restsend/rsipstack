@@ -1573,8 +1573,9 @@ impl DialogInner {
                                         None,
                                         None,
                                     );
+                                    let id = self.id.lock().clone();
                                     self.transition(DialogState::Terminated(
-                                        self.id.lock().clone(),
+                                        id,
                                         TerminatedReason::UacOther(StatusCode::NotAcceptableHere),
                                     ));
                                     if let Some(gate) = &gate {

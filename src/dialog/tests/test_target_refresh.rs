@@ -651,7 +651,8 @@ async fn response_without_contact_or_without_acceptance_keeps_target() {
 async fn reliable_refresh_does_not_depend_on_confirmed_state_variant() {
     let (ep, inner, _conn, _out) = fixture().await;
     let (handle, _) = TransactionHandle::new();
-    *inner.state.lock() = DialogState::Updated(inner.id.lock().clone(), req(), handle);
+    let id = inner.id.lock().clone();
+    *inner.state.lock() = DialogState::Updated(id, req(), handle);
     let mut response = ep
         .inner
         .make_response(&req(), StatusCode::SessionProgress, None);

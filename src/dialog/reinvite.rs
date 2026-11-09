@@ -315,11 +315,9 @@ impl DialogInner {
         let (handle, commands) = TransactionHandle::new();
         let control = handle.control.clone();
         let _finished = Finished(control.clone());
-        self.transition(DialogState::Updated(
-            self.id.lock().clone(),
-            tx.original.clone(),
-            handle,
-        ));
+        // BYE can read the id under the state lock. Release id before transitioning.
+        let id = self.id.lock().clone();
+        self.transition(DialogState::Updated(id, tx.original.clone(), handle));
         self.process_reinvite_commands(tx, commands, &control)
             .await?;
         let answered = tx
@@ -336,8 +334,9 @@ impl DialogInner {
                     *self.remote_ack.lock() = Some(request.clone());
                     control.acknowledge(request);
                     if notify_confirmed {
+                        let id = self.id.lock().clone();
                         self.transition(DialogState::Confirmed(
-                            self.id.lock().clone(),
+                            id,
                             tx.last_response.clone().unwrap_or_default(),
                         ));
                     }

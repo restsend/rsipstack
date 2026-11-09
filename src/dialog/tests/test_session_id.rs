@@ -329,10 +329,8 @@ async fn session_id_survives_snapshot_restore() -> crate::Result<()> {
     client.observe_peer_session_uuid(resp.session_id_header().and_then(|s| s.local_uuid()));
 
     // Restore only accepts confirmed dialogs.
-    *client.state.lock() = crate::dialog::dialog::DialogState::Confirmed(
-        client.id.lock().clone(),
-        crate::sip::Response::default(),
-    );
+    let id = client.id.lock().clone();
+    *client.state.lock() = crate::dialog::dialog::DialogState::Confirmed(id, Default::default());
 
     let snapshot = client.snapshot();
     let restored = DialogInner::try_restore_from_snapshot(
