@@ -508,6 +508,20 @@ pub fn compute_digest(
     qop: Option<&AuthQop>,
 ) -> String {
     let ha1 = hash_value(algorithm, &format!("{}:{}:{}", username, realm, password));
+    // RFC 2617 §3.2.2.2 / RFC 7616: with the `-sess` algorithms HA1 is a
+    // session key derived per response: H(H(A1):nonce:cnonce).
+    let ha1 = match algorithm {
+        Algorithm::Md5Sess | Algorithm::Sha256Sess | Algorithm::Sha512Sess => {
+            let cnonce = match qop {
+                Some(AuthQop::Auth { cnonce, .. }) | Some(AuthQop::AuthInt { cnonce, .. }) => {
+                    cnonce.as_str()
+                }
+                None => "",
+            };
+            hash_value(algorithm, &format!("{}:{}:{}", ha1, nonce, cnonce))
+        }
+        _ => ha1,
+    };
     let ha2 = match qop {
         None | Some(AuthQop::Auth { .. }) => {
             hash_value(algorithm, &format!("{}:{}", method, uri_raw))
@@ -520,11 +534,11 @@ pub fn compute_digest(
 
     let value = match qop {
         Some(AuthQop::Auth { cnonce, nc }) => {
-            format!("{}:{}:{:08}:{}:{}:{}", ha1, nonce, nc, cnonce, "auth", ha2)
+            format!("{}:{}:{:08x}:{}:{}:{}", ha1, nonce, nc, cnonce, "auth", ha2)
         }
         Some(AuthQop::AuthInt { cnonce, nc }) => {
             format!(
-                "{}:{}:{:08}:{}:{}:{}",
+                "{}:{}:{:08x}:{}:{}:{}",
                 ha1, nonce, nc, cnonce, "auth-int", ha2
             )
         }

@@ -11,6 +11,31 @@
   signatures are unchanged; direct `Request::destination()` remains a raw
   message helper without dialog routing context.
 
+## 0.8.2
+
+Digest authentication interop fixes. Note: `AuthQop`'s `nc` field widened
+from `u8` to `u32` (the RFC 2617 `nonce-count` is an 8-hex-digit counter; a
+`u8` wrapped at `ff` and rejected `nc=00000100+`).
+
+- Digest: emit the unquoted token form `qop=auth` in Authorization /
+  Proxy-Authorization responses (RFC 2617 §3.2.1, RFC 3261 §25.1
+  `message-qop`); challenges keep the quoted `qop-options` form.
+- Digest: derive `-sess` algorithm HA1 as a session key,
+  `H(H(A1):nonce:cnonce)` (RFC 2617 §3.2.2.2, RFC 7616 §5); previously
+  `MD5-sess` / `SHA-256-sess` hashed like their non-sess variants and always
+  failed verification.
+- Digest: `nc` is parsed, printed, and hashed as an 8-digit **hex** counter
+  (`{:08x}`); decimal re-encoding desynchronized the server counter at
+  nc >= 10.
+- Parsing: accept RFC 7616 hyphenated algorithm names (`SHA-256`,
+  `SHA-256-sess`, `SHA-512`, `SHA-512-sess`) alongside draft-era spellings.
+- Parsing: tolerate multi-option challenge qop lists (`qop="auth,auth-int"`)
+  by preferring `auth` (RFC 2617 §3.2.1–§3.2.2); previously such challenges
+  failed to parse and authentication could not retry.
+- Tests: golden-vector digest coverage against published RFC 2617 values,
+  qop-bearing end-to-end INVITE authentication, and qop/algorithm/nc parse
+  edge cases.
+
 ## 0.8.1
 
 Fourteen fixes and additions merged (#223–#236).

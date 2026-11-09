@@ -44,7 +44,9 @@ impl WwwAuthenticate {
             algorithm: find_param(params, "algorithm")
                 .map(Algorithm::try_from)
                 .transpose()?,
-            qop: find_param(params, "qop").map(Qop::try_from).transpose()?,
+            qop: find_param(params, "qop")
+                .map(Qop::parse_challenge)
+                .transpose()?,
             charset: find_param(params, "charset").map(Into::into),
         })
     }

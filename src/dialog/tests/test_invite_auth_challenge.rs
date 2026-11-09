@@ -386,6 +386,85 @@ async fn test_invite_407_with_credential_retries() -> crate::Result<()> {
     assert_challenge_retried_with_credential(StatusCode::ProxyAuthenticationRequired).await
 }
 
+/// A qop-bearing challenge — quoted, unquoted, or a multi-option list
+/// (RFC 2617 §3.2.2) — must be answered by one retry whose Authorization
+/// carries the RFC 3261 §25.1 token form `qop=auth` (never `qop="auth"`)
+/// and whose digest the server can verify.
+#[tokio::test]
+async fn test_invite_qop_challenge_retries_with_verifiable_credentials() -> crate::Result<()> {
+    use crate::dialog::authenticate::verify_digest;
+
+    for challenge_qop in [r#"qop="auth""#, r#"qop="auth,auth-int""#, "qop=auth"] {
+        let (p, mut incoming) = peers().await?;
+        let (seen_tx, mut seen) = unbounded_channel();
+        let challenge = format!(
+            r#"Digest realm="example.com", nonce="dcd98b7102dd2f0e8b11d0f600bfb0c093", algorithm=MD5, {}"#,
+            challenge_qop
+        );
+        let port = p.uas_port;
+        tokio::spawn(async move {
+            while let Some(mut tx) = incoming.recv().await {
+                if tx.original.method != Method::Invite {
+                    continue;
+                }
+                let raw = tx.original.headers.iter().find_map(|header| match header {
+                    Header::Authorization(value) => Some(value.value().to_string()),
+                    _ => None,
+                });
+                let valid = raw.as_ref().is_some_and(|raw| {
+                    // The response qop must be the unquoted token form.
+                    let wire_ok = !raw.contains("qop=\"") && raw.contains("qop=auth, nc=");
+                    wire_ok
+                        && crate::sip::typed::Authorization::parse(raw)
+                            .is_ok_and(|auth| verify_digest(&auth, "secret", &Method::Invite, raw))
+                });
+                seen_tx.send(raw.clone()).unwrap();
+                let challenge = challenge.clone();
+                let contact = Contact::new(format!("<sip:bob@127.0.0.1:{}>", port));
+                tokio::spawn(async move {
+                    if valid {
+                        tx.reply_with(StatusCode::OK, vec![contact.into()], None)
+                            .await
+                            .unwrap();
+                    } else {
+                        tx.reply_with(
+                            StatusCode::Unauthorized,
+                            vec![WwwAuthenticate::new(challenge).into()],
+                            None,
+                        )
+                        .await
+                        .unwrap();
+                    }
+                    // Keep the server transaction alive to absorb the ACK.
+                    while tx.receive().await.is_some() {}
+                });
+            }
+        });
+
+        let (state_tx, _state_rx) = unbounded_channel();
+        let (dialog, resp) = tokio::time::timeout(
+            PROMPT,
+            p.uac_layer
+                .do_invite(invite_option(&p, Some(credential())), state_tx),
+        )
+        .await
+        .expect("qop-challenged INVITE did not complete")?;
+        let resp: Response = resp.expect("final response after the authenticated retry");
+        assert_eq!(resp.status_code, StatusCode::OK, "{challenge_qop}");
+        assert!(dialog.inner.is_confirmed(), "{challenge_qop}");
+
+        let first = seen.recv().await.unwrap();
+        assert!(first.is_none(), "first INVITE must be unauthenticated");
+        let retry = seen.recv().await.unwrap().expect("authenticated retry");
+        assert!(!retry.contains("qop=\""), "{retry}");
+        assert!(retry.contains("qop=auth, nc="), "{retry}");
+        assert!(seen.try_recv().is_err(), "unexpected further INVITE");
+
+        p.token.cancel();
+    }
+    Ok(())
+}
+
 /// A challenge to the authenticated retry is final: no second retry.
 #[tokio::test]
 async fn test_invite_challenge_after_authenticated_retry_is_final_response() -> crate::Result<()> {
