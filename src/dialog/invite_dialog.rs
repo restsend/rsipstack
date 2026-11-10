@@ -874,30 +874,17 @@ impl InviteDialog {
                 })
         };
         if let Err(remote_seq) = sequence {
-            match self.role() {
-                // Server discards old requests silently.
-                TransactionRole::Server => {
-                    debug!(
-                        id = %self.id(),
-                        method = %tx.original.method(),
-                        remote_seq = %remote_seq,
-                        cseq = %cseq,
-                        "received old request"
-                    );
-                    return Ok(());
-                }
-                // Client rejects old requests.
-                TransactionRole::Client => {
-                    debug!(
-                        id = %self.id(),
-                        remote_seq = %remote_seq,
-                        cseq = %cseq,
-                        "received old request"
-                    );
-                    tx.reply(StatusCode::ServerInternalError).await?;
-                    return Ok(());
-                }
-            }
+            // The receiver is the UAS of this request, regardless of who
+            // originated the dialog (RFC 3261 section 12.2.2).
+            debug!(
+                id = %self.id(),
+                method = %tx.original.method,
+                remote_seq = %remote_seq,
+                cseq = %cseq,
+                "received old request"
+            );
+            tx.reply(StatusCode::ServerInternalError).await?;
+            return Ok(());
         }
 
         if self.inner.is_confirmed() {

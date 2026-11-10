@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Both original UAC and UAS INVITE dialogs now reply `500` to incoming
+  requests with a lower remote CSeq (RFC 3261 section 12.2.2). Previously
+  UAS dialogs silently discarded them. Rejected requests do not reach the
+  application or change the remote sequence/target. ACK and CANCEL remain
+  exempt from dialog sequence advancement. Public signatures are unchanged.
+
 ## 0.8.2
 
 Digest authentication interop fixes. Note: `AuthQop`'s `nc` field widened
