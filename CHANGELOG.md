@@ -1,7 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.8.4
 
+- Transaction timers subscribe to the wakeup signal before inspecting the
+  timer queue, so inserting a new earliest deadline can no longer be missed
+  by a waiting timer loop (previously a task inserted into an empty timer
+  queue could stall the transaction worker until the next unrelated wakeup).
 - Both original UAC and UAS INVITE dialogs now reply `500` to incoming
   requests with a lower remote CSeq (RFC 3261 section 12.2.2). Previously
   UAS dialogs silently discarded them. Rejected requests do not reach the
