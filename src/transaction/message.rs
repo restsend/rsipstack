@@ -2,8 +2,7 @@ use super::{endpoint::EndpointInner, make_call_id};
 use crate::prelude::*;
 use crate::sip::{
     prelude::{HeadersExt, ToTypedHeader},
-    typed::Route as TypedRoute,
-    Error, Header, Request, Response, StatusCode, UriWithParams,
+    Error, Header, Request, Response, StatusCode,
 };
 use crate::sip::{CallId, Method};
 use crate::sip_header;
@@ -286,7 +285,17 @@ impl EndpointInner {
 
     // make ack from response, for ack to non-200 reponse, should pass the original invite
     pub fn make_ack(&self, invite: &Request, resp: &Response) -> Result<Request> {
+        self.make_ack_with_route_set(invite, resp, None)
+    }
+
+    pub(crate) fn make_ack_with_route_set(
+        &self,
+        invite: &Request,
+        resp: &Response,
+        route_set: Option<&[crate::sip::Route]>,
+    ) -> Result<Request> {
         let mut headers = resp.headers.clone();
+        headers.retain(|h| !matches!(h, Header::Route(_)));
         let request_uri;
         if resp.status_code.kind() != crate::sip::StatusCodeKind::Successful {
             // Non-2xx ACK stays in the original INVITE transaction.
@@ -313,52 +322,11 @@ impl EndpointInner {
                     Ok(typed_via.into())
                 });
             }
-            // The 2xx ACK goes to the remote target. Routes are always loose,
-            // like every other request the stack builds.
-            request_uri = resp.contact_header()?.typed()?.uri;
-
-            // An INVITE that already carries a To tag is a re-INVITE inside a
-            // confirmed dialog. The dialog's route set is fixed (RFC 3261
-            // §12.2) and the re-INVITE was sent with it as its Route headers,
-            // so the ACK reuses them; a 2xx to a re-INVITE usually repeats no
-            // Record-Route, and one it does repeat must not change the route.
-            let in_dialog = invite
-                .to_header()
-                .ok()
-                .and_then(|to| to.tag().ok().flatten())
-                .is_some_and(|tag| !tag.value().is_empty());
-            if in_dialog {
-                headers.extend(
-                    invite
-                        .headers
-                        .iter()
-                        .filter(|header| matches!(header, Header::Route(_)))
-                        .cloned()
-                        .collect::<Vec<_>>(),
-                );
-            } else {
-                // The 2xx to the dialog-creating INVITE defines the route set:
-                // its Record-Route in reverse order (RFC 3261 §12.1.2).
-                let mut route_set: Vec<UriWithParams> = Vec::new();
-                for header in resp.headers.iter() {
-                    if let Header::RecordRoute(record_route) = header {
-                        for typed in
-                            crate::sip::typed::RecordRoute::parse_header_list(record_route.value())
-                                .unwrap_or_default()
-                        {
-                            route_set.push(typed.uri);
-                        }
-                    }
-                }
-                route_set.reverse();
-
-                headers.extend(
-                    route_set
-                        .into_iter()
-                        .map(|route| Header::Route(TypedRoute::from(route).into()))
-                        .collect::<Vec<_>>(),
-                );
-            }
+            let routes = crate::sip::routing::ack_routes(invite, resp, route_set)?;
+            let (uri, routes) =
+                crate::sip::routing::encode(resp.contact_header()?.typed()?.uri, &routes)?;
+            request_uri = uri;
+            headers.extend(routes.into_iter().map(Header::Route).collect());
 
             // RFC 3261 §13.2.2.4: the 2xx ACK carries the INVITE's credentials.
             headers.extend(

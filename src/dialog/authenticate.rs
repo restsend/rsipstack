@@ -362,6 +362,7 @@ pub async fn handle_client_authenticate(
         tx.connection.clone(),
     );
     new_tx.destination = tx.destination.clone();
+    new_tx.dialog_route_set = tx.dialog_route_set.clone();
     Ok(new_tx)
 }
 
