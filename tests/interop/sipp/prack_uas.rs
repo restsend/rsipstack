@@ -1,9 +1,37 @@
 use super::{log_dir, sdp, until, Sipp, Stack};
 use crate::interop::{Required, TestResult};
 use rsipstack::{
-    dialog::dialog::DialogState,
+    dialog::{
+        dialog::DialogState,
+        reliable::{
+            IncomingPrack, PrackBody, PrackHandler, ReliableProvisionalConfig, ReliableResponse,
+            SdpKind,
+        },
+    },
     sip::{Header, Method},
 };
+
+/// The test owns SDP negotiation; rsipstack owns reliable signaling.
+pub(super) struct Media;
+#[async_trait::async_trait]
+impl PrackHandler for Media {
+    async fn on_reliable_response(
+        &self,
+        event: ReliableResponse,
+    ) -> rsipstack::Result<Option<PrackBody>> {
+        Ok((event.sdp_kind == SdpKind::Offer).then(|| PrackBody::sdp(sdp())))
+    }
+    async fn on_prack(&self, event: IncomingPrack) -> rsipstack::Result<Option<PrackBody>> {
+        Ok((event.sdp_kind == SdpKind::Offer).then(|| PrackBody::sdp(sdp())))
+    }
+}
+pub(super) fn enable(stack: &Stack) {
+    stack
+        .layer
+        .set_reliable_provisional(Some(ReliableProvisionalConfig::new(std::sync::Arc::new(
+            Media,
+        ))));
+}
 
 async fn scenario(
     name: &str,
@@ -14,6 +42,7 @@ async fn scenario(
 ) -> TestResult {
     let dir = log_dir(name)?;
     let mut stack = Stack::start(transport, &dir).await?;
+    enable(&stack);
     let keys = [
         (
             "rack_line",
@@ -44,7 +73,6 @@ async fn scenario(
         .ringing(
             Some(vec![
                 Header::Require("100rel".into()),
-                Header::Other("RSeq".into(), "1".into()),
                 Header::ContentType("application/sdp".into()),
             ]),
             Some(sdp()),
@@ -87,9 +115,9 @@ macro_rules! cases {
     )*};
 }
 cases! {
-    (udp_prack_uas_valid, tcp_prack_uas_valid, Some("1 1 INVITE"), 200, false),
+    (udp_prack_uas_valid, tcp_prack_uas_valid, Some("[$rseq] 1 INVITE"), 200, false),
     (udp_prack_uas_missing_rack, tcp_prack_uas_missing_rack, None, 400, false),
-    (udp_known_gap_prack_uas_wrong_rseq, tcp_known_gap_prack_uas_wrong_rseq, Some("999 1 INVITE"), 481, false),
-    (udp_known_gap_prack_uas_wrong_cseq, tcp_known_gap_prack_uas_wrong_cseq, Some("1 999 INVITE"), 481, false),
-    (udp_known_gap_prack_uas_retransmit, tcp_known_gap_prack_uas_retransmit, Some("1 1 INVITE"), 200, true),
+    (udp_prack_uas_wrong_rseq, tcp_prack_uas_wrong_rseq, Some("2147483648 1 INVITE"), 481, false),
+    (udp_prack_uas_wrong_cseq, tcp_prack_uas_wrong_cseq, Some("[$rseq] 999 INVITE"), 481, false),
+    (udp_prack_uas_retransmit, tcp_prack_uas_retransmit, Some("[$rseq] 1 INVITE"), 200, true),
 }

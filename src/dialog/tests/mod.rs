@@ -29,4 +29,7 @@ mod test_uas_ack_timeout;
 mod test_via_listen_addr;
 mod test_warn_logs;
 
+mod test_prack_validation;
+mod test_reinvite_bridge;
 mod test_reinvite_control;
+mod test_reliable_provisional;

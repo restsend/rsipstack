@@ -24,6 +24,10 @@
 //! rather than inspecting the dialog-wide last ACK. `finished` signals the
 //! terminal ACK outcome, before any missing-ACK cleanup BYE completes.
 //!
+//! With full 100rel enabled, an offer in a reliable provisional is answered
+//! by `PrackHandler`. A repeated offer in the final 2xx receives an empty ACK;
+//! `InviteAnswerHandler` is used only when no reliable SDP was received.
+//!
 //! Initial INVITE handling, media transport, and a policy for coupling multiple
 //! dialogs are separate. Dropping the outgoing awaiter does not stop its SIP
 //! transaction; use the cancellation token and still handle its final result.
@@ -308,7 +312,7 @@ impl RequestCancellation {
 
 impl DialogInner {
     pub(super) async fn process_reinvite(
-        &self,
+        self: &Arc<Self>,
         tx: &mut Transaction,
         notify_confirmed: bool,
     ) -> Result<()> {
@@ -368,9 +372,14 @@ impl DialogInner {
         let cseq = tx.original.cseq_header()?.seq()?;
         let mut deadline =
             core::pin::pin!(crate::platform::sleep(self.endpoint_inner.option.t1x64));
+        let mut commands_closed = false;
         loop {
             let selected = {
-                let command = commands.recv().boxed();
+                let command = if commands_closed {
+                    futures::future::pending().boxed()
+                } else {
+                    commands.recv().boxed()
+                };
                 let event = core::pin::pin!(tx.tu_receiver.recv());
                 select3(command, event, &mut deadline).await
             };
@@ -383,13 +392,23 @@ impl DialogInner {
                     let response = self.make_response(&tx.original, status, headers, body);
                     let refresh = Self::accepts_target_refresh(&tx.original.method, &response);
                     tx.respond(response).await?;
-                    if refresh {
+                    if refresh && tx.reliable_provisional.lock().is_none() {
                         if let Some(target) = &target {
                             self.accept_target_refresh(cseq, target);
                         }
                     }
                 }
-                Which3::A(None) => return tx.reply(StatusCode::NotImplemented).await,
+                Which3::A(None) => {
+                    commands_closed = true;
+                    if tx
+                        .reliable_provisional
+                        .lock()
+                        .as_ref()
+                        .is_none_or(|s| !s.pending())
+                    {
+                        return tx.reply(StatusCode::NotImplemented).await;
+                    }
+                }
                 Which3::B(Some(event)) => match tx.dispatch_event(event).await {
                     Some(Some(SipMessage::Request(request)))
                         if request.method == Method::Cancel =>
@@ -416,7 +435,7 @@ impl DialogInner {
     }
 
     pub(super) async fn answer_reinvite(
-        &self,
+        self: &Arc<Self>,
         tx: &mut Transaction,
         response: &Response,
         handler: &Arc<dyn InviteAnswerHandler>,

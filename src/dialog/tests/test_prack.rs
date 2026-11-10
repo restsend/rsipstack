@@ -15,7 +15,7 @@ use tokio::sync::mpsc::unbounded_channel;
 use tokio::time::{timeout, Duration};
 
 #[tokio::test]
-async fn server_dialog_handles_prack_request() -> crate::Result<()> {
+async fn server_dialog_rejects_prack_without_outstanding_response() -> crate::Result<()> {
     let endpoint = create_test_endpoint().await?;
     let (state_sender, _state_receiver) = unbounded_channel();
     let (tu_sender, _tu_receiver) = unbounded_channel();
@@ -95,7 +95,7 @@ async fn server_dialog_handles_prack_request() -> crate::Result<()> {
         .expect("transport event");
     match event {
         TransportEvent::Incoming(SipMessage::Response(resp), _, _) => {
-            assert_eq!(resp.status_code, StatusCode::OK);
+            assert_eq!(resp.status_code, StatusCode::CallTransactionDoesNotExist);
         }
         other => panic!("unexpected transport event: {other:?}"),
     }
@@ -136,9 +136,10 @@ async fn client_dialog_pracks_each_reliable_provisional() -> crate::Result<()> {
         callee: crate::sip::Uri::try_from(format!("sip:bob@{}", peer.local_addr()?).as_str())?,
         contact: crate::sip::Uri::try_from(format!("sip:alice@{uac_addr}").as_str())?,
         support_prack: true,
+        offer: Some(b"v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\nm=audio 5000 RTP/AVP 0\r\n".to_vec()),
         ..Default::default()
     };
-    let (state_sender, _states) = unbounded_channel();
+    let (state_sender, mut states) = unbounded_channel();
     let invite = tokio::spawn(async move { layer.do_invite(option, state_sender).await });
 
     async fn recv(peer: &UdpSocket, method: Method) -> (Request, std::net::SocketAddr) {
@@ -177,8 +178,17 @@ async fn client_dialog_pracks_each_reliable_provisional() -> crate::Result<()> {
 
     let (inv, uac) = recv(&peer, Method::Invite).await;
     assert!(inv.header_contains_token("Supported", "100rel"));
-    let sdp = "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\n";
+    let sdp = "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\nm=audio 5002 RTP/AVP 0\r\n";
     for rseq in [1u32, 2] {
+        if rseq == 2 {
+            // Even changed status/body cannot turn the same (dialog, CSeq,
+            // RSeq) into a new response. A gap must not advance the sequence.
+            for (status, sequence) in [("180 Ringing", 1), ("183 Session Progress", 3)] {
+                let extra = format!("Require: 100rel\r\nRSeq: {sequence}\r\n");
+                peer.send_to(reply(&inv, status, &extra, "").as_bytes(), uac)
+                    .await?;
+            }
+        }
         let extra = format!("Require: 100rel\r\nRSeq: {rseq}\r\nContent-Type: application/sdp\r\n");
         let progress = reply(&inv, "183 Session Progress", &extra, sdp);
         peer.send_to(progress.as_bytes(), uac).await?;
@@ -187,6 +197,20 @@ async fn client_dialog_pracks_each_reliable_provisional() -> crate::Result<()> {
         peer.send_to(reply(&prack, "200 OK", "", "").as_bytes(), from)
             .await?;
     }
+    let early = timeout(Duration::from_secs(1), async {
+        let mut early = vec![];
+        while early.len() < 2 {
+            if let Some(crate::dialog::dialog::DialogState::Early(_, response)) =
+                states.recv().await
+            {
+                early.push(response.rseq_value().unwrap());
+            }
+        }
+        early
+    })
+    .await
+    .expect("early responses");
+    assert_eq!(early, [1, 2]);
     invite.abort();
     token.cancel();
     Ok(())
