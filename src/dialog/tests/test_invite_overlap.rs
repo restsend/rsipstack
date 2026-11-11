@@ -684,35 +684,69 @@ async fn early_update_preserves_invite_lifecycle_and_refreshes_target() {
             for final_status in [StatusCode::OK, StatusCode::NotAcceptableHere] {
                 let mut fixture = Fixture::new(role).await;
                 let id = fixture.dialog.id();
-                *fixture.dialog.inner.state.lock() = DialogState::Early(id.clone(), Default::default());
+                *fixture.dialog.inner.state.lock() =
+                    DialogState::Early(id.clone(), Default::default());
                 let mut tx = fixture.transaction(Method::Update, 2);
-                tx.original.headers.unique_push(Header::Contact("<sip:new@127.0.0.1:5090>".into()));
-                tx.original.body = if with_sdp { b"v=0\r\ns=changed media\r\n".to_vec() } else { vec![] };
+                tx.original
+                    .headers
+                    .unique_push(Header::Contact("<sip:new@127.0.0.1:5090>".into()));
+                tx.original.body = if with_sdp {
+                    b"v=0\r\ns=changed media\r\n".to_vec()
+                } else {
+                    vec![]
+                };
                 let mut dialog = fixture.dialog.clone();
-                let handler = async { dialog.handle(&mut tx).await.unwrap(); };
+                let handler = async {
+                    dialog.handle(&mut tx).await.unwrap();
+                };
                 let application = async {
-                    let DialogState::Updated(event_id, request, handle) = fixture.states.recv().await.unwrap() else {
+                    let DialogState::Updated(event_id, request, handle) =
+                        fixture.states.recv().await.unwrap()
+                    else {
                         panic!("expected UPDATE before INVITE acceptance");
                     };
                     assert_eq!(event_id, id);
                     assert_eq!(!request.body.is_empty(), with_sdp);
                     assert!(matches!(fixture.dialog.state(), DialogState::Early(..)));
-                    handle.respond(final_status.clone(), None, with_sdp.then(|| b"answer".to_vec())).await.unwrap();
+                    handle
+                        .respond(
+                            final_status.clone(),
+                            None,
+                            with_sdp.then(|| b"answer".to_vec()),
+                        )
+                        .await
+                        .unwrap();
                 };
                 tokio::time::timeout(std::time::Duration::from_secs(2), async {
                     tokio::join!(handler, application);
-                }).await.expect("early UPDATE must receive a response");
+                })
+                .await
+                .expect("early UPDATE must receive a response");
                 assert!(matches!(fixture.dialog.state(), DialogState::Early(..)));
-                assert!(fixture.states.try_recv().is_err(), "UPDATE must not emit Confirmed");
-                let TransportEvent::Incoming(SipMessage::Response(response), _, _) = fixture.wire.try_recv().unwrap() else {
+                assert!(
+                    fixture.states.try_recv().is_err(),
+                    "UPDATE must not emit Confirmed"
+                );
+                let TransportEvent::Incoming(SipMessage::Response(response), _, _) =
+                    fixture.wire.try_recv().unwrap()
+                else {
                     panic!("expected UPDATE response");
                 };
                 assert_eq!(response.status_code, final_status);
-                assert_eq!(response.cseq_header().unwrap().method().unwrap(), Method::Update);
+                assert_eq!(
+                    response.cseq_header().unwrap().method().unwrap(),
+                    Method::Update
+                );
                 if final_status == StatusCode::OK {
-                    assert_eq!(fixture.dialog.snapshot().remote_uri.to_string(), "sip:new@127.0.0.1:5090");
+                    assert_eq!(
+                        fixture.dialog.snapshot().remote_uri.to_string(),
+                        "sip:new@127.0.0.1:5090"
+                    );
                 } else {
-                    assert_eq!(fixture.dialog.snapshot().remote_uri.to_string(), "sip:peer@127.0.0.1:5060");
+                    assert_eq!(
+                        fixture.dialog.snapshot().remote_uri.to_string(),
+                        "sip:peer@127.0.0.1:5060"
+                    );
                 }
             }
         }
@@ -728,7 +762,9 @@ async fn early_update_response_does_not_overwrite_racing_invite_state() {
         let mut tx = fixture.transaction(Method::Update, 2);
         let mut dialog = fixture.dialog.clone();
         let application = async {
-            let DialogState::Updated(_, _, handle) = fixture.states.recv().await.unwrap() else { panic!("expected UPDATE"); };
+            let DialogState::Updated(_, _, handle) = fixture.states.recv().await.unwrap() else {
+                panic!("expected UPDATE");
+            };
             let next = if confirmed {
                 DialogState::Confirmed(id, Default::default())
             } else {
@@ -740,7 +776,9 @@ async fn early_update_response_does_not_overwrite_racing_invite_state() {
         tokio::time::timeout(std::time::Duration::from_secs(2), async {
             let (result, ()) = tokio::join!(dialog.handle(&mut tx), application);
             result.unwrap();
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
         assert_eq!(fixture.dialog.state().is_confirmed(), confirmed);
         assert_eq!(fixture.dialog.state().is_terminated(), !confirmed);
         fixture.states.try_recv().unwrap();
@@ -752,14 +790,19 @@ async fn early_update_response_does_not_overwrite_racing_invite_state() {
 async fn early_update_can_be_sent_without_confirming_dialog() {
     for role in [TransactionRole::Client, TransactionRole::Server] {
         let mut fixture = Fixture::new(role).await;
-        *fixture.dialog.inner.state.lock() = DialogState::Early(fixture.dialog.id(), Default::default());
+        *fixture.dialog.inner.state.lock() =
+            DialogState::Early(fixture.dialog.id(), Default::default());
         let dialog = fixture.dialog.clone();
         let mut update = Box::pin(dialog.update(None, Some(b"offer".to_vec())));
         assert!(update.as_mut().now_or_never().is_none());
         let request = fixture.next_request(Method::Update);
         assert_eq!(request.body, b"offer");
         fixture.respond(&request, StatusCode::OK, vec![]);
-        let response = tokio::time::timeout(std::time::Duration::from_secs(2), update).await.unwrap().unwrap().unwrap();
+        let response = tokio::time::timeout(std::time::Duration::from_secs(2), update)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
         assert_eq!(response.status_code, StatusCode::OK);
         assert!(matches!(dialog.state(), DialogState::Early(..)));
         assert!(fixture.states.try_recv().is_err());
@@ -771,16 +814,29 @@ async fn early_update_registry_lookup_requires_the_learned_remote_tag() {
     let fixture = Fixture::new(TransactionRole::Client).await;
     let id = fixture.dialog.id();
     *fixture.dialog.inner.state.lock() = DialogState::Early(id.clone(), Default::default());
-    let layer = crate::dialog::dialog_layer::DialogLayer::new(fixture.dialog.inner.endpoint_inner.clone());
+    let layer =
+        crate::dialog::dialog_layer::DialogLayer::new(fixture.dialog.inner.endpoint_inner.clone());
     let mut pending_id = id.clone();
     pending_id.remote_tag.clear();
-    layer.inner.dialogs.insert(pending_id.clone(), crate::dialog::dialog::Dialog::Invite(fixture.dialog.clone()));
+    layer.inner.dialogs.insert(
+        pending_id.clone(),
+        crate::dialog::dialog::Dialog::Invite(fixture.dialog.clone()),
+    );
     let tx = fixture.transaction(Method::Update, 2);
     assert_eq!(layer.match_dialog(&tx).unwrap().id(), id);
     for wrong in [
-        DialogId { remote_tag: "unrelated".into(), ..id.clone() },
-        DialogId { local_tag: "unrelated".into(), ..id.clone() },
-        DialogId { call_id: "unrelated".into(), ..id.clone() },
+        DialogId {
+            remote_tag: "unrelated".into(),
+            ..id.clone()
+        },
+        DialogId {
+            local_tag: "unrelated".into(),
+            ..id.clone()
+        },
+        DialogId {
+            call_id: "unrelated".into(),
+            ..id.clone()
+        },
     ] {
         assert!(layer.get_dialog(&wrong).is_none());
         layer.remove_dialog(&wrong);

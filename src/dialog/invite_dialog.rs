@@ -738,7 +738,10 @@ impl InviteDialog {
         headers: Option<Vec<Header>>,
         body: Option<Vec<u8>>,
     ) -> Result<Option<Response>> {
-        if !matches!(self.state(), DialogState::Early(..) | DialogState::WaitAck(..) | DialogState::Confirmed(..)) {
+        if !matches!(
+            self.state(),
+            DialogState::Early(..) | DialogState::WaitAck(..) | DialogState::Confirmed(..)
+        ) {
             return Ok(None);
         }
         debug!(
@@ -899,7 +902,10 @@ impl InviteDialog {
         // RFC 3311: UPDATE is valid before the initial INVITE is accepted.
         // Dispatch it without changing the INVITE lifecycle state.
         if tx.original.method == Method::Update
-            && matches!(self.state(), DialogState::Early(..) | DialogState::WaitAck(..))
+            && matches!(
+                self.state(),
+                DialogState::Early(..) | DialogState::WaitAck(..)
+            )
         {
             if DialogInner::parse_target_refresh_contact(&tx.original).is_err() {
                 tx.reply(StatusCode::BadRequest).await?;

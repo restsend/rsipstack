@@ -478,7 +478,8 @@ impl DialogLayer {
             }
             let mut pending_id = id.clone();
             pending_id.remote_tag.clear();
-            dialogs.get(&pending_id)
+            dialogs
+                .get(&pending_id)
                 .filter(|dialog| dialog.id() == *id)
                 .cloned()
         })
@@ -619,7 +620,10 @@ impl DialogLayer {
             }
             let mut pending_id = id.clone();
             pending_id.remote_tag.clear();
-            if dialogs.get(&pending_id).is_some_and(|dialog| dialog.id() == *id) {
+            if dialogs
+                .get(&pending_id)
+                .is_some_and(|dialog| dialog.id() == *id)
+            {
                 dialogs.remove(&pending_id)
             } else {
                 None
