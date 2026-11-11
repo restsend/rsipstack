@@ -465,7 +465,23 @@ impl DialogLayer {
     }
 
     pub fn get_dialog(&self, id: &DialogId) -> Option<Dialog> {
-        self.inner.dialogs.get(id)
+        self.inner.dialogs.with(|dialogs| {
+            if let Some(dialog) = dialogs.get(id) {
+                return Some(dialog.clone());
+            }
+            // A pending UAC INVITE remains owned under its original tag-less
+            // key until its final response. Provisional responses have already
+            // taught the dialog its remote tag. Match that complete identity,
+            // never just the Call-ID/local tag, for early in-dialog requests.
+            if id.remote_tag.is_empty() {
+                return None;
+            }
+            let mut pending_id = id.clone();
+            pending_id.remote_tag.clear();
+            dialogs.get(&pending_id)
+                .filter(|dialog| dialog.id() == *id)
+                .cloned()
+        })
     }
 
     /// Legacy lookup by display string. Returns `None` if no dialog matches or
@@ -597,8 +613,20 @@ impl DialogLayer {
     }
 
     pub fn remove_dialog(&self, id: &DialogId) {
-        if let Some(d) = self.inner.dialogs.remove(id) {
-            d.on_remove()
+        let dialog = self.inner.dialogs.with_mut(|dialogs| {
+            if let Some(dialog) = dialogs.remove(id) {
+                return Some(dialog);
+            }
+            let mut pending_id = id.clone();
+            pending_id.remote_tag.clear();
+            if dialogs.get(&pending_id).is_some_and(|dialog| dialog.id() == *id) {
+                dialogs.remove(&pending_id)
+            } else {
+                None
+            }
+        });
+        if let Some(dialog) = dialog {
+            dialog.on_remove()
         }
     }
 

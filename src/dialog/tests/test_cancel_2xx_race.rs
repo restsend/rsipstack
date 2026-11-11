@@ -1002,3 +1002,28 @@ async fn test_confirmed_dialog_survives_invite_task_completion() -> crate::Resul
     token.cancel();
     Ok(())
 }
+
+#[tokio::test]
+async fn early_update_dialog_is_available_before_prack_response() -> crate::Result<()> {
+    let token = CancellationToken::new();
+    let Uac { dialog_layer, option, peer } = setup(&token).await?;
+    let (sender, mut states) = unbounded_channel();
+    let (dialog, task) = dialog_layer.do_invite_async(option, sender)?;
+    let (invite, uac) = recv_request(&peer, Method::Invite, Duration::from_secs(2)).await;
+    let contact = format!("sip:bob@{}", peer.local_addr()?);
+    let reliable = response(&invite, 180, "Ringing", &contact).replace(
+        "Content-Length: 0", "Require: 100rel\r\nRSeq: 1\r\nContent-Length: 0",
+    );
+    peer.send_to(reliable.as_bytes(), uac).await?;
+    recv_request(&peer, Method::PRack, Duration::from_secs(2)).await;
+    // Intentionally withhold the PRACK response: UPDATE may already arrive.
+    let state = wait_for_state(&mut states, "early before PRACK response", Duration::from_secs(1),
+        |state| matches!(state, DialogState::Early(..))).await;
+    let DialogState::Early(id, _) = state else { unreachable!() };
+    assert_eq!(id.remote_tag, PEER_TAG);
+    assert_eq!(dialog_layer.get_dialog(&id).unwrap().id(), id);
+    assert!(matches!(dialog.state(), DialogState::Early(..)));
+    task.abort();
+    token.cancel();
+    Ok(())
+}

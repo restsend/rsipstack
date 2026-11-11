@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- INVITE dialogs accept and send UPDATE during early dialogs and while waiting
+  for ACK. UPDATE replies preserve the INVITE lifecycle instead of confirming
+  an unanswered call; accepted Contact refreshes still use the transaction path.
+- Incoming early-dialog requests match the learned remote tag while the pending
+  INVITE remains registered under its original key. Lookup and removal validate
+  the full dialog identity rather than accepting an arbitrary peer tag.
+- Establish the initial early-dialog state before waiting for PRACK's response,
+  so an UPDATE arriving immediately after PRACK is not silently discarded.
+
 ## 0.8.4
 
 - Transaction timers subscribe to the wakeup signal before inspecting the
