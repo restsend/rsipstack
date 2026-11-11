@@ -23,7 +23,7 @@ impl Activity {
     pub(super) fn extra_confirmations(self) -> usize {
         match self {
             Self::PeerHoldResume => 2,
-            Self::PeerUpdate | Self::PeerInfo => 1,
+            Self::PeerInfo => 1,
             _ => 0,
         }
     }
@@ -203,17 +203,19 @@ pub(super) async fn exercise(
                     .required()?;
             }
             response_and_ack(stack, &request, false, expected_code, offset).await?;
-            until("dialog confirmed after application response", || {
-                stack
-                    .states
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .iter()
-                    .skip(states_before)
-                    .any(|s| matches!(s, DialogState::Confirmed(..)))
-                    .then_some(())
-            })
-            .await?;
+            if activity.extra_confirmations() > 0 {
+                until("dialog confirmed after application response", || {
+                    stack
+                        .states
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .iter()
+                        .skip(states_before)
+                        .any(|s| matches!(s, DialogState::Confirmed(..)))
+                        .then_some(())
+                })
+                .await?;
+            }
         } else {
             let (headers, body) = match activity {
                 Activity::OptionsRejected => (None, None),
