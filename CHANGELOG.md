@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.5
 
 - Client INVITE transactions retain exact ACKs separately for each dialog
   identity and CSeq. Alternating forked 2xx retransmissions reuse their own
