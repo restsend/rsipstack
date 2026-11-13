@@ -3,7 +3,23 @@
 This harness is a growing collection of real-process interoperability tests,
 not a certification of complete SIP conformance. A passing case covers only
 the exchange and assertions stated for that case.
-The current baseline is upstream `54e99b0` (0.8.1) with the standalone application tests.
+The current baseline is upstream `895d443` (0.8.1) plus the re-INVITE bridge.
+
+## Established-dialog re-INVITE bridge
+
+`pjsip bridge` adds four UDP/TCP cases with two PJSUA processes: hold and resume
+from either dialog leg, independent dialog identifiers and CSeq, SDP relay,
+ACK on both legs, and teardown. `sipp bridge` adds four UDP/TCP offerless cases
+plus one UDP ACK-loss case. SIPp supplies an offer in 200, waits for an explicit
+driver handshake before returning the answer in ACK, and checks the answer
+again after repeating the 200. The loss case drops the first SDP ACK at the
+UDP socket boundary and requires a retransmitted ACK with identical contents.
+
+Library wire tests additionally cover 488, CANCEL and late 200, simultaneous
+re-INVITEs, missing ACK and rejecting answers with multiple media streams.
+They complement the external cases; raw UDP tests are not independent stack
+implementations. Initial-call bridging, reliable provisional offer/answer,
+session timers and media negotiation remain separate responsibilities.
 
 ## Known gap: standard SHA-256 digest challenge
 
@@ -92,8 +108,8 @@ accepting other response codes.
 
 ## Executed matrix
 
-There are 183 external-peer test executions:
-173 regression cases and 10 known-gap probes. The lost-PRACK-response,
+There are 192 external-peer test executions:
+182 regression cases and 10 known-gap probes. The lost-PRACK-response,
 application lost-BYE-response and all fault-injection cases are UDP-only;
 the other families run on both transports.
 
@@ -119,6 +135,7 @@ the other families run on both transports.
 | UDP races with SIPp | delayed ACK delivery, valid/wrong-tag BYE during blocked ACK, local BYE waiting for ACK, CANCEL crossing held 200, crossed BYEs | 6 |
 | Standalone proxy | two PJSUA peers; caller/callee BYE, 486, CANCEL; SIPp late 200 and lost BYE response; preserved dialog identity and Via/Record-Route forwarding | 11 |
 | Standalone B2BUA | two independent dialogs; caller/callee BYE, 486, CANCEL; SIPp late 200 and lost BYE response; independent identifiers and both-leg cleanup | 11 |
+| Re-INVITE bridge | two PJSUA peers for hold/resume, two SIPp peers for offerless SDP, lost answer ACK | 9 |
 | Known-gap probes | SHA-256; PRACK | 10 |
 
 The lost-487 case is a regression test. An earlier fixture dropped the server
