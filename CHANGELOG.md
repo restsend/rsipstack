@@ -18,6 +18,78 @@
   handling, and the release compatibility plan. The release target is proposed;
   this change does not itself bump or publish the package version.
 
+## 0.8.5
+
+- Client INVITE transactions retain exact ACKs separately for each dialog
+  identity and CSeq. Alternating forked 2xx retransmissions reuse their own
+  Via branch, SDP body, routes, and destination, including after the owner
+  drops the transaction. The finished cache expires with TimerCleanup.
+  An unknown fork after drop is no longer acknowledged by rewriting another
+  fork's ACK; keep driving the Accepted transaction to handle new forks.
+  The public `last_ack` field remains the most recently prepared/sent ACK.
+- INVITE dialogs accept and send UPDATE during early dialogs and while waiting
+  for ACK. UPDATE replies preserve the INVITE lifecycle instead of confirming
+  an unanswered call; accepted Contact refreshes still use the transaction path.
+- Incoming early-dialog requests match the learned remote tag while the pending
+  INVITE remains registered under its original key. Lookup and removal validate
+  the full dialog identity rather than accepting an arbitrary peer tag.
+- Establish the initial early-dialog state before waiting for PRACK's response,
+  so an UPDATE arriving immediately after PRACK is not silently discarded.
+
+## 0.8.4
+
+- Transaction timers subscribe to the wakeup signal before inspecting the
+  timer queue, so inserting a new earliest deadline can no longer be missed
+  by a waiting timer loop (previously a task inserted into an empty timer
+  queue could stall the transaction worker until the next unrelated wakeup).
+- Both original UAC and UAS INVITE dialogs now reply `500` to incoming
+  requests with a lower remote CSeq (RFC 3261 section 12.2.2). Previously
+  UAS dialogs silently discarded them. Rejected requests do not reach the
+  application or change the remote sequence/target. ACK and CANCEL remain
+  exempt from dialog sequence advancement. Public signatures are unchanged.
+- Dialog registries now use the complete `DialogId` (Call-ID, local tag,
+  remote tag) as their key. Hyphens in these components can no longer make
+  distinct dialogs collide during registration, lookup, removal, or restore.
+- New `DialogLayer::dialog_ids()` enumerates structured identities. Existing
+  signatures and the `DialogId` display format remain unchanged. The legacy
+  `get_dialog_with(&String)` scans display strings and returns `None` for an
+  ambiguous match; `all_dialog_ids()` can contain duplicate display strings.
+  Applications using strings as identity keys should retain the three fields
+  and use `get_dialog(&DialogId)` instead.
+- In-dialog requests and successful INVITE ACKs now support strict routing
+  (RFC 3261 section 12.2.1.1): the first strict route becomes the Request-URI
+  and remains the network next hop; the remote target is appended to Route.
+  Dialog transactions retain the original route set across authentication
+  retries and target refresh, including offerless re-INVITE ACK answers.
+  Route parameters and multiple values per header are preserved. Public
+  signatures are unchanged; direct `Request::destination()` remains a raw
+  message helper without dialog routing context.
+
+## 0.8.2
+
+Digest authentication interop fixes. Note: `AuthQop`'s `nc` field widened
+from `u8` to `u32` (the RFC 2617 `nonce-count` is an 8-hex-digit counter; a
+`u8` wrapped at `ff` and rejected `nc=00000100+`).
+
+- Digest: emit the unquoted token form `qop=auth` in Authorization /
+  Proxy-Authorization responses (RFC 2617 §3.2.1, RFC 3261 §25.1
+  `message-qop`); challenges keep the quoted `qop-options` form.
+- Digest: derive `-sess` algorithm HA1 as a session key,
+  `H(H(A1):nonce:cnonce)` (RFC 2617 §3.2.2.2, RFC 7616 §5); previously
+  `MD5-sess` / `SHA-256-sess` hashed like their non-sess variants and always
+  failed verification.
+- Digest: `nc` is parsed, printed, and hashed as an 8-digit **hex** counter
+  (`{:08x}`); decimal re-encoding desynchronized the server counter at
+  nc >= 10.
+- Parsing: accept RFC 7616 hyphenated algorithm names (`SHA-256`,
+  `SHA-256-sess`, `SHA-512`, `SHA-512-sess`) alongside draft-era spellings.
+- Parsing: tolerate multi-option challenge qop lists (`qop="auth,auth-int"`)
+  by preferring `auth` (RFC 2617 §3.2.1–§3.2.2); previously such challenges
+  failed to parse and authentication could not retry.
+- Tests: golden-vector digest coverage against published RFC 2617 values,
+  qop-bearing end-to-end INVITE authentication, and qop/algorithm/nc parse
+  edge cases.
+
 ## 0.8.1
 
 Fourteen fixes and additions merged (#223–#236).

@@ -108,39 +108,34 @@ impl<T> Timer<T> {
 
     pub async fn wait_for_ready(&self) -> Vec<T> {
         loop {
-            let (ready, next_deadline) = {
-                let mut state = self.lock_state();
-                let now = Instant::now();
-                let ready = Self::collect_ready(&mut state, now);
-                let next_deadline = if ready.is_empty() {
-                    state.tasks.keys().next().map(|key| key.execute_at)
-                } else {
-                    None
-                };
-                (ready, next_deadline)
-            };
-
+            let (ready, wait) = self.ready_or_wait();
             if !ready.is_empty() {
                 return ready;
             }
-
-            match next_deadline {
-                Some(deadline) => {
-                    let now = Instant::now();
-                    let wait_duration = deadline.checked_duration_since(now).unwrap_or_default();
-
-                    let mut sleep_f = core::pin::pin!(crate::platform::sleep(wait_duration));
-                    let mut notify_f = core::pin::pin!(self.notify.notified());
-                    match crate::platform::select::select2(&mut sleep_f, &mut notify_f).await {
-                        crate::platform::select::Either::A(()) => {}
-                        crate::platform::select::Either::B(()) => {}
-                    }
-                }
-                None => {
-                    self.notify.notified().await;
-                }
-            }
+            wait.await;
         }
+    }
+
+    fn ready_or_wait(&self) -> (Vec<T>, impl core::future::Future<Output = ()> + '_) {
+        // notify_waiters() only wakes futures created before the broadcast.
+        // Subscribe before inspecting the queue so a new head cannot be missed.
+        let notified = self.notify.notified();
+        let mut state = self.lock_state();
+        let ready = Self::collect_ready(&mut state, Instant::now());
+        let next_deadline = state.tasks.first_key_value().map(|(key, _)| key.execute_at);
+
+        let wait = async move {
+            if let Some(deadline) = next_deadline {
+                let duration = deadline
+                    .checked_duration_since(Instant::now())
+                    .unwrap_or_default();
+                let sleep = core::pin::pin!(crate::platform::sleep(duration));
+                let _ = crate::platform::select::select2(sleep, core::pin::pin!(notified)).await;
+            } else {
+                notified.await;
+            }
+        };
+        (ready, wait)
     }
 
     pub fn next_deadline(&self) -> Option<Instant> {
@@ -175,6 +170,28 @@ fn test_timer() {
 #[cfg(all(test, feature = "platform-tokio"))]
 mod tokio_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn new_earliest_timer_wakes_an_unpolled_waiter() {
+        use futures::FutureExt;
+
+        for has_later_timer in [false, true] {
+            let timer = Timer::new();
+            if has_later_timer {
+                timer.timeout(Duration::from_secs(60), "later");
+            }
+            let (ready, wait) = timer.ready_or_wait();
+            assert!(ready.is_empty());
+
+            // Insert after the queue check but before the first poll of the wait.
+            timer.timeout(Duration::ZERO, "due");
+            assert!(
+                wait.now_or_never().is_some(),
+                "lost wake with later timer: {has_later_timer}"
+            );
+            assert_eq!(timer.wait_for_ready().now_or_never(), Some(vec!["due"]));
+        }
+    }
 
     #[tokio::test]
     async fn wait_for_ready_async_returns_ready() {

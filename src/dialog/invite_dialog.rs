@@ -454,9 +454,18 @@ impl InviteDialog {
                         // Not held back by a PRACK (RFC 3262); again after
                         // the transition for a cancel() racing this one.
                         self.send_deferred_cancel();
-                        self.inner.handle_provisional_response(&resp).await?;
+                        if let Some(tag) = resp.to_header()?.tag()? {
+                            self.inner.update_remote_tag(tag.value())?;
+                        }
+                        let prack = self.inner.prepare_prack_request(&resp)?;
+                        // The provisional establishes the early dialog before
+                        // PRACK completes. IMS may send UPDATE as soon as it
+                        // receives PRACK, even before we consume its 200 OK.
                         self.inner.transition(DialogState::Early(self.id(), resp));
                         self.send_deferred_cancel();
+                        if let Some(prack) = prack {
+                            let _ = self.inner.send_prack_request(prack).await?;
+                        }
                         continue;
                     }
 
@@ -768,7 +777,10 @@ impl InviteDialog {
         headers: Option<Vec<Header>>,
         body: Option<Vec<u8>>,
     ) -> Result<Option<Response>> {
-        if !self.inner.is_confirmed() {
+        if !matches!(
+            self.state(),
+            DialogState::Early(..) | DialogState::WaitAck(..) | DialogState::Confirmed(..)
+        ) {
             return Ok(None);
         }
         debug!(
@@ -910,30 +922,32 @@ impl InviteDialog {
             self.inner.admit_remote_seq(cseq, &tx.original.method)
         };
         if let Err(remote_seq) = sequence {
-            match self.role() {
-                // Server discards old requests silently.
-                TransactionRole::Server => {
-                    debug!(
-                        id = %self.id(),
-                        method = %tx.original.method(),
-                        remote_seq = %remote_seq,
-                        cseq = %cseq,
-                        "received old request"
-                    );
-                    return Ok(());
-                }
-                // Client rejects old requests.
-                TransactionRole::Client => {
-                    debug!(
-                        id = %self.id(),
-                        remote_seq = %remote_seq,
-                        cseq = %cseq,
-                        "received old request"
-                    );
-                    tx.reply(StatusCode::ServerInternalError).await?;
-                    return Ok(());
-                }
+            // The receiver is the UAS of this request, regardless of who
+            // originated the dialog (RFC 3261 section 12.2.2).
+            debug!(
+                id = %self.id(),
+                method = %tx.original.method,
+                remote_seq = %remote_seq,
+                cseq = %cseq,
+                "received old request"
+            );
+            tx.reply(StatusCode::ServerInternalError).await?;
+            return Ok(());
+        }
+
+        // RFC 3311: UPDATE is valid before the initial INVITE is accepted.
+        // Dispatch it without changing the INVITE lifecycle state.
+        if tx.original.method == Method::Update
+            && matches!(
+                self.state(),
+                DialogState::Early(..) | DialogState::WaitAck(..)
+            )
+        {
+            if DialogInner::parse_target_refresh_contact(&tx.original).is_err() {
+                tx.reply(StatusCode::BadRequest).await?;
+                return Ok(());
             }
+            return self.handle_update(tx).await;
         }
 
         if self.inner.is_confirmed() {
@@ -1128,9 +1142,10 @@ impl InviteDialog {
         self.inner
             .transition(DialogState::Updated(self.id(), tx.original.clone(), handle));
 
-        let result = self.inner.process_transaction_handle(tx, rx).await;
-        self.return_to_confirmed(tx);
-        result
+        // Updated is an application event, not a lifecycle transition. In
+        // particular, an UPDATE response must not confirm an early dialog or
+        // overwrite a concurrent INVITE response/termination.
+        self.inner.process_transaction_handle(tx, rx).await
     }
 
     async fn handle_refer(&mut self, tx: &mut Transaction) -> Result<()> {

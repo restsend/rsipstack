@@ -4,6 +4,7 @@ pub mod headers;
 pub mod message;
 pub mod method;
 pub mod parser;
+pub(crate) mod routing;
 pub mod services;
 pub mod status_code;
 pub mod transport;

@@ -821,11 +821,7 @@ impl DialogInner {
             affinity_connection,
         );
 
-        if let Some(route) = tx.original.route_header() {
-            if let Ok(first_route) = route.typed() {
-                tx.destination = SipAddr::try_from(&first_route.uri).ok();
-            }
-        }
+        tx.dialog_route_set = Some(self.route_set.lock().clone());
 
         self.bind_persistence(&tx);
         match tx.send().await {
@@ -1101,10 +1097,9 @@ impl DialogInner {
             out.push(Contact::from(uri.clone()).into());
         }
 
-        {
-            let route_set = self.route_set.lock();
-            out.extend(route_set.iter().cloned().map(Header::Route));
-        }
+        let (request_uri, routes) =
+            crate::sip::routing::encode(self.remote_uri.lock().clone(), &self.route_set.lock())?;
+        out.extend(routes.into_iter().map(Header::Route));
 
         out.push(Header::MaxForwards(70.into()));
 
@@ -1139,7 +1134,7 @@ impl DialogInner {
 
         Ok(crate::sip::Request {
             method,
-            uri: self.remote_uri.lock().clone(),
+            uri: request_uri,
             headers: out.into(),
             body: body.unwrap_or_default(),
             version: crate::sip::Version::V2,
@@ -1432,11 +1427,7 @@ impl DialogInner {
         self.bind_persistence(&tx);
         self.reserve_invite(&tx)?;
 
-        if let Some(route) = tx.original.route_header() {
-            if let Ok(first_route) = route.typed() {
-                tx.destination = SipAddr::try_from(&first_route.uri).ok();
-            }
-        }
+        tx.dialog_route_set = Some(self.route_set.lock().clone());
         let need_fallback_retry;
         let mut send_error = None;
         match tx.send().await {
@@ -1723,8 +1714,9 @@ impl DialogInner {
                                         None,
                                         None,
                                     );
+                                    let id = self.id.lock().clone();
                                     self.transition(DialogState::Terminated(
-                                        self.id.lock().clone(),
+                                        id,
                                         TerminatedReason::UacOther(StatusCode::NotAcceptableHere),
                                     ));
                                     if let Some(gate) = &gate {
