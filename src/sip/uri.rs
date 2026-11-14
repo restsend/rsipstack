@@ -54,14 +54,25 @@ impl fmt::Display for Auth {
     }
 }
 
+/// Escapes the octets that RFC 3261 section 25.1 does not allow unescaped.
+///
+/// The parser keeps the user and password as written, escapes included, so an
+/// existing `%HH` escape is written unchanged: escaping its `%` again would
+/// turn `alice%40example.com` into `alice%2540example.com`, a different user.
 fn percent_encode_component(input: &str, allowed: &[u8]) -> String {
+    let bytes = input.as_bytes();
     let mut out = String::with_capacity(input.len());
-    for byte in input.as_bytes() {
-        if byte.is_ascii_alphanumeric() || allowed.contains(byte) {
+    for (i, byte) in bytes.iter().enumerate() {
+        let is_escape = *byte == b'%'
+            && bytes.get(i + 1).is_some_and(u8::is_ascii_hexdigit)
+            && bytes.get(i + 2).is_some_and(u8::is_ascii_hexdigit);
+        if byte.is_ascii_alphanumeric() || allowed.contains(byte) || is_escape {
             out.push(char::from(*byte));
         } else {
+            const HEX: &[u8; 16] = b"0123456789ABCDEF";
             out.push('%');
-            out.push_str(&format!("{:02X}", byte));
+            out.push(char::from(HEX[usize::from(byte >> 4)]));
+            out.push(char::from(HEX[usize::from(byte & 0x0f)]));
         }
     }
     out
@@ -915,6 +926,26 @@ mod tests {
     fn uri_display_percent_encodes_user_and_password() {
         let uri = parse_uri("sip:al ice:pa:ss@restsend.com").unwrap();
         assert_eq!(uri.to_string(), "sip:al%20ice:pa%3Ass@restsend.com");
+    }
+
+    #[test]
+    fn uri_display_keeps_escapes_from_the_wire() {
+        // RFC 4475 section 3.1.1.13 (esc01) and escaped user parts in general:
+        // printing a parsed URI must not escape the '%' of an existing escape.
+        for raw in [
+            "sip:sips%3Auser%40example.com@example.net",
+            "sip:alice%40example.com@example.net",
+            "sip:%2A72%23@example.com",
+            "sip:al%20ice:pa%3Ass@restsend.com",
+        ] {
+            let printed = parse_uri(raw).unwrap().to_string();
+            assert_eq!(printed, raw);
+            assert_eq!(parse_uri(&printed).unwrap().to_string(), raw);
+        }
+        // A '%' that starts no escape is still escaped, once.
+        let printed = parse_uri("sip:100%@example.com").unwrap().to_string();
+        assert_eq!(printed, "sip:100%25@example.com");
+        assert_eq!(parse_uri(&printed).unwrap().to_string(), printed);
     }
 
     #[test]
