@@ -30,21 +30,18 @@ async fn reject_stale(role: TransactionRole, legacy: bool) -> rsipstack::Result<
     } else {
         (remote, local)
     };
-    let snapshot = DialogSnapshot {
-        id: id.clone(),
+    let snapshot = DialogSnapshot::builder(
+        id.clone(),
         role,
-        state: DialogSnapshotState::Confirmed,
-        from: rsipstack::sip::From::from(from).typed()?,
-        to: rsipstack::sip::To::from(to).typed()?,
-        local_cseq: 1,
-        remote_cseq: 10,
-        local_contact: None,
-        remote_uri: "sip:remote@127.0.0.1".try_into()?,
-        remote_contact: None,
-        route_set: vec![],
-        supports_100rel: false,
-        session_id: None,
-    };
+        rsipstack::sip::From::from(from).typed()?,
+        rsipstack::sip::To::from(to).typed()?,
+        "sip:remote@127.0.0.1".try_into()?,
+    )
+    .state(DialogSnapshotState::Confirmed)
+    .local_cseq(1)
+    .remote_cseq(10)
+    .runtime(Default::default())
+    .build()?;
     let (states, mut events) = unbounded_channel();
     assert!(layer.restore_from_snapshot(snapshot, states)?);
     let Some(Dialog::Invite(mut dialog)) = layer.get_dialog(&id) else {

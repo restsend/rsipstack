@@ -901,6 +901,10 @@ impl DialogLayer {
         }
         let dialog = InviteDialog::from_inner(Arc::new(dlg_inner));
         dialog.inner.lifecycle.lock().sender = self.inner.lifecycle_sender.lock().clone();
+        dialog
+            .inner
+            .configure_persistence(self.inner.persistence_config.lock().clone());
+        dialog.inner.bind_persistence(&tx);
         dialog.inner.reserve_invite(&tx)?;
         Ok((dialog, tx))
     }

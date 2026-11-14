@@ -507,3 +507,31 @@ async fn lifecycle_closed_receiver_does_not_prevent_remote_bye() -> crate::Resul
     assert!(call.dialog.state().is_terminated());
     Ok(())
 }
+
+#[tokio::test]
+async fn snapshot_records_initial_ack_until_it_completes() -> crate::Result<()> {
+    let mut call = start_observed(true, false, true).await?;
+    let accepted = call.facts.try_recv().unwrap();
+    let before = call.dialog.snapshot();
+    assert!(before.runtime.pending.initial_ack);
+    assert!(!before.is_quiescent());
+    assert_eq!(
+        before.runtime.lifecycle[0].since_unix_epoch,
+        accepted.occurred_at.since_unix_epoch
+    );
+    let restore = DialogLayer::new(EndpointBuilder::new().build().inner);
+    let (sender, _) = unbounded_channel();
+    assert!(restore
+        .restore_from_snapshot(before.clone(), sender)
+        .is_err());
+    call.release.cancel();
+    request(&call.peer, Method::Ack).await;
+    tokio::time::timeout(Duration::from_secs(2), &mut call.join)
+        .await
+        .unwrap()
+        .unwrap()?;
+    let after = call.dialog.snapshot();
+    assert!(after.is_quiescent());
+    assert!(after.runtime.revision > before.runtime.revision);
+    Ok(())
+}
