@@ -77,34 +77,36 @@ impl Fixture {
         } else {
             (remote_from, local_from)
         };
-        let snapshot = DialogSnapshot {
-            id: DialogId {
+        let snapshot = DialogSnapshot::builder(
+            DialogId {
                 call_id: "route-contract".into(),
                 local_tag: "local".into(),
                 remote_tag: "remote".into(),
             },
             role,
-            state: DialogSnapshotState::Confirmed,
-            from: rsipstack::sip::headers::From::from(from).typed()?,
-            to: rsipstack::sip::headers::To::from(to).typed()?,
-            remote_uri: target.clone(),
-            local_cseq: 1,
-            remote_cseq: 10,
-            local_contact: Some(Uri::try_from(format!("sip:caller@{address}").as_str())?),
-            remote_contact: Some(format!("<{target}>").into()),
-            route_set: vec![format!(
-                "<{proxy}{}>{}",
-                if strict { "" } else { ";lr" },
-                if multiple {
-                    ", <sip:second@127.0.0.1:29904;lr>;x=keep"
-                } else {
-                    ""
-                }
-            )
-            .into()],
-            supports_100rel: false,
-            session_id: None,
-        };
+            rsipstack::sip::From::from(from).typed()?,
+            rsipstack::sip::To::from(to).typed()?,
+            target.clone(),
+        )
+        .state(DialogSnapshotState::Confirmed)
+        .local_cseq(1)
+        .remote_cseq(10)
+        .runtime(Default::default())
+        .local_contact(Some(Uri::try_from(
+            format!("sip:caller@{address}").as_str(),
+        )?))
+        .remote_contact(Some(format!("<{target}>").into()))
+        .route_set(vec![format!(
+            "<{proxy}{}>{}",
+            if strict { "" } else { ";lr" },
+            if multiple {
+                ", <sip:second@127.0.0.1:29904;lr>;x=keep"
+            } else {
+                ""
+            }
+        )
+        .into()])
+        .build()?;
         let (states, _receiver) = mpsc::unbounded_channel();
         let id = snapshot.id.clone();
         assert!(layer.restore_from_snapshot_with_credential(

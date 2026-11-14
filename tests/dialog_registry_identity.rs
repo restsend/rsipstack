@@ -58,23 +58,20 @@ async fn incoming_request_matching_uses_all_identity_components() -> rsipstack::
 }
 
 fn snapshot(id: DialogId) -> rsipstack::Result<DialogSnapshot> {
-    Ok(DialogSnapshot {
-        state: DialogSnapshotState::Confirmed,
-        role: TransactionRole::Client,
-        from: rsipstack::sip::From::from(format!("<sip:local@127.0.0.1>;tag={}", id.local_tag))
+    DialogSnapshot::builder(
+        id.clone(),
+        TransactionRole::Client,
+        rsipstack::sip::From::from(format!("<sip:local@127.0.0.1>;tag={}", id.local_tag))
             .typed()?,
-        to: rsipstack::sip::To::from(format!("<sip:remote@127.0.0.1>;tag={}", id.remote_tag))
+        rsipstack::sip::To::from(format!("<sip:remote@127.0.0.1>;tag={}", id.remote_tag))
             .typed()?,
-        id,
-        local_cseq: 1,
-        remote_cseq: 0,
-        local_contact: None,
-        remote_uri: "sip:remote@127.0.0.1:5060".try_into()?,
-        remote_contact: None,
-        route_set: vec![],
-        supports_100rel: false,
-        session_id: None,
-    })
+        "sip:remote@127.0.0.1:5060".try_into()?,
+    )
+    .state(DialogSnapshotState::Confirmed)
+    .local_cseq(1)
+    .remote_cseq(0)
+    .runtime(Default::default())
+    .build()
 }
 
 #[tokio::test]
