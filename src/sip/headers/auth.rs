@@ -126,12 +126,20 @@ impl core::fmt::Display for AuthQop {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         // `nc` is an 8-digit lowercase hex counter (RFC 2617 §3.2.2); u32 covers
         // the full 8-hex-digit range without the wrap a u8 would impose at FF.
+        // The cnonce is written as a quoted string with `"` and `\` escaped.
+        let write_cnonce = |f: &mut core::fmt::Formatter<'_>, cnonce: &str| {
+            use crate::sip::headers::typed::parse_helpers::write_quoted_escaped;
+            write!(f, "cnonce=")?;
+            write_quoted_escaped(f, cnonce)
+        };
         match self {
             Self::Auth { cnonce, nc } => {
-                write!(f, "qop=auth, nc={:08x}, cnonce=\"{}\"", nc, cnonce)
+                write!(f, "qop=auth, nc={:08x}, ", nc)?;
+                write_cnonce(f, cnonce)
             }
             Self::AuthInt { cnonce, nc } => {
-                write!(f, "qop=auth-int, nc={:08x}, cnonce=\"{}\"", nc, cnonce)
+                write!(f, "qop=auth-int, nc={:08x}, ", nc)?;
+                write_cnonce(f, cnonce)
             }
         }
     }

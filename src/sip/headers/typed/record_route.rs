@@ -69,10 +69,7 @@ impl RecordRoute {
 
 impl core::fmt::Display for RecordRoute {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match &self.display_name {
-            Some(name) => write!(f, "\"{}\" <{}>", name, self.uri)?,
-            None => write!(f, "<{}>", self.uri)?,
-        }
+        super::parse_helpers::write_display_name_addr(f, &self.display_name, &self.uri)?;
         for p in &self.params {
             write!(f, "{}", p)?;
         }

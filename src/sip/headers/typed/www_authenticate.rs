@@ -1,12 +1,13 @@
+use super::parse_helpers::write_quoted_escaped;
 use super::tokenizers::AuthTokenizer;
 use crate::prelude::*;
 use crate::sip::headers::auth::{Algorithm, Qop, Scheme};
 use crate::sip::{Error, Header};
 
-fn find_param<'a>(params: &[(&'a str, &'a str)], name: &str) -> Option<&'a str> {
+fn find_param<'a>(params: &'a [(String, String)], name: &str) -> Option<&'a str> {
     params.iter().find_map(|(key, value)| {
         if key.eq_ignore_ascii_case(name) {
-            Some(*value)
+            Some(value.as_str())
         } else {
             None
         }
@@ -54,13 +55,17 @@ impl WwwAuthenticate {
 
 impl core::fmt::Display for WwwAuthenticate {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{} realm=\"{}\"", self.scheme, self.realm)?;
+        write!(f, "{} realm=", self.scheme)?;
+        write_quoted_escaped(f, &self.realm)?;
         if let Some(d) = &self.domain {
-            write!(f, ", domain=\"{}\"", d)?;
+            write!(f, ", domain=")?;
+            write_quoted_escaped(f, d)?;
         }
-        write!(f, ", nonce=\"{}\"", self.nonce)?;
+        write!(f, ", nonce=")?;
+        write_quoted_escaped(f, &self.nonce)?;
         if let Some(o) = &self.opaque {
-            write!(f, ", opaque=\"{}\"", o)?;
+            write!(f, ", opaque=")?;
+            write_quoted_escaped(f, o)?;
         }
         if let Some(s) = &self.stale {
             write!(f, ", stale={}", s)?;
@@ -93,3 +98,36 @@ impl core::convert::From<WwwAuthenticate> for Header {
 }
 
 impl<'a> super::TypedHeader<'a> for WwwAuthenticate {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn challenge_with_quoted_pairs_round_trips() {
+        // issue #258: a quoted-pair inside the realm used to be rejected.
+        let raw = r#"Digest realm="a\"b", nonce="n1""#;
+        let challenge = WwwAuthenticate::parse(raw).unwrap();
+        assert_eq!(challenge.realm, "a\"b");
+        assert_eq!(challenge.nonce, "n1");
+        assert_eq!(challenge.to_string(), raw);
+        assert!(WwwAuthenticate::parse(&challenge.to_string()).is_ok());
+    }
+
+    #[test]
+    fn challenge_with_stray_quote_in_token_value_is_rejected() {
+        assert!(WwwAuthenticate::parse(r#"Digest realm=a"b, nonce="n1""#).is_err());
+    }
+
+    #[test]
+    fn plain_challenge_is_unchanged() {
+        let raw = r#"Digest realm="example.com", nonce="MTM3", stale=FALSE, algorithm=MD5"#;
+        let challenge = WwwAuthenticate::parse(raw).unwrap();
+        assert_eq!(challenge.to_string(), raw);
+    }
+
+    #[test]
+    fn control_character_in_challenge_is_rejected() {
+        assert!(WwwAuthenticate::parse("Digest realm=a\u{7}b, nonce=n").is_err());
+    }
+}

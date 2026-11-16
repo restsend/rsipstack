@@ -97,12 +97,75 @@ pub(crate) fn validate_display_name(display_raw: &str) -> Result<Option<String>,
         return Ok(None);
     }
     if display_raw.starts_with('"') && display_raw.ends_with('"') && display_raw.len() >= 2 {
-        return Ok(Some(display_raw[1..display_raw.len() - 1].to_string()));
+        // RFC 3261 quoted-string: unescape quoted-pairs so the stored display
+        // name is the actual text; printing escapes `"` and `\` again.
+        return Ok(Some(unescape_quoted_pairs(
+            &display_raw[1..display_raw.len() - 1],
+        )?));
     }
     if !display_raw.split_whitespace().all(is_token) {
         return Err(Error::ParseError("invalid display name".into()));
     }
     Ok(Some(display_raw.to_string()))
+}
+
+/// Unescape RFC 3261 quoted-pairs (`\X` → `X`) inside a quoted string.
+/// A trailing lone `\` is kept verbatim; control octets are rejected.
+pub(crate) fn unescape_quoted_pairs(s: &str) -> Result<String, Error> {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some(next) if next == '\t' || !next.is_control() => out.push(next),
+                Some(next) => {
+                    return Err(Error::ParseError(format!(
+                        "invalid quoted-pair escape: \\{}",
+                        next
+                    )))
+                }
+                None => out.push('\\'),
+            }
+        } else if c == '\t' || !c.is_control() {
+            out.push(c);
+        } else {
+            return Err(Error::ParseError(
+                "control character in quoted string".into(),
+            ));
+        }
+    }
+    Ok(out)
+}
+
+/// Write a display name as a quoted string with `"` and `\` escaped as
+/// quoted-pairs, so a parsed name-addr prints back to the same text.
+pub(crate) fn write_quoted_escaped(f: &mut core::fmt::Formatter<'_>, s: &str) -> core::fmt::Result {
+    use core::fmt::Write;
+    f.write_char('"')?;
+    for c in s.chars() {
+        match c {
+            '"' => f.write_str("\\\"")?,
+            '\\' => f.write_str("\\\\")?,
+            _ => f.write_char(c)?,
+        }
+    }
+    f.write_char('"')
+}
+
+/// Write `"<display>" <uri>` (or just `<uri>`), used by the name-addr
+/// headers (To, From, Contact, Route, Record-Route, Service-Route).
+pub(crate) fn write_display_name_addr(
+    f: &mut core::fmt::Formatter<'_>,
+    display_name: &Option<String>,
+    uri: &impl core::fmt::Display,
+) -> core::fmt::Result {
+    match display_name {
+        Some(name) => {
+            write_quoted_escaped(f, name)?;
+            write!(f, " <{}>", uri)
+        }
+        None => write!(f, "<{}>", uri),
+    }
 }
 
 pub fn parse_display_uri_params_str(s: &str) -> Result<(Option<String>, Uri, Vec<Param>), Error> {
@@ -185,6 +248,7 @@ pub fn parse_display_uri_params_str(s: &str) -> Result<(Option<String>, Uri, Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sip::headers::typed::To;
 
     #[test]
     fn test_with_angle_brackets() {
@@ -290,5 +354,36 @@ mod tests {
             parse_display_uri_params_str("sip:bob@example.com;tag=1;expires=60;lr").unwrap();
         assert_eq!(result.1.auth.as_ref().unwrap().user, "bob");
         assert_eq!(result.2.len(), 3);
+    }
+
+    // ── issue #258: quoted-pairs in display names round-trip ──────────────────────
+
+    #[test]
+    fn unescape_quoted_pairs_resolves_escapes_and_rejects_control_octets() {
+        assert_eq!(unescape_quoted_pairs(r#"a\"b\\c"#).unwrap(), "a\"b\\c");
+        assert_eq!(unescape_quoted_pairs("a\\ b").unwrap(), "a b");
+        assert_eq!(
+            unescape_quoted_pairs("lone trailing \\").unwrap(),
+            "lone trailing \\"
+        );
+        assert!(unescape_quoted_pairs("a\u{7}b").is_err());
+        assert!(unescape_quoted_pairs("a\\\u{7}").is_err());
+    }
+
+    #[test]
+    fn quoted_display_name_unescapes_and_prints_escaped() {
+        let result =
+            parse_display_uri_params_str("\"He said \\\"hi\\\"\" <sip:bob@example.com>").unwrap();
+        assert_eq!(result.0.as_deref(), Some("He said \"hi\""));
+        let to = To::parse("\"He said \\\"hi\\\"\" <sip:bob@example.com>").unwrap();
+        assert_eq!(
+            to.to_string(),
+            "\"He said \\\"hi\\\"\" <sip:bob@example.com>"
+        );
+    }
+
+    #[test]
+    fn display_name_rejects_control_characters() {
+        assert!(parse_display_uri_params_str("\"a\u{7}b\" <sip:bob@example.com>").is_err());
     }
 }

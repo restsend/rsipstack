@@ -1,12 +1,13 @@
+use super::parse_helpers::write_quoted_escaped;
 use super::tokenizers::AuthTokenizer;
 use crate::prelude::*;
 use crate::sip::headers::auth::{Algorithm, Qop, Scheme};
 use crate::sip::{Error, Header};
 
-fn find_param<'a>(params: &[(&'a str, &'a str)], name: &str) -> Option<&'a str> {
+fn find_param<'a>(params: &'a [(String, String)], name: &str) -> Option<&'a str> {
     params.iter().find_map(|(key, value)| {
         if key.eq_ignore_ascii_case(name) {
-            Some(*value)
+            Some(value.as_str())
         } else {
             None
         }
@@ -54,13 +55,17 @@ impl ProxyAuthenticate {
 
 impl core::fmt::Display for ProxyAuthenticate {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{} realm=\"{}\"", self.scheme, self.realm)?;
+        write!(f, "{} realm=", self.scheme)?;
+        write_quoted_escaped(f, &self.realm)?;
         if let Some(d) = &self.domain {
-            write!(f, ", domain=\"{}\"", d)?;
+            write!(f, ", domain=")?;
+            write_quoted_escaped(f, d)?;
         }
-        write!(f, ", nonce=\"{}\"", self.nonce)?;
+        write!(f, ", nonce=")?;
+        write_quoted_escaped(f, &self.nonce)?;
         if let Some(o) = &self.opaque {
-            write!(f, ", opaque=\"{}\"", o)?;
+            write!(f, ", opaque=")?;
+            write_quoted_escaped(f, o)?;
         }
         if let Some(s) = &self.stale {
             write!(f, ", stale={}", s)?;

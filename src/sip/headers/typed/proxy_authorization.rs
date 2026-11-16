@@ -1,19 +1,20 @@
+use super::parse_helpers::write_quoted_escaped;
 use super::tokenizers::AuthTokenizer;
 use crate::prelude::*;
 use crate::sip::headers::auth::{Algorithm, AuthQop, Scheme};
 use crate::sip::{Error, Header, Uri};
 
-fn find_param<'a>(params: &[(&'a str, &'a str)], name: &str) -> Option<&'a str> {
+fn find_param<'a>(params: &'a [(String, String)], name: &str) -> Option<&'a str> {
     params.iter().find_map(|(key, value)| {
         if key.eq_ignore_ascii_case(name) {
-            Some(*value)
+            Some(value.as_str())
         } else {
             None
         }
     })
 }
 
-fn find_qop(params: &[(&str, &str)]) -> Result<Option<AuthQop>, Error> {
+fn find_qop(params: &[(String, String)]) -> Result<Option<AuthQop>, Error> {
     Ok(match find_param(params, "qop") {
         Some(q) if q.eq_ignore_ascii_case("auth") => Some(AuthQop::Auth {
             cnonce: find_param(params, "cnonce")
@@ -85,16 +86,19 @@ impl ProxyAuthorization {
 
 impl core::fmt::Display for ProxyAuthorization {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(
-            f,
-            "{} username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\"",
-            self.scheme, self.username, self.realm, self.nonce, self.uri, self.response
-        )?;
+        write!(f, "{} username=", self.scheme)?;
+        write_quoted_escaped(f, &self.username)?;
+        write!(f, ", realm=")?;
+        write_quoted_escaped(f, &self.realm)?;
+        write!(f, ", nonce=")?;
+        write_quoted_escaped(f, &self.nonce)?;
+        write!(f, ", uri=\"{}\", response=\"{}\"", self.uri, self.response)?;
         if let Some(a) = &self.algorithm {
             write!(f, ", algorithm={}", a)?;
         }
         if let Some(o) = &self.opaque {
-            write!(f, ", opaque=\"{}\"", o)?;
+            write!(f, ", opaque=")?;
+            write_quoted_escaped(f, o)?;
         }
         if let Some(q) = &self.qop {
             write!(f, ", {}", q)?;

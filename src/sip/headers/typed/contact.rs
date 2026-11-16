@@ -100,10 +100,7 @@ impl core::fmt::Display for Contact {
                 return write!(f, "*");
             }
         }
-        match &self.display_name {
-            Some(name) => write!(f, "\"{}\" <{}>", name, self.uri)?,
-            None => write!(f, "<{}>", self.uri)?,
-        }
+        super::parse_helpers::write_display_name_addr(f, &self.display_name, &self.uri)?;
         for p in &self.params {
             write!(f, "{}", p)?;
         }
@@ -228,6 +225,7 @@ fn parse_contact_header_params(input: &str) -> Result<Vec<Param>, Error> {
 #[cfg(test)]
 mod tests {
     use super::Contact;
+    use crate::sip::headers::typed::To;
     use crate::sip::{HeadersExt, Param, Response};
 
     #[test]
@@ -275,5 +273,56 @@ mod tests {
         assert!(Contact::parse("<sip:bob@example.com>expires=3600").is_err());
         assert!(Contact::parse("<sip:bob@example.com>;;;;").is_err());
         assert!(Via::parse("SIP/7.0/UDP example.com;branch=z9hG4bK1").is_err());
+    }
+
+    #[test]
+    fn wildcard_contact_is_still_accepted() {
+        let contact = Contact::parse("*").unwrap();
+        assert_eq!(contact.to_string(), "*");
+    }
+
+    // ── issue #258: stray '>' must be rejected, printed output must re-parse ──────
+
+    #[test]
+    fn stray_angle_bracket_in_addr_spec_is_rejected() {
+        use crate::sip::headers::typed::{From as TypedFrom, Route};
+
+        assert!(Contact::parse("sip:bob@example.com>x").is_err());
+        assert!(Contact::parse("<sip:bob@example.com>x>").is_err());
+        assert!(To::parse("sip:bob@example.com>x").is_err());
+        assert!(TypedFrom::parse("sip:bob@example.com>x").is_err());
+        assert!(Route::parse("sip:proxy.example.com>lr").is_err());
+    }
+
+    #[test]
+    fn display_name_with_escaped_quotes_round_trips() {
+        let raw = "\"He said \\\"hi\\\"\" <sip:bob@example.com>";
+        let to = To::parse(raw).unwrap();
+        assert_eq!(to.display_name.as_deref(), Some("He said \"hi\""));
+        let printed = to.to_string();
+        assert_eq!(printed, raw);
+        assert_eq!(To::parse(&printed).unwrap(), to);
+    }
+
+    #[test]
+    fn parsed_name_addr_prints_back_parseable_output() {
+        for raw in [
+            "\"Alice Smith\" <sip:alice@example.com>",
+            "<sip:alice@example.com>;tag=xyz",
+            "sip:bob@example.com;tag=1",
+            "<sips:alice@pbx.example.com;transport=tls>",
+        ] {
+            let header = To::parse(raw).unwrap().to_string();
+            // Printed output always uses the bracketed name-addr form and
+            // must parse back to itself.
+            let reparsed = To::parse(&header)
+                .unwrap_or_else(|e| panic!("{:?} does not re-parse: {}", header, e));
+            assert_eq!(
+                reparsed.to_string(),
+                header,
+                "unstable round trip for {:?}",
+                raw
+            );
+        }
     }
 }

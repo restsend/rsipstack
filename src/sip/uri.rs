@@ -131,6 +131,19 @@ impl From<IpAddr> for Host {
     }
 }
 
+/// Hostname characters accepted in `sip`/`sips` URIs.
+///
+/// RFC 3261 section 25.1 `hostname` allows alphanumerics, `-` and `.`; the
+/// widely deployed additions `_` (SRV-style labels), a trailing dot and
+/// IDN octets are accepted so existing deployments keep working. Everything
+/// that would break serialization — separators, quotes, angle brackets,
+/// control octets — is rejected.
+fn is_valid_domain(s: &str) -> bool {
+    !s.is_empty()
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.') || b >= 0x80)
+}
+
 impl FromStr for Host {
     type Err = Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -143,8 +156,10 @@ impl FromStr for Host {
         }
         if let Ok(ip) = s.parse::<IpAddr>() {
             Ok(Host::IpAddr(ip))
-        } else {
+        } else if is_valid_domain(s) {
             Ok(Host::Domain(Domain::from(s)))
+        } else {
+            Err(Error::ParseError(format!("invalid host: {}", s)))
         }
     }
 }
@@ -282,7 +297,9 @@ fn parse_host_with_port(s: &str) -> Result<HostWithPort, Error> {
 
     if let Some(colon_pos) = s.rfind(':') {
         let after = &s[colon_pos + 1..];
-        if after.chars().all(|c| c.is_ascii_digit()) {
+        // A port is 1*DIGIT: an empty or non-digit tail means this ':' belongs
+        // to the host, which the host parser below then rejects.
+        if !after.is_empty() && after.chars().all(|c| c.is_ascii_digit()) {
             let port: u16 = after
                 .parse()
                 .map_err(|_| Error::ParseError(format!("invalid port: {}", after)))?;
@@ -356,6 +373,15 @@ impl TryFrom<(&str, Option<&str>)> for Param {
     fn try_from((name, value): (&str, Option<&str>)) -> Result<Self, Self::Error> {
         if !is_token(name) {
             return Err(Error::ParseError("invalid parameter name".into()));
+        }
+        if let Some(v) = value {
+            // RFC 3261 grammar: parameter values are tokens or quoted
+            // strings, neither of which contains control octets. Values are
+            // otherwise kept verbatim (quoted strings included) so printing
+            // a parsed URI round-trips.
+            if v.chars().any(|c| c.is_control() && c != '\t') {
+                return Err(Error::ParseError("invalid parameter value".into()));
+            }
         }
         match (name, value) {
             (n, Some(v)) if n.eq_ignore_ascii_case("transport") => Ok(Param::Transport(v.parse()?)),
@@ -575,11 +601,36 @@ fn is_scheme(s: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
 }
 
+/// Opaque URIs (`tel:`, or any scheme `rsipstack` does not understand) keep a
+/// lenient host: the text after the scheme is stored verbatim as a domain so
+/// subscribers such as `+1-201-555-0123` survive. Only the characters that
+/// make serialization non-idempotent are rejected.
+fn parse_opaque_host(s: &str) -> Result<Host, Error> {
+    if s.is_empty()
+        || s.chars()
+            .any(|c| c.is_whitespace() || c.is_control() || matches!(c, '<' | '>' | '"' | '\\'))
+    {
+        return Err(Error::ParseError(format!("invalid opaque host: {}", s)));
+    }
+    match s.parse::<IpAddr>() {
+        Ok(ip) => Ok(Host::IpAddr(ip)),
+        Err(_) => Ok(Host::Domain(Domain::from(s))),
+    }
+}
+
 pub fn parse_uri(s: &str) -> Result<Uri, Error> {
     let s = s.trim();
-    let s = s.trim_start_matches('<');
-    let s = s.trim_end_matches('>');
+    // Strip a matching `<...>` pair (name-addr leftovers); a stray angle
+    // bracket is never part of a URI and must not be silently trimmed.
+    let s = if s.len() >= 2 && s.starts_with('<') && s.ends_with('>') {
+        &s[1..s.len() - 1]
+    } else {
+        s
+    };
     let s = s.trim();
+    if s.contains('<') || s.contains('>') {
+        return Err(Error::ParseError("unexpected '<' or '>' in uri".into()));
+    }
 
     let scheme_end = s.find(['@', ';', '?']).unwrap_or(s.len());
     let (scheme, after_scheme) = if let Some(colon) = s[..scheme_end].find(':') {
@@ -616,7 +667,7 @@ pub fn parse_uri(s: &str) -> Result<Uri, Error> {
 
     let host_with_port = if is_opaque {
         HostWithPort {
-            host: host_str.parse()?,
+            host: parse_opaque_host(host_str)?,
             port: None,
         }
     } else {
@@ -1162,6 +1213,103 @@ mod tests {
             assert_eq!(uri.scheme, Some(Scheme::Other("urn".into())));
             assert_eq!(uri.host_with_port.port, None);
             assert_eq!(uri.to_string(), raw);
+        }
+    }
+
+    // ── issue #258: hosts, ports and angle brackets must round-trip ───────────────
+
+    #[test]
+    fn host_rejects_characters_that_break_serialization() {
+        for raw in [
+            "sip:bob@example.com>x",
+            "sip:<bob@example.com",
+            "sip:bob@\"example.com\"",
+            "sip:bob@example.com\\path",
+            "sip:bob@exa mple.com",
+            "sip:example.com>x",
+            "sip:ih./\u{3}<sip:alice;tranAsport=tcp>;",
+        ] {
+            assert!(parse_uri(raw).is_err(), "expected {:?} to be rejected", raw);
+        }
+    }
+
+    #[test]
+    fn host_accepts_deployed_hostname_forms() {
+        for raw in [
+            "sip:alice@example.com",
+            "sip:alice@EXAMPLE.com",
+            "sip:alice@_sip._udp.example.com",
+            "sip:alice@pbx-1.example.com.",
+            "sip:alice@192.168.1.1",
+            "sip:alice@[::1]",
+            "sip:alice@xn--80ak6aa92e.com",
+        ] {
+            let uri = parse_uri(raw).unwrap();
+            assert_eq!(uri.to_string(), raw, "round trip failed for {:?}", raw);
+        }
+    }
+
+    #[test]
+    fn opaque_tel_uri_keeps_subscriber_characters() {
+        for raw in [
+            "tel:+1-201-555-0123",
+            "tel:+1234",
+            "tel:7042;phone-context=example.com",
+        ] {
+            let uri = parse_uri(raw).unwrap();
+            assert_eq!(uri.to_string(), raw, "round trip failed for {:?}", raw);
+        }
+        assert!(parse_uri("tel:+1-201-555-0123>x").is_err());
+        assert!(parse_uri("tel:\u{7}").is_err());
+    }
+
+    #[test]
+    fn port_must_be_digits() {
+        assert!(parse_uri("sip:alice@example.com:5060").is_ok());
+        assert!(parse_uri("sip:alice@[::1]:5060").is_ok());
+        assert!(parse_uri("sip:alice@example.com:").is_err());
+        assert!(parse_uri("sip:alice@example.com: ;tag=x").is_err());
+        assert!(parse_uri("sip:alice@example.com:5060x").is_err());
+        let uri = parse_uri("sip:alice@[::1]:5060").unwrap();
+        assert_eq!(uri.host_with_port.to_string(), "[::1]:5060");
+    }
+
+    #[test]
+    fn matching_bracket_pair_is_stripped_but_stray_brackets_are_rejected() {
+        let uri = parse_uri("<sip:alice@example.com>").unwrap();
+        assert_eq!(uri.to_string(), "sip:alice@example.com");
+
+        for raw in [
+            "sip:alice@example.com>x",
+            "<sip:alice@example.com",
+            "sip:alice@example.com>",
+            "<sip:alice@example.com>>",
+        ] {
+            assert!(parse_uri(raw).is_err(), "expected {:?} to be rejected", raw);
+        }
+    }
+
+    #[test]
+    fn param_value_rejects_control_characters() {
+        assert!(parse_uri("sip:bob@example.com;tag=a\u{7}b").is_err());
+        assert!(parse_uri("sip:bob@example.com;tag=a\u{1b}b").is_err());
+        assert!(parse_uri("sip:bob@example.com;tag=abc").is_ok());
+    }
+
+    #[test]
+    fn parse_and_print_is_idempotent() {
+        for raw in [
+            "sip:alice@example.com",
+            // Transport values are normalized to uppercase on display.
+            "sip:alice@example.com:5060;transport=TCP;lr",
+            "sip:alice:secret@192.168.1.1:5060",
+            "sip:%2A72%23@example.com;tag=a1b2",
+            "sips:alice@[2001:db8::1];transport=TLS",
+        ] {
+            let once = parse_uri(raw).unwrap().to_string();
+            assert_eq!(once, raw, "first print differs for {:?}", raw);
+            let twice = parse_uri(&once).unwrap().to_string();
+            assert_eq!(twice, once, "second print differs for {:?}", raw);
         }
     }
 }

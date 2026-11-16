@@ -1,7 +1,7 @@
 use crate::prelude::*;
 use crate::sip::{Error, Header};
 
-mod parse_helpers;
+pub(crate) mod parse_helpers;
 pub mod tokenizers;
 
 pub trait TypedHeader<'a>:
