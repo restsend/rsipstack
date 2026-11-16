@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.8.6
+
+- URIs keep existing `%HH` escapes when printing the user and password
+  (merged PR #257, fixes #256). Printing a parsed URI no longer escapes the
+  `%` of an existing escape, so `alice%40example.com` stays the same user and
+  parse/print cycles are idempotent. This affected every URI parsed and
+  printed again, such as a received Contact used as the Request-URI of
+  in-dialog requests.
+- Typed header and URI parsers reject text outside the RFC 3261 grammar that
+  would not print back to parseable output (fixes #258): a stray `>` or `"` in
+  an addr-spec, `"`/`\` in unquoted auth-param values, control octets in
+  header, URI or auth-param values, and hostnames containing separators such
+  as `host:`. A port must be digits only instead of silently disappearing.
+- RFC 3261 quoted-pairs are now supported where they were wrongly rejected:
+  `realm="a\"b"` parses, the value is unescaped on parse and `"`/`\` are
+  escaped again when To/From/Contact/Route/Record-Route/Service-Route display
+  names and WWW/Proxy-Authenticate, Authorization, Proxy-Authorization quoted
+  values are printed.
+- `sip`/`sips` hosts are validated (RFC 3261 hostname characters plus widely
+  deployed `_` labels, trailing dot and IDN octets); opaque URIs such as
+  `tel:+1-201-555-0123` keep storing their subscriber text verbatim.
+
 ## 0.8.5
 
 - Client INVITE transactions retain exact ACKs separately for each dialog
