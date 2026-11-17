@@ -714,6 +714,37 @@ fn split_at_first_semicolon(s: &str) -> (&str, Option<&str>) {
     }
 }
 
+/// Split parameters at `;` outside quoted strings. RFC 3261 `gen-value`
+/// may be a `quoted-string`, which may contain `;`: a registrar's
+/// `received="sip:192.0.2.1:5061;transport=tls"` Contact parameter is one
+/// parameter, not two.
+fn split_unquoted_semicolons(s: &str) -> Result<Vec<&str>, Error> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut in_quotes = false;
+    let mut escaped = false;
+    for (i, ch) in s.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' if in_quotes => escaped = true,
+            '"' => in_quotes = !in_quotes,
+            ';' if !in_quotes => {
+                parts.push(&s[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    if in_quotes || escaped {
+        return Err(Error::ParseError("unterminated quoted parameter".into()));
+    }
+    parts.push(&s[start..]);
+    Ok(parts)
+}
+
 pub fn parse_params(s: &str) -> Result<Vec<Param>, Error> {
     let s = s.trim();
     if s.is_empty() {
@@ -724,7 +755,7 @@ pub fn parse_params(s: &str) -> Result<Vec<Param>, Error> {
         return Err(Error::ParseError("empty parameter".into()));
     }
     let mut params = Vec::new();
-    for part in s.split(';') {
+    for part in split_unquoted_semicolons(s)? {
         let part = part.trim();
         if part.is_empty() {
             return Err(Error::ParseError("empty parameter".into()));

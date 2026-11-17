@@ -254,6 +254,49 @@ mod tests {
     }
 
     #[test]
+    fn quoted_contact_params_may_contain_semicolons() {
+        // A Kamailio registrar with `received_avp` answers a REGISTER over
+        // TCP or TLS with the observed flow as a quoted URI, which has its
+        // own `;transport=` (RFC 3261 contact-extension / gen-value).
+        let response: Response = concat!(
+            "SIP/2.0 200 OK\r\n",
+            "Via: SIP/2.0/TLS 192.0.2.10:47522;rport=47522;received=192.0.2.10;alias;branch=z9hG4bK-test\r\n",
+            "From: <sip:1002@example.com>;tag=from-tag\r\n",
+            "To: <sip:1002@example.com>;tag=to-tag\r\n",
+            "CSeq: 2 REGISTER\r\n",
+            "Call-ID: test-call-id@example.com\r\n",
+            "Contact: <sip:1002@192.0.2.10:47522;transport=TLS>;q=1;expires=600;received=\"sip:192.0.2.10:47522;transport=tls\";+sip.instance=\"<urn:uuid:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee>\";reg-id=1\r\n",
+            "Content-Length: 0\r\n",
+            "\r\n"
+        )
+        .try_into()
+        .unwrap();
+
+        let contacts = response.typed_contact_headers().unwrap();
+        assert_eq!(contacts.len(), 1);
+        let contact = &contacts[0];
+        assert_eq!(contact.expires(), Some(600));
+        let received = contact.params.iter().find_map(|param| match param {
+            Param::Received(value) => Some(value.value()),
+            _ => None,
+        });
+        assert_eq!(received, Some("\"sip:192.0.2.10:47522;transport=tls\""));
+        let reg_id = contact.params.iter().find_map(|param| match param {
+            Param::Other(name, Some(value)) if name.value() == "reg-id" => Some(value.value()),
+            _ => None,
+        });
+        assert_eq!(reg_id, Some("1"));
+
+        // A quoted value that never closes is still refused.
+        let unterminated = "<sip:bob@example.com>;received=\"sip:192.0.2.1;transport=tls";
+        assert!(Contact::parse(unterminated).is_err());
+
+        // The parsed header prints back to the same header.
+        let printed = contact.to_string();
+        assert_eq!(&Contact::parse(&printed).unwrap(), contact);
+    }
+
+    #[test]
     fn record_style_contact_without_brackets_splits_header_params() {
         let contact = Contact::parse("sip:alice@restsend.com;expires=120").unwrap();
         assert_eq!(contact.uri.to_string(), "sip:alice@restsend.com");
