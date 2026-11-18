@@ -59,7 +59,8 @@ async fn endpoint(
     let mut transport = TransportLayer::new(stop.child_token());
     transport.outbound = outbound;
     let socket = UdpSocket::bind("127.0.0.1:0").await?;
-    let local = UdpConnection::from_socket(Arc::new(socket), None, Some(stop.child_token())).await?;
+    let local =
+        UdpConnection::from_socket(Arc::new(socket), None, Some(stop.child_token())).await?;
     transport.add_transport(SipConnection::Udp(local));
     let mut builder = EndpointBuilder::new();
     builder
@@ -212,7 +213,10 @@ async fn channel_cancel_reuses_the_exact_invite_flow_and_reports_its_peer() -> R
         )
         .await?,
     );
-    endpoint.inner.transport_layer.add_connection(connection.clone());
+    endpoint
+        .inner
+        .transport_layer
+        .add_connection(connection.clone());
     let layer = Arc::new(DialogLayer::new(endpoint.inner.clone()));
     let (sender, mut states) = mpsc::unbounded_channel();
     let (dialog, invite_task) = layer.do_invite_async(invite_options(configured)?, sender)?;
@@ -254,13 +258,19 @@ async fn channel_cancel_reuses_the_exact_invite_flow_and_reports_its_peer() -> R
             peer.clone(),
         ))?;
     }
-    assert_eq!(read_channel_request(&mut from_stack).await?.method, Method::Ack);
+    assert_eq!(
+        read_channel_request(&mut from_stack).await?.method,
+        Method::Ack
+    );
     timeout(WAIT, cancel_task).await???;
     let (_, final_response) = timeout(WAIT, invite_task).await???;
     assert_eq!(final_response.unwrap().status_code.code(), 487);
     assert_eq!(
         *destinations.0.lock().unwrap(),
-        [(Method::Invite, Some(peer.clone())), (Method::Cancel, Some(peer))],
+        [
+            (Method::Invite, Some(peer.clone())),
+            (Method::Cancel, Some(peer))
+        ],
     );
     Ok(())
 }
