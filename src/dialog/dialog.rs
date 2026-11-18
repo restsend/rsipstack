@@ -360,6 +360,10 @@ pub struct DialogInner {
     /// connection is unavailable: immune to missing received/rport params and
     /// valid even after the socket object died.
     pub(super) dialback_target: Mutex<Option<SipAddr>>,
+    /// Where a UAC dialog's initial INVITE was sent. Its CANCEL must go to
+    /// the same address, port and transport (RFC 3261 §9.1), whatever the
+    /// Request-URI resolves to.
+    pub(super) invite_destination: Mutex<Option<SipAddr>>,
     /// `cancel()` was called on this UAC dialog's INVITE.
     pub(super) cancel_requested: AtomicBool,
     /// That CANCEL waits for a provisional response (RFC 3261 §9.1).
@@ -550,6 +554,7 @@ impl DialogInner {
             remote_ack: Mutex::new(None),
             server_connection: Mutex::new(None),
             dialback_target: Mutex::new(None),
+            invite_destination: Mutex::new(None),
             cancel_requested: AtomicBool::new(false),
             cancel_deferred: AtomicBool::new(false),
             initial_ack: Mutex::new(None),
@@ -1278,6 +1283,9 @@ impl DialogInner {
         tx.force_success_ack = options.is_some() && !tx.defer_success_ack;
         self.reserve_invite(&tx)?;
 
+        if method == Method::Cancel {
+            tx.destination = self.invite_destination.lock().clone();
+        }
         tx.dialog_route_set = Some(self.route_set.lock().clone());
         let need_fallback_retry;
         let mut send_error = None;
@@ -1872,6 +1880,7 @@ impl DialogInner {
             remote_ack: Mutex::new(None),
             server_connection: Mutex::new(None),
             dialback_target: Mutex::new(None),
+            invite_destination: Mutex::new(None),
             cancel_requested: AtomicBool::new(false),
             cancel_deferred: AtomicBool::new(false),
             initial_ack: Mutex::new(None),
