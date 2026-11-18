@@ -1283,7 +1283,8 @@ impl DialogInner {
         tx.force_success_ack = options.is_some() && !tx.defer_success_ack;
         self.reserve_invite(&tx)?;
 
-        if method == Method::Cancel {
+        // A live flow supplies its actual peer address to before_send.
+        if method == Method::Cancel && tx.connection.is_none() {
             tx.destination = self.invite_destination.lock().clone();
         }
         tx.dialog_route_set = Some(self.route_set.lock().clone());

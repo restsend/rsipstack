@@ -4,7 +4,7 @@
 //! Request-URI resolves. Here the Request-URI host does not resolve at all,
 //! so a CANCEL that follows it never arrives.
 use crate::dialog::{dialog::DialogState, dialog_layer::DialogLayer, invitation::InviteOption};
-use crate::sip::{prelude::HeadersExt, Method, Request, SipMessage, Uri};
+use crate::sip::{prelude::HeadersExt, typed::Route, Method, Request, SipMessage, Uri};
 use crate::transport::{udp::UdpConnection, SipAddr, TransportLayer};
 use crate::EndpointBuilder;
 use std::net::SocketAddr;
@@ -108,13 +108,19 @@ async fn setup(
 /// Sends the INVITE, answers it with 180 from the peer and waits for Early.
 async fn ringing(
     token: &CancellationToken,
+    preloaded_route: bool,
 ) -> crate::Result<(
     Arc<DialogLayer>,
     UdpSocket,
     Request,
     tokio::task::JoinHandle<()>,
 )> {
-    let (dialog_layer, option, peer) = setup(token).await?;
+    let (dialog_layer, mut option, peer) = setup(token).await?;
+    if preloaded_route {
+        option.destination = None;
+        let route = Route::parse(&format!("<sip:{};lr>", peer.local_addr()?))?;
+        option.route_set.push(route);
+    }
     let wait = Duration::from_secs(2);
     let (state_sender, mut states) = unbounded_channel();
     let layer = dialog_layer.clone();
@@ -123,6 +129,7 @@ async fn ringing(
     });
     let (inv, uac) = recv_request(&peer, Method::Invite, wait).await;
     assert_eq!(inv.uri.to_string(), "sip:+15551234567@carrier.invalid");
+    assert_eq!(inv.route_header().is_some(), preloaded_route);
     reply(&peer, uac, &inv, 180, "Ringing").await;
     tokio::time::timeout(wait, async {
         while let Some(state) = states.recv().await {
@@ -138,6 +145,7 @@ async fn ringing(
 
 fn assert_cancels(cancel: &Request, invite: &Request) {
     assert_eq!(cancel.uri, invite.uri);
+    assert_eq!(cancel.route_header(), invite.route_header());
     assert_eq!(
         cancel.call_id_header().unwrap().value(),
         invite.call_id_header().unwrap().value()
@@ -151,7 +159,7 @@ fn assert_cancels(cancel: &Request, invite: &Request) {
 #[tokio::test]
 async fn test_explicit_cancel_goes_to_the_invite_destination() -> crate::Result<()> {
     let token = CancellationToken::new();
-    let (dialog_layer, peer, inv, invite) = ringing(&token).await?;
+    let (dialog_layer, peer, inv, invite) = ringing(&token, false).await?;
     let call_id = inv.call_id_header()?.value().to_string();
     let dialogs = dialog_layer.get_client_dialog_by_call_id(&call_id);
     assert_eq!(dialogs.len(), 1);
@@ -169,11 +177,29 @@ async fn test_explicit_cancel_goes_to_the_invite_destination() -> crate::Result<
 #[tokio::test]
 async fn test_dropped_invite_cancel_goes_to_the_invite_destination() -> crate::Result<()> {
     let token = CancellationToken::new();
-    let (_dialog_layer, peer, inv, invite) = ringing(&token).await?;
+    let (_dialog_layer, peer, inv, invite) = ringing(&token, false).await?;
     invite.abort();
     let _ = invite.await;
     let (cancel, _) = recv_request(&peer, Method::Cancel, Duration::from_secs(2)).await;
     assert_cancels(&cancel, &inv);
+    token.cancel();
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_cancel_goes_to_the_preloaded_route() -> crate::Result<()> {
+    let token = CancellationToken::new();
+    let (dialog_layer, peer, inv, invite) = ringing(&token, true).await?;
+    let dialog = dialog_layer
+        .get_client_dialog_by_call_id(inv.call_id_header()?.value())
+        .pop()
+        .expect("early client dialog");
+    let cancelling = tokio::spawn(async move { dialog.cancel().await });
+    let (cancel, uac) = recv_request(&peer, Method::Cancel, Duration::from_secs(2)).await;
+    assert_cancels(&cancel, &inv);
+    reply(&peer, uac, &cancel, 200, "OK").await;
+    cancelling.await.expect("cancel task")?;
+    invite.abort();
     token.cancel();
     Ok(())
 }
