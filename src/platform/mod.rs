@@ -277,7 +277,7 @@ where
     let (tx, rx) = crate::platform::mpsc::channel::<T>(1);
     spawn(async move {
         let out = future.await;
-        let _ = tx.send(out);
+        let _ = tx.try_send(out);
     });
     JoinHandle { rx }
 }
