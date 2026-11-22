@@ -1,7 +1,7 @@
 use crate::sip::{prelude::HeadersExt, SipMessage};
 use crate::transport::{
     connection::{KEEPALIVE_REQUEST, KEEPALIVE_RESPONSE},
-    stream::SipCodec,
+    stream::{SipCodec, MAX_SIP_MESSAGE_SIZE},
 };
 use bytes::BytesMut;
 use tokio_util::codec::{Decoder, Encoder};
@@ -324,4 +324,83 @@ fn test_sip_codec_multiple_messages_with_bodies() {
         0,
         "Buffer should be empty after consuming all messages"
     );
+}
+
+/// Minimal request head used by the framing regression tests.
+const FRAMING_REQUEST_HEAD: &str = "OPTIONS sip:a@b SIP/2.0\r\n\
+    Via: SIP/2.0/TCP 127.0.0.1:5060;branch=z9hG4bK-framing\r\n\
+    From: <sip:alice@example.com>;tag=framing\r\n\
+    To: <sip:alice@example.com>\r\n\
+    Call-ID: framing-test\r\n\
+    CSeq: 1 OPTIONS\r\n\
+    Max-Forwards: 70\r\n";
+
+fn framing_request(content_length: &str) -> String {
+    format!("{FRAMING_REQUEST_HEAD}Content-Length: {content_length}\r\n\r\n")
+}
+
+/// A Content-Length of usize::MAX must be rejected, not overflow the length
+/// addition (which panics when overflow checks are enabled).
+#[test]
+fn test_sip_codec_rejects_content_length_overflow() {
+    let mut codec = SipCodec::new();
+    let mut buffer = BytesMut::from(framing_request(&usize::MAX.to_string()).as_bytes());
+    assert!(codec.decode(&mut buffer).is_err());
+}
+
+/// The literal value from the report must not panic on any target; on 64-bit
+/// it parses as usize::MAX, on 32-bit it fails to parse.
+#[test]
+fn test_sip_codec_rejects_decimal_content_length_overflow() {
+    let mut codec = SipCodec::new();
+    let mut buffer = BytesMut::from(framing_request("18446744073709551615").as_bytes());
+    assert!(codec.decode(&mut buffer).is_err());
+}
+
+/// A declared body larger than the message limit is rejected before the
+/// connection waits for (or buffers) the body.
+#[test]
+fn test_sip_codec_rejects_declared_body_over_limit() {
+    let mut codec = SipCodec::new();
+    let mut buffer =
+        BytesMut::from(framing_request(&(MAX_SIP_MESSAGE_SIZE + 1).to_string()).as_bytes());
+    assert!(codec.decode(&mut buffer).is_err());
+}
+
+/// Two Content-Length headers are ambiguous framing (RFC 4475 §3.3.9).
+#[test]
+fn test_sip_codec_rejects_duplicate_content_length() {
+    for second in ["Content-Length: 0\r\n", "l: 0\r\n"] {
+        let message = format!("{FRAMING_REQUEST_HEAD}Content-Length: 0\r\n{second}\r\n");
+        let mut buffer = BytesMut::from(message.as_bytes());
+        assert!(
+            SipCodec::new().decode(&mut buffer).is_err(),
+            "duplicate Content-Length must be rejected: {second:?}"
+        );
+    }
+}
+
+/// A valid pipelined message must still be framed exactly after the first
+/// message body, with the second message starting at the buffer offset.
+#[test]
+fn test_sip_codec_pipelined_messages_stay_aligned() {
+    let first = format!("{FRAMING_REQUEST_HEAD}Content-Length: 5\r\n\r\nhello");
+    let second = framing_request("0");
+    let mut buffer = BytesMut::from(format!("{first}{second}").as_bytes());
+    let mut codec = SipCodec::new();
+
+    let decoded = codec.decode(&mut buffer).unwrap().unwrap();
+    match decoded {
+        crate::transport::stream::SipCodecType::Message(SipMessage::Request(req)) => {
+            assert_eq!(req.body, b"hello");
+        }
+        _ => panic!("Expected request message"),
+    }
+    assert!(
+        buffer.starts_with(b"OPTIONS sip:a@b SIP/2.0\r\n"),
+        "second message must start at the buffer offset"
+    );
+
+    assert!(codec.decode(&mut buffer).unwrap().is_some());
+    assert!(buffer.is_empty());
 }

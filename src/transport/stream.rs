@@ -70,8 +70,10 @@ impl Decoder for SipCodec {
         if let Some(headers_end) = memmem::find(src, b"\r\n\r\n") {
             let headers = &src[..headers_end + 4]; // include CRLFCRLF
 
-            // Parse Content-Length as u32 without UTF-8 conversion
-            let mut content_length: usize = 0;
+            // Parse Content-Length without UTF-8 conversion. Keep scanning
+            // after the first one so a duplicate header is rejected instead
+            // of silently trusting whichever comes first (RFC 4475 §3.3.9).
+            let mut content_length: Option<usize> = None;
             let mut start = 0;
             while start < headers.len() {
                 // find end of line with memchr
@@ -102,23 +104,36 @@ impl Decoder for SipCodec {
                     };
 
                     if is_cl {
+                        if content_length.is_some() {
+                            return Err(crate::Error::Error(
+                                "SIP message: duplicate Content-Length".to_string(),
+                            ));
+                        }
                         // parse value
                         let value_buf = &line[colon + 1..];
-                        content_length = std::str::from_utf8(value_buf)
-                            .map_err(|_| crate::Error::Error("Invalid Content-Length".to_string()))?
-                            .trim()
-                            .parse()
-                            .map_err(|_| {
-                                crate::Error::Error("Invalid Content-Length value".to_string())
-                            })?;
-                        break;
+                        content_length = Some(
+                            std::str::from_utf8(value_buf)
+                                .map_err(|_| {
+                                    crate::Error::Error("Invalid Content-Length".to_string())
+                                })?
+                                .trim()
+                                .parse()
+                                .map_err(|_| {
+                                    crate::Error::Error("Invalid Content-Length value".to_string())
+                                })?,
+                        );
                     }
                 }
 
                 start = if end < headers.len() { end + 1 } else { end };
             }
 
-            let total_len = headers_end + 4 + content_length;
+            let content_length = content_length.unwrap_or(0);
+            let total_len = headers_end
+                .checked_add(4)
+                .and_then(|len| len.checked_add(content_length))
+                .filter(|&len| len <= MAX_SIP_MESSAGE_SIZE)
+                .ok_or_else(|| crate::Error::Error("SIP message too large".to_string()))?;
 
             if src.len() >= total_len {
                 let msg_data = src.split_to(total_len); // consume full message
