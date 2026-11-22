@@ -23,7 +23,8 @@ credit them in the advisory unless they prefer otherwise.
 
 ### SIP stream framing: unchecked Content-Length
 
-- Advisory: GitHub Security Advisory (link to be added when published)
+- Advisory: [GHSA-6xf4-56fp-45wq](https://github.com/restsend/rsipstack/security/advisories/GHSA-6xf4-56fp-45wq)
+- CVE: requested (pending assignment)
 - Affected: `>= 0.2.66, < 0.8.0`
 - Patched: `0.8.0`, `0.7.15`
 - Reported by: Matt Harrison (MSH)
