@@ -55,12 +55,6 @@ impl Contact {
         if !has_angle_brackets && (!uri.headers.is_empty() || uri.scheme.is_none()) {
             return Err(Error::ParseError("invalid unbracketed Contact URI".into()));
         }
-        uri.params.retain(|param| {
-            !matches!(
-                param,
-                crate::sip::uri::Param::Transport(crate::sip::Transport::Udp)
-            )
-        });
         uri.headers.clear();
         let params = parse_contact_header_params(header_params_part)?;
         Ok(Contact {
@@ -246,7 +240,10 @@ mod tests {
 
         let contacts = response.typed_contact_headers().unwrap();
         assert_eq!(contacts.len(), 2);
-        assert_eq!(contacts[0].uri.to_string(), "sip:1001@198.51.100.20:56734");
+        assert_eq!(
+            contacts[0].uri.to_string(),
+            "sip:1001@198.51.100.20:56734;transport=UDP"
+        );
         assert_eq!(contacts[1].uri.to_string(), "sip:1001@192.0.2.10:13050");
         assert_eq!(contacts[0].expires(), Some(573));
         assert_eq!(contacts[1].expires(), Some(3600));
@@ -367,5 +364,27 @@ mod tests {
                 raw
             );
         }
+    }
+
+    #[test]
+    fn bracketed_contact_preserves_transport_udp_verbatim() {
+        let raw = "<sip:gw+opensipsGateway@43.98.249.245:5080;transport=udp;gw=opensipsGateway>;expires=600";
+        let contact = Contact::parse(raw).unwrap();
+        assert_eq!(
+            contact.uri.to_string(),
+            "sip:gw+opensipsGateway@43.98.249.245:5080;transport=UDP;gw=opensipsGateway"
+        );
+        assert_eq!(contact.expires(), Some(600));
+
+        // Unbracketed addr-spec puts semicolon parameters on the Contact header,
+        // not the URI (RFC 3261 §20.10).
+        let unbracketed =
+            Contact::parse("sip:gw+opensipsGateway@43.98.249.245:5080;transport=udp;expires=600")
+                .unwrap();
+        assert_eq!(
+            unbracketed.uri.to_string(),
+            "sip:gw+opensipsGateway@43.98.249.245:5080"
+        );
+        assert_eq!(unbracketed.expires(), Some(600));
     }
 }

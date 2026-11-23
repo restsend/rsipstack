@@ -334,7 +334,7 @@ Content-Length: 0\r\n\r\n";
     let invite = make_invite_request("sip:bob@example.com")?;
     let ack = endpoint.inner.make_ack(&invite, &response)?;
 
-    let expected_uri = Uri::try_from("sip:uas@192.0.2.55:5080")?;
+    let expected_uri = Uri::try_from("sip:uas@192.0.2.55:5080;transport=udp")?;
     assert_eq!(
         ack.uri, expected_uri,
         "lr=on must be treated as loose routing so ACK targets Contact",
