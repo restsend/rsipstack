@@ -28,6 +28,17 @@ struct Peer {
 
 impl Peer {
     async fn send_request(&self, method: Method, cseq: u32, to_tag: Option<&str>) {
+        self.send_request_with_headers(method, cseq, to_tag, "")
+            .await;
+    }
+
+    async fn send_request_with_headers(
+        &self,
+        method: Method,
+        cseq: u32,
+        to_tag: Option<&str>,
+        headers: &str,
+    ) {
         let addr = self.socket.local_addr().unwrap();
         let to = match to_tag {
             Some(tag) => format!("<sip:bob@{}>;tag={tag}", self.uas),
@@ -42,6 +53,7 @@ impl Peer {
              Call-ID: {CALL_ID}\r\n\
              CSeq: {cseq} {method}\r\n\
              Contact: <sip:alice@{addr}>\r\n\
+             {headers}\
              Content-Length: 0\r\n\r\n",
             uas = self.uas,
         );
@@ -66,6 +78,70 @@ impl Peer {
             }
         }
     }
+}
+
+#[tokio::test]
+async fn test_terminating_remote_bye_is_available_with_the_termination() -> crate::Result<()> {
+    let token = CancellationToken::new();
+    let _guard = token.clone().drop_guard();
+    let (mut states, mut dialogs, peer) = setup(&token).await?;
+
+    peer.send_request(Method::Invite, 1, None).await;
+    let dialog = tokio::time::timeout(Duration::from_secs(2), dialogs.recv())
+        .await
+        .expect("timeout waiting for the server dialog")
+        .unwrap();
+    dialog.accept(None, None)?;
+    let to_tag = peer
+        .recv_final(1)
+        .await
+        .to_header()?
+        .tag()?
+        .unwrap()
+        .value()
+        .to_string();
+    peer.send_request(Method::Ack, 1, Some(&to_tag)).await;
+    while !matches!(next_state(&mut states).await, DialogState::Confirmed(..)) {}
+
+    peer.send_request(Method::Info, 4, Some(&to_tag)).await;
+    let DialogState::Info(_, _, handle) = next_state(&mut states).await else {
+        panic!("expected the INFO to advance the remote CSeq");
+    };
+    handle.reply(StatusCode::OK).await?;
+    assert_eq!(peer.recv_final(4).await.status_code, StatusCode::OK);
+
+    peer.send_request_with_headers(Method::Bye, 3, Some(&to_tag), "X-Test-Context: stale\r\n")
+        .await;
+    peer.send_request_with_headers(
+        Method::Bye,
+        5,
+        Some("unmatched"),
+        "X-Test-Context: foreign\r\n",
+    )
+    .await;
+    peer.send_request_with_headers(
+        Method::Bye,
+        6,
+        Some(&to_tag),
+        "X-Test-Context: accepted\r\n",
+    )
+    .await;
+    loop {
+        if matches!(next_state(&mut states).await, DialogState::Terminated(..)) {
+            break;
+        }
+    }
+    let (bye, source) = dialog
+        .remote_termination_request()
+        .expect("accepted BYE accompanies Terminated");
+    assert_eq!(bye.cseq_header()?.seq()?, 6);
+    assert!(bye
+        .headers
+        .iter()
+        .any(|header| header.to_string() == "X-Test-Context: accepted"));
+    assert_eq!(source.unwrap().get_socketaddr()?, peer.socket.local_addr()?);
+    assert_eq!(peer.recv_final(6).await.status_code, StatusCode::OK);
+    Ok(())
 }
 
 /// A UAS endpoint running the usual incoming-transaction loop.
