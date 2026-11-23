@@ -51,10 +51,7 @@ impl ClientSubscriptionDialog {
         headers: Option<Vec<crate::sip::Header>>,
         body: Option<Vec<u8>>,
     ) -> Result<Option<crate::sip::Response>> {
-        let request = self
-            .inner
-            .make_request(method, None, None, None, headers, body)?;
-        self.inner.do_request(request).await
+        self.inner.send_request(method, headers, body).await
     }
 
     pub async fn refer(
@@ -147,10 +144,9 @@ impl ServerSubscriptionDialog {
         if !self.inner.is_confirmed() {
             return Ok(None);
         }
-        let request =
-            self.inner
-                .make_request(crate::sip::Method::Notify, None, None, None, headers, body)?;
-        self.inner.do_request(request).await
+        self.inner
+            .send_request(crate::sip::Method::Notify, headers, body)
+            .await
     }
 
     pub async fn unsubscribe(&self) -> Result<()> {
@@ -175,10 +171,7 @@ impl ServerSubscriptionDialog {
         if !self.inner.is_confirmed() {
             return Ok(None);
         }
-        let request = self
-            .inner
-            .make_request(method, None, None, None, headers, body)?;
-        self.inner.do_request(request).await
+        self.inner.send_request(method, headers, body).await
     }
 
     pub async fn refer(

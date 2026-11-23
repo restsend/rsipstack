@@ -202,6 +202,7 @@ pub struct Transaction {
         core::result::Result<u32, u32>,
     )>,
     retransmission: bool,
+    request_written: bool,
     is_cleaned_up: bool,
     invite_reservation: Mutex<Option<InviteReservation>>,
 }
@@ -250,6 +251,7 @@ impl Transaction {
             initial_dialog: Mutex::new(None),
             remote_cseq_admission: None,
             retransmission: true,
+            request_written: false,
             timer_l: None,
             timer_m: None,
             tu_receiver,
@@ -289,6 +291,10 @@ impl Transaction {
             *slot = Some(reservation);
         }
         Ok(())
+    }
+
+    pub(crate) fn set_invite_reservation(&mut self, reservation: Option<InviteReservation>) {
+        *self.invite_reservation.lock() = reservation;
     }
 
     pub fn new_client(
@@ -385,9 +391,12 @@ impl Transaction {
         // timers (Timer A / Timer B) handle retries and timeouts.
         let mut stream_failed = false;
         if let Some(connection) = self.connection.as_ref() {
-            if let Err(e) = connection.send(message, self.destination.as_ref()).await {
-                warn!(key = %self.key, error = %e, "send failed");
-                stream_failed = connection.is_stream();
+            match connection.send(message, self.destination.as_ref()).await {
+                Ok(()) => self.request_written = true,
+                Err(e) => {
+                    warn!(key = %self.key, error = %e, "send failed");
+                    stream_failed = connection.is_stream();
+                }
             }
         } else {
             debug!(key = %self.key, "no connection, will retry on timer");
@@ -937,6 +946,27 @@ impl Transaction {
         self.receive_with_response_observer(|_, _| {}).await
     }
 
+    /// Release dialog send ordering after the first actual transport write,
+    /// including a write made by the transaction's retransmission timer.
+    pub(crate) async fn receive_with_write_callback(
+        &mut self,
+        on_write: impl FnOnce() + Send,
+    ) -> Option<SipMessage> {
+        let mut on_write = Some(on_write);
+        loop {
+            if self.request_written {
+                if let Some(callback) = on_write.take() {
+                    callback();
+                }
+                return self.receive().await;
+            }
+            let event = self.tu_receiver.recv().await?;
+            if let Some(result) = self.dispatch_event(event).await {
+                return result;
+            }
+        }
+    }
+
     /// Let the dialog install its state before an automatic ACK can suspend
     /// reception. The observer is synchronous and only sees accepted responses.
     pub(crate) async fn receive_with_response_observer(
@@ -1442,13 +1472,16 @@ impl Transaction {
                             } else {
                                 self.original.to_owned().into()
                             };
-                            if let Err(e) = connection
+                            match connection
                                 .send(retry_message, self.destination.as_ref())
                                 .await
                             {
-                                warn!(key = %self.key, error = %e, "timer A resend failed");
-                                if connection.is_stream() {
-                                    return self.on_stream_send_failure();
+                                Ok(()) => self.request_written = true,
+                                Err(e) => {
+                                    warn!(key = %self.key, error = %e, "timer A resend failed");
+                                    if connection.is_stream() {
+                                        return self.on_stream_send_failure();
+                                    }
                                 }
                             }
                         } else {
