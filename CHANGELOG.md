@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.8.7
+
+- embassy backend: `spawn_with_result` no longer parks its wrapper on the
+  result channel after the user future completes. A blocking `send` could
+  pin the whole boxed future forever when the `JoinHandle` was not drained,
+  leaking the full invite state (~5.9 KB per outbound call on
+  rtcembed/ESP32-S3). The result is only used for error reporting, so it is
+  now `try_send`-ed.
+- Client INVITE: CANCEL is sent to the live destination learned from the
+  INVITE transaction (not the contact address), so cancelling after a
+  proxy/forking response reaches the peer that actually holds the branch.
+- SIP: `transport=udp` in a bracketed Contact URI is preserved instead of
+  being dropped when the URI is parsed and printed again.
+- Documentation: security policy and stream-framing advisory.
+
 ## 0.8.6
 
 - URIs keep existing `%HH` escapes when printing the user and password
