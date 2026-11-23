@@ -437,14 +437,20 @@ impl InviteDialog {
                         if let Some(tag) = resp.to_header()?.tag()? {
                             self.inner.update_remote_tag(tag.value())?;
                         }
-                        let guard = self.inner.outgoing.lock().await;
-                        let prack = self.inner.prepare_prack_request(&resp)?;
+                        let prack = if resp.header_contains_token("Require", "100rel") {
+                            let guard = self.inner.outgoing.lock().await;
+                            self.inner
+                                .prepare_prack_request(&resp)?
+                                .map(|prack| (guard, prack))
+                        } else {
+                            None
+                        };
                         // The provisional establishes the early dialog before
                         // PRACK completes. IMS may send UPDATE as soon as it
                         // receives PRACK, even before we consume its 200 OK.
                         self.inner.transition(DialogState::Early(self.id(), resp));
                         self.send_deferred_cancel();
-                        if let Some(prack) = prack {
+                        if let Some((guard, prack)) = prack {
                             let _ = self.inner.send_prack_request(prack, guard).await?;
                         }
                         continue;
@@ -899,7 +905,10 @@ impl InviteDialog {
         } else {
             match &tx.remote_cseq_admission {
                 Some((owner, seq, admission))
-                    if *seq == cseq && core::ptr::eq(owner.as_ptr(), Arc::as_ptr(&self.inner)) =>
+                    if *seq == cseq
+                        && owner
+                            .upgrade()
+                            .is_some_and(|inner| Arc::ptr_eq(&inner, &self.inner)) =>
                 {
                     *admission
                 }

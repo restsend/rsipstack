@@ -628,7 +628,13 @@ impl EndpointInner {
         if let Ok(id) = DialogId::try_from(&tx) {
             if !id.local_tag.is_empty() {
                 if let Ok(cseq) = tx.original.cseq_header().and_then(|header| header.seq()) {
-                    for layer in self.dialog_layers.lock().iter().filter_map(Weak::upgrade) {
+                    let layers: Vec<_> = self
+                        .dialog_layers
+                        .lock()
+                        .iter()
+                        .filter_map(Weak::upgrade)
+                        .collect();
+                    for layer in layers {
                         if layer.admit_invite_request(&id, cseq, &mut tx) {
                             break;
                         }

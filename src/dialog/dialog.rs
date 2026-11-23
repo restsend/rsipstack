@@ -316,6 +316,8 @@ pub(super) struct RemoteTarget {
 /// * `state_sender` - Channel for sending state updates
 /// * `tu_sender` - Transaction user sender
 /// * `initial_request` - The initial request that created this dialog
+pub(super) type RemoteTerminationRequest = (Request, Option<SipAddr>);
+
 pub struct DialogInner {
     pub(super) invite_usage: Arc<Mutex<InviteUsage>>,
     pub role: TransactionRole,
@@ -354,7 +356,7 @@ pub struct DialogInner {
     /// The last ACK received for an INVITE or re-INVITE this dialog answered
     /// (UAS role). Carries the answer when the 2xx carried the offer.
     pub(super) remote_ack: Mutex<Option<Request>>,
-    pub(super) remote_termination_request: Mutex<Option<Box<(Request, Option<SipAddr>)>>>,
+    pub(super) remote_termination_request: Mutex<Option<Box<RemoteTerminationRequest>>>,
     pub(super) server_connection: Mutex<Option<SipConnection>>,
     /// Structural source address of the flow that created this server dialog,
     /// captured at creation time from the connection itself (not parsed from
@@ -751,6 +753,9 @@ impl DialogInner {
             self.update_remote_tag(tag.value())?;
         }
 
+        if !resp.header_contains_token("Require", "100rel") {
+            return Ok(());
+        }
         let guard = self.outgoing.lock().await;
         if let Some(prack) = self.prepare_prack_request(resp)? {
             let _ = self.send_prack_request(prack, guard).await?;

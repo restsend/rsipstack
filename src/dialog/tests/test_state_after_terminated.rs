@@ -144,6 +144,73 @@ async fn test_terminating_remote_bye_is_available_with_the_termination() -> crat
     Ok(())
 }
 
+#[tokio::test]
+async fn test_local_bye_leaves_remote_termination_request_none() -> crate::Result<()> {
+    let token = CancellationToken::new();
+    let _guard = token.clone().drop_guard();
+    let (mut states, mut dialogs, peer) = setup(&token).await?;
+
+    peer.send_request(Method::Invite, 1, None).await;
+    let dialog = tokio::time::timeout(Duration::from_secs(2), dialogs.recv())
+        .await
+        .expect("timeout waiting for the server dialog")
+        .unwrap();
+    dialog.accept(None, None)?;
+    let to_tag = peer
+        .recv_final(1)
+        .await
+        .to_header()?
+        .tag()?
+        .unwrap()
+        .value()
+        .to_string();
+    peer.send_request(Method::Ack, 1, Some(&to_tag)).await;
+    while !matches!(next_state(&mut states).await, DialogState::Confirmed(..)) {}
+
+    let reply_task = tokio::spawn(async move {
+        let mut buf = vec![0u8; 4096];
+        loop {
+            let (len, from) =
+                tokio::time::timeout(Duration::from_secs(2), peer.socket.recv_from(&mut buf))
+                    .await
+                    .expect("timeout waiting for local BYE")
+                    .unwrap();
+            let text = std::str::from_utf8(&buf[..len]).unwrap();
+            if let Ok(SipMessage::Request(req)) = SipMessage::try_from(text) {
+                if req.method == Method::Bye {
+                    let ok = format!(
+                        "SIP/2.0 200 OK\r\n\
+                         {}\r\n\
+                         {}\r\n\
+                         {}\r\n\
+                         {}\r\n\
+                         {}\r\n\
+                         Content-Length: 0\r\n\r\n",
+                        req.via_header().unwrap(),
+                        req.from_header().unwrap(),
+                        req.to_header().unwrap(),
+                        req.call_id_header().unwrap(),
+                        req.cseq_header().unwrap(),
+                    );
+                    peer.socket.send_to(ok.as_bytes(), from).await.unwrap();
+                    return peer;
+                }
+            }
+        }
+    });
+
+    dialog.bye().await?;
+    let peer = reply_task.await.unwrap();
+    while !matches!(next_state(&mut states).await, DialogState::Terminated(..)) {}
+    assert!(dialog.remote_termination_request().is_none());
+
+    // A late remote BYE after local termination must not overwrite it.
+    peer.send_request(Method::Bye, 2, Some(&to_tag)).await;
+    assert_eq!(peer.recv_final(2).await.status_code, StatusCode::OK);
+    assert!(dialog.remote_termination_request().is_none());
+    Ok(())
+}
+
 /// A UAS endpoint running the usual incoming-transaction loop.
 async fn setup(
     token: &CancellationToken,

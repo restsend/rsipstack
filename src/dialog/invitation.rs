@@ -799,7 +799,7 @@ impl DialogLayer {
                 .boxed()
                 .await;
             guard.dialog = None;
-            let mut tx = guard
+            let tx = guard
                 .invite_tx
                 .take()
                 .expect("transaction should be available");
