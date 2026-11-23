@@ -422,6 +422,7 @@ impl InviteDialog {
                         if let Some(tag) = resp.to_header()?.tag()? {
                             self.inner.update_remote_tag(tag.value())?;
                         }
+                        let guard = self.inner.outgoing.lock().await;
                         let prack = self.inner.prepare_prack_request(&resp)?;
                         // The provisional establishes the early dialog before
                         // PRACK completes. IMS may send UPDATE as soon as it
@@ -429,7 +430,7 @@ impl InviteDialog {
                         self.inner.transition(DialogState::Early(self.id(), resp));
                         self.send_deferred_cancel();
                         if let Some(prack) = prack {
-                            let _ = self.inner.send_prack_request(prack).await?;
+                            let _ = self.inner.send_prack_request(prack, guard).await?;
                         }
                         continue;
                     }
@@ -560,10 +561,7 @@ impl InviteDialog {
             self.inner.update_remote_tag(tag.value())?;
         }
         self.update_remote_target_from_2xx(resp)?;
-        let request = self
-            .inner
-            .make_request(Method::Bye, None, None, None, None, None)?;
-        self.inner.do_request(request).await?;
+        self.inner.send_request(Method::Bye, None, None).await?;
         Ok(())
     }
 
@@ -656,15 +654,11 @@ impl InviteDialog {
             return Ok(());
         }
 
-        let request = self
-            .inner
-            .make_request(Method::Bye, None, None, None, headers, None)?;
-
         let reason = match self.role() {
             TransactionRole::Server => TerminatedReason::UasBye,
             TransactionRole::Client => TerminatedReason::UacBye,
         };
-        self.inner.send_bye(request, reason).await
+        self.inner.send_bye(headers, reason).await
     }
 
     /// Send a BYE request with a SIP `Reason` header.
@@ -689,10 +683,7 @@ impl InviteDialog {
             body = ?body.as_deref().map(String::from_utf8_lossy),
             "sending re-invite request"
         );
-        let request = self
-            .inner
-            .make_request(Method::Invite, None, None, None, headers, body)?;
-        self.inner.do_request(request).await
+        self.inner.send_request(Method::Invite, headers, body).await
     }
 
     /// re-INVITE with glare handling (RFC 3261 §14.1): on 491 retry after a
@@ -749,10 +740,7 @@ impl InviteDialog {
             body = ?body.as_deref().map(String::from_utf8_lossy),
             "sending update request"
         );
-        let request = self
-            .inner
-            .make_request(Method::Update, None, None, None, headers, body)?;
-        self.inner.do_request(request.clone()).await
+        self.inner.send_request(Method::Update, headers, body).await
     }
 
     /// Send an INFO request for mid-dialog information.
@@ -769,10 +757,7 @@ impl InviteDialog {
             body = ?body.as_deref().map(String::from_utf8_lossy),
             "sending info request"
         );
-        let request = self
-            .inner
-            .make_request(Method::Info, None, None, None, headers, body)?;
-        self.inner.do_request(request.clone()).await
+        self.inner.send_request(Method::Info, headers, body).await
     }
 
     /// Send a generic in-dialog request.
@@ -786,10 +771,7 @@ impl InviteDialog {
             return Ok(None);
         }
         debug!(id = %self.id(), %method, "sending request");
-        let request = self
-            .inner
-            .make_request(method, None, None, None, headers, body)?;
-        self.inner.do_request(request).await
+        self.inner.send_request(method, headers, body).await
     }
 
     /// Send a NOTIFY request.

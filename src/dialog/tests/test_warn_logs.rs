@@ -111,7 +111,10 @@ async fn test_failed_request_send_warns_without_the_request() -> crate::Result<(
 
     // send_dialog_request, then send_prack_request.
     assert!(inner.do_request(request("INFO", 2)).await.is_err());
-    assert!(inner.send_prack_request(request("PRACK", 3)).await.is_err());
+    assert!(inner
+        .send_prack_request(request("PRACK", 3), inner.outgoing.lock().await)
+        .await
+        .is_err());
 
     let warns = capture.lines(Level::WARN, "failed to send request");
     assert_eq!(warns.len(), 2, "{warns:?}");

@@ -7,7 +7,7 @@ use super::{
 };
 use crate::platform::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use crate::platform::sync::Mutex;
-use crate::platform::CancellationToken;
+use crate::platform::{AsyncMutex, AsyncMutexGuard, CancellationToken};
 use crate::prelude::*;
 use crate::sip::{
     headers::typed::record_route::split_rr_values,
@@ -18,7 +18,7 @@ use crate::sip::{
 use crate::{
     transaction::{
         endpoint::EndpointInnerRef,
-        invite_usage::InviteUsage,
+        invite_usage::{InviteReservation, InviteUsage},
         key::{TransactionKey, TransactionRole},
         make_uuid_v4,
         transaction::{Transaction, TransactionEventSender},
@@ -324,6 +324,7 @@ pub struct DialogInner {
     pub state: Mutex<DialogState>,
 
     pub local_seq: AtomicU32,
+    pub(super) outgoing: AsyncMutex<()>,
     pub local_contact: Option<crate::sip::Uri>,
     pub remote_contact: Mutex<Option<crate::sip::headers::untyped::Contact>>,
 
@@ -535,6 +536,7 @@ impl DialogInner {
             from,
             to: Mutex::new(to),
             local_seq: AtomicU32::new(cseq),
+            outgoing: AsyncMutex::new(()),
             remote_uri: Mutex::new(remote_uri),
             remote_target_cseq: Mutex::new(None),
             remote_seq: AtomicU32::new(0),
@@ -740,14 +742,20 @@ impl DialogInner {
             self.update_remote_tag(tag.value())?;
         }
 
+        let guard = self.outgoing.lock().await;
         if let Some(prack) = self.prepare_prack_request(resp)? {
-            let _ = self.send_prack_request(prack).await?;
+            let _ = self.send_prack_request(prack, guard).await?;
         }
 
         Ok(())
     }
 
-    pub(super) async fn send_prack_request(&self, request: Request) -> Result<Option<Response>> {
+    pub(super) async fn send_prack_request(
+        &self,
+        request: Request,
+        guard: AsyncMutexGuard<'_, ()>,
+    ) -> Result<Option<Response>> {
+        let mut send_guard = Some(guard);
         let method = request.method().to_owned();
         let key = TransactionKey::from_request(&request, TransactionRole::Client)?;
         // RFC 5626 flow affinity: reuse the reliable connection recorded for
@@ -786,7 +794,11 @@ impl DialogInner {
         }
 
         let mut auth = AuthRetry::new();
-        while let Some(msg) = tx.receive().await {
+        while let Some(msg) = tx
+            .receive_with_write_callback(|| drop(send_guard.take()))
+            .await
+        {
+            drop(send_guard.take());
             match msg {
                 SipMessage::Response(resp) => match resp.status_code {
                     StatusCode::Trying => continue,
@@ -804,6 +816,7 @@ impl DialogInner {
                             break;
                         }
                         if let Some(cred) = &self.credential {
+                            send_guard = Some(self.outgoing.lock().await);
                             let new_seq = self.increment_local_seq();
                             tx = handle_client_authenticate(new_seq, &tx, resp, cred).await?;
                             tx.send().await?;
@@ -1267,6 +1280,8 @@ impl DialogInner {
         &self,
         request: Request,
         options: Option<super::reinvite::ReinviteOptions>,
+        mut send_guard: Option<AsyncMutexGuard<'_, ()>>,
+        reservation: Option<InviteReservation>,
     ) -> Result<Option<Response>> {
         let method = request.method().to_owned();
         let key = TransactionKey::from_request(&request, TransactionRole::Client)?;
@@ -1281,7 +1296,7 @@ impl DialogInner {
         );
         tx.defer_success_ack = options.as_ref().is_some_and(|o| o.answer_handler.is_some());
         tx.force_success_ack = options.is_some() && !tx.defer_success_ack;
-        self.reserve_invite(&tx)?;
+        tx.set_invite_reservation(reservation);
 
         // A live flow supplies its actual peer address to before_send.
         if method == Method::Cancel && tx.connection.is_none() {
@@ -1408,7 +1423,11 @@ impl DialogInner {
             .as_ref()
             .map(|o| super::reinvite::RequestCancellation::new(&tx, Some(o.cancellation.clone())));
         let mut auth = AuthRetry::new();
-        while let Some(msg) = tx.receive().await {
+        while let Some(msg) = tx
+            .receive_with_write_callback(|| drop(send_guard.take()))
+            .await
+        {
+            drop(send_guard.take());
             match msg {
                 SipMessage::Response(resp) => {
                     // RFC 7989 §8: accept the peer's (possibly new) UUID from
@@ -1494,9 +1513,11 @@ impl DialogInner {
                             break;
                         }
                         if let Some(cred) = &self.credential {
-                            let new_seq = match method {
-                                crate::sip::Method::Cancel => self.get_local_seq(),
-                                _ => self.increment_local_seq(),
+                            let new_seq = if method == Method::Cancel {
+                                tx.original.cseq_header()?.seq()?
+                            } else {
+                                send_guard = Some(self.outgoing.lock().await);
+                                self.increment_local_seq()
                             };
                             tx = handle_client_authenticate(new_seq, &tx, resp, cred).await?;
                             tx.defer_success_ack =
@@ -1565,14 +1586,6 @@ impl DialogInner {
                             );
                             if let Err(error) = answer {
                                 if !self.is_terminated() {
-                                    let bye = self.make_request(
-                                        Method::Bye,
-                                        None,
-                                        None,
-                                        None,
-                                        None,
-                                        None,
-                                    );
                                     let id = self.id.lock().clone();
                                     self.transition(DialogState::Terminated(
                                         id,
@@ -1581,9 +1594,7 @@ impl DialogInner {
                                     if let Some(gate) = &gate {
                                         gate.0.finish();
                                     }
-                                    if let Ok(bye) = bye {
-                                        self.do_request(bye).await.ok();
-                                    }
+                                    self.send_request(Method::Bye, None, None).await.ok();
                                 } else if let Some(gate) = &gate {
                                     gate.0.finish();
                                 }
@@ -1606,7 +1617,36 @@ impl DialogInner {
         &self,
         request: Request,
     ) -> futures::future::BoxFuture<'_, Result<Option<Response>>> {
-        self.send_dialog_request(request, None).boxed()
+        // CANCEL and BYEs on separate forked dialogs do not use this dialog's
+        // ordered request lane.
+        self.send_dialog_request(request, None, None, None).boxed()
+    }
+
+    pub(super) fn send_request(
+        &self,
+        method: Method,
+        headers: Option<Vec<Header>>,
+        body: Option<Vec<u8>>,
+    ) -> futures::future::BoxFuture<'_, Result<Option<Response>>> {
+        async move {
+            let reservation = if method == Method::Invite {
+                Some(
+                    InviteReservation::acquire(&self.invite_usage, TransactionRole::Client)
+                        .map_err(|_| self.invite_pending_error())?,
+                )
+            } else {
+                None
+            };
+            let guard = if matches!(method, Method::Ack | Method::Cancel) {
+                None
+            } else {
+                Some(self.outgoing.lock().await)
+            };
+            let request = self.make_request(method, None, None, None, headers, body)?;
+            self.send_dialog_request(request, None, guard, reservation)
+                .await
+        }
+        .boxed()
     }
 
     pub(super) async fn do_reinvite(
@@ -1614,26 +1654,42 @@ impl DialogInner {
         request: Request,
         options: super::reinvite::ReinviteOptions,
     ) -> Result<Option<Response>> {
-        self.send_dialog_request(request, Some(options))
+        let reservation = InviteReservation::acquire(&self.invite_usage, TransactionRole::Client)
+            .map_err(|_| self.invite_pending_error())?;
+        let guard = self.outgoing.lock().await;
+        // A prepared request can be overtaken before the owning task starts.
+        if request.cseq_header()?.seq()? != self.get_local_seq() {
+            return Err(crate::Error::Error(
+                "prepared re-INVITE CSeq is no longer current".into(),
+            ));
+        }
+        self.send_dialog_request(request, Some(options), Some(guard), Some(reservation))
             .boxed()
             .await
     }
 
+    fn invite_pending_error(&self) -> crate::Error {
+        crate::Error::DialogError(
+            "an INVITE transaction is already in progress".into(),
+            self.id.lock().clone(),
+            StatusCode::RequestPending,
+        )
+    }
+
     pub(super) fn reserve_invite(&self, tx: &Transaction) -> Result<()> {
-        tx.reserve_invite(&self.invite_usage).map_err(|_| {
-            crate::Error::DialogError(
-                "an INVITE transaction is already in progress".into(),
-                self.id.lock().clone(),
-                StatusCode::RequestPending,
-            )
-        })
+        tx.reserve_invite(&self.invite_usage)
+            .map_err(|_| self.invite_pending_error())
     }
 
     /// Send the BYE that ends this dialog. RFC 3261 §15.1.1: the session ends
     /// once the BYE is handed to its transaction, and a 481, a 408 or no
     /// response ends the dialog. So whatever the transaction returns, the
     /// dialog is `Terminated(reason)`; a failure is still returned.
-    pub(super) async fn send_bye(&self, request: Request, reason: TerminatedReason) -> Result<()> {
+    pub(super) async fn send_bye(
+        &self,
+        headers: Option<Vec<Header>>,
+        reason: TerminatedReason,
+    ) -> Result<()> {
         {
             let state = self.state.lock();
             if state.is_terminated() {
@@ -1653,7 +1709,7 @@ impl DialogInner {
                 return Err(crate::Error::Error("INVITE ACK was interrupted".into()));
             }
         }
-        let result = self.do_request(request).await;
+        let result = self.send_request(Method::Bye, headers, None).await;
         let id = self.id.lock().clone();
         self.transition(DialogState::Terminated(id, reason));
         result.map(|_| ())
@@ -1733,18 +1789,12 @@ impl DialogInner {
         }
         let id = self.id.lock().clone();
         warn!(%id, "no ACK for the 2xx within 64*T1, ending the session");
-        let bye = self.make_request(Method::Bye, None, None, None, None, None);
         self.transition(DialogState::Terminated(
             id.clone(),
             TerminatedReason::Timeout,
         ));
-        match bye {
-            Ok(bye) => {
-                if let Err(e) = self.do_request(bye).await {
-                    warn!(%id, error = %e, "BYE after missing ACK failed");
-                }
-            }
-            Err(e) => warn!(%id, error = %e, "failed to build BYE after missing ACK"),
+        if let Err(e) = self.send_request(Method::Bye, None, None).await {
+            warn!(%id, error = %e, "BYE after missing ACK failed");
         }
     }
 
@@ -1856,6 +1906,7 @@ impl DialogInner {
             )),
 
             local_seq: AtomicU32::new(snapshot.local_cseq),
+            outgoing: AsyncMutex::new(()),
             remote_seq: AtomicU32::new(snapshot.remote_cseq),
 
             local_contact: snapshot.local_contact,
