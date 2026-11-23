@@ -39,6 +39,43 @@ pub struct DialogLayerInner {
     pub(super) last_seq: AtomicU32,
     pub(super) dialogs: RwMap<DialogId, Dialog>,
 }
+impl DialogLayerInner {
+    fn get_dialog(&self, id: &DialogId) -> Option<Dialog> {
+        self.dialogs.with(|dialogs| {
+            if let Some(dialog) = dialogs.get(id) {
+                return Some(dialog.clone());
+            }
+            // A pending UAC INVITE remains owned under its original tag-less
+            // key until its final response. Provisional responses have already
+            // taught the dialog its remote tag. Match that complete identity,
+            // never just the Call-ID/local tag, for early in-dialog requests.
+            if id.remote_tag.is_empty() {
+                return None;
+            }
+            let mut pending_id = id.clone();
+            pending_id.remote_tag.clear();
+            dialogs
+                .get(&pending_id)
+                .filter(|dialog| dialog.id() == *id)
+                .cloned()
+        })
+    }
+
+    pub(crate) fn admit_invite_request(
+        &self,
+        id: &DialogId,
+        cseq: u32,
+        tx: &mut Transaction,
+    ) -> bool {
+        let Some(Dialog::Invite(dialog)) = self.get_dialog(id) else {
+            return false;
+        };
+        let admission = dialog.inner.admit_remote_cseq(cseq);
+        tx.remote_cseq_admission = Some((Arc::downgrade(&dialog.inner), cseq, admission));
+        true
+    }
+}
+
 pub type DialogLayerInnerRef = Arc<DialogLayerInner>;
 
 /// SIP Dialog Layer
@@ -139,14 +176,13 @@ pub struct DialogLayer {
 
 impl DialogLayer {
     pub fn new(endpoint: EndpointInnerRef) -> Self {
-        Self {
-            endpoint,
-            inner: Arc::new(DialogLayerInner {
-                last_seq: AtomicU32::new(0),
-                lifecycle_sender: crate::platform::sync::Mutex::new(None),
-                dialogs: RwMap::new(),
-            }),
-        }
+        let inner = Arc::new(DialogLayerInner {
+            last_seq: AtomicU32::new(0),
+            lifecycle_sender: crate::platform::sync::Mutex::new(None),
+            dialogs: RwMap::new(),
+        });
+        endpoint.register_dialog_layer(&inner);
+        Self { endpoint, inner }
     }
 
     /// Subscribe to facts for subsequently created INVITE dialogs. Existing
@@ -465,24 +501,7 @@ impl DialogLayer {
     }
 
     pub fn get_dialog(&self, id: &DialogId) -> Option<Dialog> {
-        self.inner.dialogs.with(|dialogs| {
-            if let Some(dialog) = dialogs.get(id) {
-                return Some(dialog.clone());
-            }
-            // A pending UAC INVITE remains owned under its original tag-less
-            // key until its final response. Provisional responses have already
-            // taught the dialog its remote tag. Match that complete identity,
-            // never just the Call-ID/local tag, for early in-dialog requests.
-            if id.remote_tag.is_empty() {
-                return None;
-            }
-            let mut pending_id = id.clone();
-            pending_id.remote_tag.clear();
-            dialogs
-                .get(&pending_id)
-                .filter(|dialog| dialog.id() == *id)
-                .cloned()
-        })
+        self.inner.get_dialog(id)
     }
 
     /// Legacy lookup by display string. Returns `None` if no dialog matches or
