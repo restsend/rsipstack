@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.8.8
+
+- INVITE dialogs expose the accepted peer BYE and its optional source address
+  through `remote_termination_request()` when the BYE ends the dialog (#262).
+- Client INVITE transactions continue receiving and acknowledging late forked
+  2xx responses while cleanup BYEs complete independently (#263).
+- Known INVITE dialogs check inbound CSeq at the endpoint before dispatch,
+  preserving receive order when the application handles requests concurrently
+  (#264).
+- Outgoing in-dialog requests are ordered by CSeq through the first successful
+  transport write, including retries. Ordinary provisional responses can be
+  processed while another request waits to send (#265).
+
 ## 0.8.7
 
 - embassy backend: `spawn_with_result` no longer parks its wrapper on the
