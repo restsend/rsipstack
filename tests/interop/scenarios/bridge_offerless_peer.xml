@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<scenario name="Bridge peer verifies SDP answer and identical retransmitted ACK">
+  <recv request="INVITE"/>
+  <send><![CDATA[
+SIP/2.0 200 OK
+[last_Via:]
+[last_From:]
+[last_To:];tag=sipp-test
+[last_Call-ID:]
+[last_CSeq:]
+Contact: <[sipp_uri]>
+Content-Type: application/sdp
+Content-Length: [len]
+
+v=0
+o=sipp 1 1 IN IP4 127.0.0.1
+s=interop
+c=IN IP4 127.0.0.1
+t=0 0
+m=audio 9 RTP/AVP 0
+a=rtpmap:0 PCMU/8000
+a=inactive
+]]></send>
+  <recv request="ACK"/>
+  <recv request="INVITE"><action>
+    <ereg regexp="0" search_in="hdr" header="Content-Length:" check_it="true" assign_to="_"/>
+    <ereg regexp=".*" search_in="hdr" header="Via:" assign_to="via"/>
+    <ereg regexp=".*" search_in="hdr" header="From:" assign_to="from"/>
+    <ereg regexp=".*" search_in="hdr" header="To:" assign_to="to"/>
+    <ereg regexp=".*" search_in="hdr" header="Call-ID:" assign_to="callid"/>
+    <ereg regexp=".*" search_in="hdr" header="CSeq:" assign_to="cseq"/>
+  </action></recv>
+  <send><![CDATA[
+SIP/2.0 180 Ringing
+[last_Via:]
+[last_From:]
+[last_To:]
+[last_Call-ID:]
+[last_CSeq:]
+Content-Length: 0
+
+]]></send>
+  <send><![CDATA[
+SIP/2.0 200 OK
+Via: [$via]
+From: [$from]
+To: [$to]
+Call-ID: [$callid]
+CSeq: [$cseq]
+Contact: <[sipp_uri]>
+Content-Type: application/sdp
+Content-Length: [len]
+
+v=0
+o=destination 3 2 IN IP4 127.0.0.1
+s=interop
+c=IN IP4 127.0.0.1
+t=0 0
+m=audio 9 RTP/AVP 0
+a=rtpmap:0 PCMU/8000
+a=sendonly
+]]></send>
+  <recv request="ACK" timeout="700" ontimeout="1" next="2"><action>
+    <ereg regexp="a=recvonly" search_in="body" check_it="true" assign_to="_"/>
+  </action></recv>
+  <label id="1"/>
+  <send><![CDATA[
+SIP/2.0 200 OK
+Via: [$via]
+From: [$from]
+To: [$to]
+Call-ID: [$callid]
+CSeq: [$cseq]
+Contact: <[sipp_uri]>
+Content-Type: application/sdp
+Content-Length: [len]
+
+v=0
+o=destination 3 2 IN IP4 127.0.0.1
+s=interop
+c=IN IP4 127.0.0.1
+t=0 0
+m=audio 9 RTP/AVP 0
+a=rtpmap:0 PCMU/8000
+a=sendonly
+]]></send>
+  <recv request="ACK"><action>
+    <ereg regexp="a=recvonly" search_in="body" check_it="true" assign_to="_"/>
+  </action></recv>
+  <label id="2"/>
+  <send><![CDATA[
+SIP/2.0 200 OK
+Via: [$via]
+From: [$from]
+To: [$to]
+Call-ID: [$callid]
+CSeq: [$cseq]
+Contact: <[sipp_uri]>
+Content-Type: application/sdp
+Content-Length: [len]
+
+v=0
+o=destination 3 2 IN IP4 127.0.0.1
+s=interop
+c=IN IP4 127.0.0.1
+t=0 0
+m=audio 9 RTP/AVP 0
+a=rtpmap:0 PCMU/8000
+a=sendonly
+]]></send>
+  <recv request="ACK"><action>
+    <ereg regexp="a=recvonly" search_in="body" check_it="true" assign_to="_"/>
+  </action></recv>
+  <nop><action><log message="BRIDGE_ACK_REPEATED"/></action></nop>
+  <recv request="BYE"/>
+  <send><![CDATA[
+SIP/2.0 200 OK
+[last_Via:]
+[last_From:]
+[last_To:]
+[last_Call-ID:]
+[last_CSeq:]
+Content-Length: 0
+
+]]></send>
+</scenario>
