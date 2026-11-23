@@ -912,16 +912,17 @@ impl InviteDialog {
         let cseq = tx.original.cseq_header()?.seq()?;
         // ACK and CANCEL reuse their INVITE's CSeq and are matched by the
         // transaction layer. Neither participates in the dialog sequence.
-        // Re-evaluate the comparison after every competing update: a failed
-        // one-shot CAS must not admit a stale request or lose a newer CSeq.
         let sequence = if matches!(tx.original.method, Method::Ack | Method::Cancel) {
             Ok(self.inner.remote_seq.load(Ordering::Relaxed))
         } else {
-            self.inner
-                .remote_seq
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |remote_seq| {
-                    (cseq >= remote_seq).then_some(cseq)
-                })
+            match &tx.remote_cseq_admission {
+                Some((owner, seq, admission))
+                    if *seq == cseq && core::ptr::eq(owner.as_ptr(), Arc::as_ptr(&self.inner)) =>
+                {
+                    *admission
+                }
+                _ => self.inner.admit_remote_cseq(cseq),
+            }
         };
         if let Err(remote_seq) = sequence {
             // The receiver is the UAS of this request, regardless of who

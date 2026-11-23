@@ -5,6 +5,7 @@ use super::{
     transaction::{Transaction, TransactionEvent, TransactionEventSender},
     CallIdFormat, SipConnection, TransactionReceiver, TransactionSender, TransactionTimer,
 };
+use crate::dialog::dialog_layer::DialogLayerInner;
 use crate::platform::mpsc::{error, unbounded_channel};
 use crate::platform::sync::Mutex;
 use crate::platform::sync::RwMap;
@@ -16,6 +17,7 @@ use crate::{
     transport::{transport_layer::DomainResolver, SipAddr, TransportEvent, TransportLayer},
     Error, Result, VERSION,
 };
+use alloc::sync::Weak;
 use async_trait::async_trait;
 use tracing::{debug, info, trace, warn};
 
@@ -128,6 +130,7 @@ pub struct EndpointInner {
     /// and INVITE CSeq number: `waiting_ack` holds only a dialog's latest
     /// INVITE, and the ACK of an earlier one can arrive after it (§13.2.2.4).
     pub(crate) waiting_ack_cseq: RwMap<(DialogId, u32), TransactionKey>,
+    dialog_layers: Mutex<Vec<Weak<DialogLayerInner>>>,
     incoming_sender: TransactionSender,
     incoming_receiver: Mutex<Option<TransactionReceiver>>,
     cancel_token: CancellationToken,
@@ -254,6 +257,7 @@ impl EndpointInner {
             waiting_ack_cseq: RwMap::new(),
             timer_interval: timer_interval.unwrap_or(Duration::from_millis(20)),
             cancel_token,
+            dialog_layers: Mutex::new(Vec::new()),
             incoming_sender,
             incoming_receiver: Mutex::new(Some(incoming_receiver)),
             option: option.unwrap_or_default(),
@@ -261,6 +265,12 @@ impl EndpointInner {
             locator,
             transport_inspector,
         })
+    }
+
+    pub(crate) fn register_dialog_layer(&self, layer: &Arc<DialogLayerInner>) {
+        let mut layers = self.dialog_layers.lock();
+        layers.retain(|layer| layer.strong_count() != 0);
+        layers.push(Arc::downgrade(layer));
     }
 
     pub async fn serve(self: &Arc<Self>) -> Result<()> {
@@ -613,6 +623,19 @@ impl EndpointInner {
             Transaction::new_server(key.clone(), request.clone(), self.clone(), Some(connection));
         tx.original_received_at = received_at;
 
+        // Match ACK and CANCEL above; neither advances the dialog sequence.
+        // Record admission here while requests are still in Endpoint order.
+        if let Ok(id) = DialogId::try_from(&tx) {
+            if !id.local_tag.is_empty() {
+                if let Ok(cseq) = tx.original.cseq_header().and_then(|header| header.seq()) {
+                    for layer in self.dialog_layers.lock().iter().filter_map(Weak::upgrade) {
+                        if layer.admit_invite_request(&id, cseq, &mut tx) {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
         self.incoming_sender.send(tx).ok();
         Ok(())
     }

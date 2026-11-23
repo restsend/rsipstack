@@ -479,6 +479,13 @@ pub struct DialogSnapshot {
     pub session_id: Option<SessionIdState>,
 }
 impl DialogInner {
+    pub(super) fn admit_remote_cseq(&self, cseq: u32) -> core::result::Result<u32, u32> {
+        self.remote_seq
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |remote_seq| {
+                (cseq >= remote_seq).then_some(cseq)
+            })
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         role: TransactionRole,
