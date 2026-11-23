@@ -24,6 +24,7 @@ use crate::transaction::key::TransactionRole;
 use crate::transaction::transaction::{Transaction, TransactionEvent};
 use crate::Result;
 use core::sync::atomic::Ordering;
+use futures_util::stream::{FuturesUnordered, StreamExt};
 use tracing::{debug, info, trace, warn};
 
 /// RFC 3261 section 14.1 gives the Call-ID owner and its peer disjoint
@@ -576,34 +577,24 @@ impl InviteDialog {
     /// session — terminates it with a BYE. Everything else (retransmitted
     /// 2xx with the same tag, non-2xx) is ignored. `seen` holds the forked
     /// tags already BYE'd, so a retransmitted forked 2xx sends one BYE only.
-    pub(super) async fn end_forked_branch(
+    fn end_forked_branch(
         &self,
         msg: &SipMessage,
         confirmed_remote_tag: &str,
         seen: &mut Vec<String>,
-    ) {
+    ) -> Option<impl core::future::Future<Output = ()> + Send + 'static> {
         let SipMessage::Response(resp) = msg else {
-            return;
+            return None;
         };
         if resp.status_code.kind() != StatusCodeKind::Successful {
-            return;
+            return None;
         }
-        // Same tag: a retransmission of the confirmed 2xx, already re-ACKed.
-        let tag = match resp
-            .to_header()
-            .ok()
-            .and_then(|to| to.tag().ok().flatten())
-            .map(|tag| tag.value().to_string())
-        {
-            Some(tag) => tag,
-            None => return,
-        };
-        if tag == confirmed_remote_tag {
-            return;
+        let tag = resp.to_header().ok()?.tag().ok()??.value().to_string();
+        if tag == confirmed_remote_tag || seen.iter().any(|seen| seen == &tag) {
+            return None;
         }
-        if seen.iter().any(|seen| seen == &tag) {
-            return;
-        }
+        // The transaction fixes Call-ID/local tag; each distinct remote tag
+        // identifies one fork. Reserve it before polling any cleanup future.
         seen.push(tag.clone());
         let id = self.id();
         info!(
@@ -611,9 +602,42 @@ impl InviteDialog {
             tag = %tag,
             "forked 2xx acknowledged; ending the extra branch with a BYE (RFC 3261 §13.2.2.4)"
         );
-        if let Err(e) = self.inner.bye_forked_branch(resp).await {
-            warn!(id = %id, tag = %tag, error = %e, "failed to BYE the forked branch");
+        let dialog = self.clone();
+        let response = resp.clone();
+        Some(async move {
+            if let Err(e) = dialog.inner.bye_forked_branch(&response).await {
+                warn!(id = %id, tag = %tag, error = %e, "failed to BYE the forked branch");
+            }
+        })
+    }
+
+    /// One owner drives the Accepted INVITE and its independent fork BYEs.
+    /// Retain receive() across cleanup completions: cancelling a partially
+    /// polled receive could interrupt its ACK send. Dropping this owner drops
+    /// every pending cleanup; normal completion drains them using their own
+    /// transaction deadlines, without a second timeout or detached tasks.
+    pub(super) async fn drain_accepted(&self, mut tx: Transaction, confirmed_tag: &str) {
+        let mut seen = Vec::new();
+        let mut cleanups = FuturesUnordered::new();
+        loop {
+            let message = {
+                let mut received = core::pin::pin!(tx.receive());
+                loop {
+                    if cleanups.is_empty() {
+                        break received.await;
+                    }
+                    match crate::platform::select2(cleanups.next(), &mut received).await {
+                        crate::platform::Either::A(_) => {}
+                        crate::platform::Either::B(message) => break message,
+                    }
+                }
+            };
+            let Some(message) = message else { break };
+            if let Some(cleanup) = self.end_forked_branch(&message, confirmed_tag, &mut seen) {
+                cleanups.push(cleanup);
+            }
         }
+        while cleanups.next().await.is_some() {}
     }
 
     // ── Shared request semantics ──────────────────────────────────────────

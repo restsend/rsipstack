@@ -173,7 +173,22 @@ async fn test_forked_2xx_is_byed_without_touching_the_confirmed_dialog() -> crat
         bye.call_id_header()?.value(),
         invite_req.call_id_header()?.value()
     );
-    // The forked callee answers the BYE like a real UA would.
+    // Keep branch B's BYE unanswered while another 2xx arrives.
+    let ok_c = ok_b
+        .replace("tag=tag-b", "tag=tag-c")
+        .replace("bob-b", "bob-c");
+    peer.send_to(ok_c.as_bytes(), uac_addr).await?;
+    let (other_bye, other_from) = tokio::time::timeout(Duration::from_millis(250), async {
+        loop {
+            let (req, addr) = next_request(&peer, Method::Bye, "second fork BYE").await;
+            if req.to_header()?.value().contains(";tag=tag-c") {
+                return Ok::<_, crate::Error>((req, addr));
+            }
+        }
+    })
+    .await
+    .expect("a pending fork BYE must not block cleanup of a later fork")?;
+    reply_ok(&peer, &other_bye, other_from).await?;
     reply_ok(&peer, &bye, from).await?;
 
     // A retransmission of the forked 2xx (in flight before its ACK landed)
