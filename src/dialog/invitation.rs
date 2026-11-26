@@ -264,6 +264,7 @@ impl Drop for DialogGuardForUnconfirmed {
                             return;
                         }
                     }
+                    client_dialog.inner.record_invite_destination(&invite_tx);
                     let final_window = invite_tx.endpoint_inner.option.t1x64;
                     invite_tx.stop_retransmissions();
 

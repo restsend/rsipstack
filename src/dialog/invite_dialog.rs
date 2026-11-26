@@ -396,6 +396,7 @@ impl InviteDialog {
         // in-dialog requests (BYE / re-INVITE / INFO) reuse it instead of
         // destination-routing off a possibly unroutable Contact.
         self.inner.set_server_connection(tx.connection.clone());
+        self.inner.record_invite_destination(tx);
         let mut dialog_id = self.id();
         let mut final_response = None;
         loop {
@@ -415,9 +416,14 @@ impl InviteDialog {
             ack.finish();
             let cancelled = established?;
             let Some(msg) = msg else { break };
-            if matches!(&msg, SipMessage::Response(r) if r.status_code.kind() != StatusCodeKind::Provisional)
-            {
-                tx.track_receipt_times(false);
+            if let SipMessage::Response(response) = &msg {
+                if response.status_code.kind() == StatusCodeKind::Provisional {
+                    // Timer A may have resolved the INVITE after the first send.
+                    // A 2xx auto-ACK can replace the transaction's destination.
+                    self.inner.record_invite_destination(tx);
+                } else {
+                    tx.track_receipt_times(false);
+                }
             }
             match msg {
                 SipMessage::Request(_) => {}
@@ -483,6 +489,7 @@ impl InviteDialog {
                             tx.track_receipt_times(self.inner.lifecycle.lock().sender.is_some());
                             tx.send().await?;
                             self.inner.set_server_connection(tx.connection.clone());
+                            self.inner.record_invite_destination(tx);
                             self.inner.update_remote_tag("").ok();
                             {
                                 let mut req = self.inner.initial_request.lock();

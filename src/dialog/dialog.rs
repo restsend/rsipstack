@@ -640,6 +640,20 @@ impl DialogInner {
         // Capture the structural source address for the dial-back ladder.
         *self.dialback_target.lock() = connection.and_then(|conn| conn.get_remote_addr().cloned());
     }
+
+    /// Remember the concrete peer address an unreliable (UDP) initial INVITE
+    /// actually went out to, so CANCEL follows RFC 3261 §9.1 without re-running
+    /// DNS or TargetLocator (which can lag or pick another peer). Reliable flows
+    /// already reuse their exact connection via `resolve_affinity_connection()`,
+    /// and dialog target routing (`remote_uri`) stays untouched for in-dialog
+    /// requests.
+    pub(super) fn record_invite_destination(&self, tx: &Transaction) {
+        if let (Some(conn), Some(dest)) = (&tx.connection, &tx.destination) {
+            if !conn.is_reliable() {
+                *self.invite_destination.lock() = Some(dest.clone());
+            }
+        }
+    }
     pub fn can_cancel(&self) -> bool {
         self.state.lock().can_cancel()
     }
